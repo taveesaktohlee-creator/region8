@@ -7,6 +7,29 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// หน้าแรกสำหรับตรวจสอบสถานะ Server
+app.get('/', (req, res) => {
+  res.send('Region 8 API Server is running!');
+});
+
+// ตรวจสอบสุขภาพระบบและการเชื่อมต่อฐานข้อมูล
+app.get('/api/health', async (req, res) => {
+  try {
+    const [rows]: any = await pool.query('SELECT 1 as connected');
+    res.json({ 
+      status: 'OK', 
+      database: rows[0].connected === 1 ? 'Connected' : 'Error',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({ 
+      status: 'Error', 
+      database: 'Disconnected', 
+      error: error.message 
+    });
+  }
+});
+
 // ค้นหาชื่อ-นามสกุลจาก user_confirm
 app.get('/api/users/search-confirm', async (req, res) => {
   try {
