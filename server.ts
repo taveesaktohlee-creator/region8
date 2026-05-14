@@ -515,7 +515,7 @@ app.get('/api/admin/users', async (_req, res) => {
   try {
     const [rows]: any = await pool.query(
       `SELECT u.user_id, u.Name_Surnam AS Name_Surname, u.username, u.email, u.position,
-              u.Division_Province, u.user_status,
+              u.Division_Province, u.type, u.Department, u.National_ID_number, u.user_status,
               ug.group_name
        FROM user u
        LEFT JOIN user_groups ug ON u.user_status = ug.group_id
@@ -541,6 +541,85 @@ app.put('/api/admin/users/:id/group', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการอัปเดตกลุ่ม' });
+  }
+});
+
+// เพิ่มผู้ใช้งานใหม่โดย Admin
+app.post('/api/admin/users', async (req, res) => {
+  try {
+    const {
+      Name_Surname, position, type, Division_Province, Department,
+      email, National_ID_number, username, password, user_status
+    } = req.body;
+
+    // เช็ค username ซ้ำ
+    const [usernameCheck]: any = await pool.query('SELECT user_id FROM user WHERE username = ?', [username]);
+    if (usernameCheck.length > 0) return res.status(400).json({ error: 'ชื่อผู้ใช้งาน (username) นี้ถูกใช้งานแล้ว' });
+
+    // เช็ค email ซ้ำ
+    if (email) {
+      const [emailCheck]: any = await pool.query('SELECT user_id FROM user WHERE email = ?', [email]);
+      if (emailCheck.length > 0) return res.status(400).json({ error: 'อีเมลนี้ถูกใช้งานแล้ว' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    await pool.query(
+      `INSERT INTO user 
+       (Name_Surnam, position, type, Division_Province, Department, email, National_ID_number, username, password, registration_date, active_users, user_status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), '1', ?)`,
+      [Name_Surname, position, type, Division_Province, Department, email || null, National_ID_number || null, username, hashedPassword, user_status || null]
+    );
+
+    res.json({ message: 'เพิ่มผู้ใช้งานเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการเพิ่มผู้ใช้งาน' });
+  }
+});
+
+// แก้ไขข้อมูลผู้ใช้งานโดย Admin
+app.put('/api/admin/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      Name_Surname, position, type, Division_Province, Department,
+      email, National_ID_number, username, password, user_status
+    } = req.body;
+
+    // เช็ค username ซ้ำ (ยกเว้นตัวเอง)
+    const [usernameCheck]: any = await pool.query('SELECT user_id FROM user WHERE username = ? AND user_id != ?', [username, id]);
+    if (usernameCheck.length > 0) return res.status(400).json({ error: 'ชื่อผู้ใช้งาน (username) นี้ถูกใช้งานแล้ว' });
+
+    // เช็ค email ซ้ำ (ยกเว้นตัวเอง)
+    if (email) {
+      const [emailCheck]: any = await pool.query('SELECT user_id FROM user WHERE email = ? AND user_id != ?', [email, id]);
+      if (emailCheck.length > 0) return res.status(400).json({ error: 'อีเมลนี้ถูกใช้งานแล้ว' });
+    }
+
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(password, salt);
+      await pool.query(
+        `UPDATE user SET 
+         Name_Surnam=?, position=?, type=?, Division_Province=?, Department=?, email=?, National_ID_number=?, username=?, password=?, user_status=?
+         WHERE user_id=?`,
+        [Name_Surname, position, type, Division_Province, Department, email || null, National_ID_number || null, username, hashedPassword, user_status || null, id]
+      );
+    } else {
+      await pool.query(
+        `UPDATE user SET 
+         Name_Surnam=?, position=?, type=?, Division_Province=?, Department=?, email=?, National_ID_number=?, username=?, user_status=?
+         WHERE user_id=?`,
+        [Name_Surname, position, type, Division_Province, Department, email || null, National_ID_number || null, username, user_status || null, id]
+      );
+    }
+
+    res.json({ message: 'แก้ไขข้อมูลผู้ใช้งานเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการแก้ไขข้อมูลผู้ใช้งาน' });
   }
 });
 
