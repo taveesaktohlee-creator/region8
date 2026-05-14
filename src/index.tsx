@@ -18,11 +18,11 @@ const INDEX_CARDS = [
   {
     key: 'report_monitor',
     href: '/program-monitoring',
-    label: 'รายงานการกำกับติดตามการใช้งานโปรแกรมฯ',
+    label: 'รายงานการกำกับติดตามฯ',
     icon: Monitor,
     color: 'blue',
     iconBg: 'from-blue-500 to-blue-600',
-    iconShadow: 'rgba(59,130,246,0.4)',
+    iconShadow: 'rgba(37,99,235,0.4)',
     hoverBg: 'group-hover:from-blue-600 group-hover:to-blue-700',
   },
   {
@@ -32,7 +32,7 @@ const INDEX_CARDS = [
     icon: BookOpen,
     color: 'emerald',
     iconBg: 'from-emerald-500 to-emerald-600',
-    iconShadow: 'rgba(16,185,129,0.4)',
+    iconShadow: 'rgba(5,150,105,0.4)',
     hoverBg: 'group-hover:from-emerald-600 group-hover:to-emerald-700',
   },
   {
@@ -42,17 +42,17 @@ const INDEX_CARDS = [
     icon: Users,
     color: 'orange',
     iconBg: 'from-orange-500 to-orange-600',
-    iconShadow: 'rgba(249,115,22,0.4)',
+    iconShadow: 'rgba(234,88,12,0.4)',
     hoverBg: 'group-hover:from-orange-600 group-hover:to-orange-700',
   },
   {
     key: 'report_security',
     href: '/office-security-report',
-    label: 'รายงานการรักษาความปลอดภัยสำนักงาน',
+    label: 'รายงานความปลอดภัย',
     icon: ShieldCheck,
     color: 'purple',
     iconBg: 'from-purple-500 to-purple-600',
-    iconShadow: 'rgba(168,85,247,0.4)',
+    iconShadow: 'rgba(147,51,234,0.4)',
     hoverBg: 'group-hover:from-purple-600 group-hover:to-purple-700',
   },
 ];
@@ -123,14 +123,7 @@ export default function Index() {
   };
 
   return (
-    <div className="flex h-screen bg-[#f8fafc] font-sans text-slate-800 overflow-hidden relative selection:bg-blue-500/30">
-      {/* Decorative Background Elements for 3D/Glassmorphism feel */}
-      <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
-        <div className="absolute top-[-10%] left-[-5%] w-[40vw] h-[40vw] bg-blue-400/20 rounded-full blur-[120px] mix-blend-multiply" />
-        <div className="absolute bottom-[-10%] right-[-5%] w-[35vw] h-[35vw] bg-purple-400/20 rounded-full blur-[120px] mix-blend-multiply" />
-        <div className="absolute top-[20%] left-[50%] w-[30vw] h-[30vw] bg-emerald-300/15 rounded-full blur-[100px] mix-blend-multiply" />
-      </div>
-
+    <div className="flex h-screen bg-white font-sans text-slate-900 overflow-hidden relative selection:bg-blue-500/30">
       <LeftSide 
         userData={userData} 
         isSidebarOpen={isSidebarOpen} 
@@ -148,41 +141,39 @@ export default function Index() {
         />
 
         {/* Content Body */}
-        <div className="px-8 py-10 flex flex-col gap-8 max-w-[1400px] mx-auto w-full">
+        <div className="px-8 py-12 flex flex-col gap-10 max-w-[1400px] mx-auto w-full">
 
-          <div className="flex flex-col gap-2">
-            <h2 className="text-xl font-bold text-slate-800 tracking-tight">ภาพรวมระบบ</h2>
-            <p className="text-slate-500 text-sm">ยินดีต้อนรับเข้าสู่ระบบสารสนเทศ สตท.8</p>
+          <div className="flex flex-col gap-1">
+            <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight">บริการของเรา</h2>
+            <p className="text-slate-500 text-sm font-medium">ยินดีต้อนรับเข้าสู่ระบบสารสนเทศ สตท.8</p>
           </div>
 
-          {/* Stats Grid - Premium App-like Icons */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-8 md:gap-12 lg:gap-16 mt-4">
+          {/* Services Grid - Premium Squircle Design */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-12 lg:gap-16 mt-2">
             {visibleCards.map((card) => {
               const Icon = card.icon;
               return (
                 <a 
                   key={card.key} 
                   href={card.href} 
-                  className="group flex flex-col items-center gap-5 transition-all duration-300"
+                  className="group flex flex-col items-center gap-6 transition-all duration-300"
                 >
                   <div className="relative">
-                    {/* Floating Glow Effect */}
-                    <div className="absolute -inset-4 blur-2xl opacity-0 group-hover:opacity-40 transition-opacity duration-500 rounded-full" style={{ backgroundColor: card.iconShadow.split(',').slice(0,3).join(',') + ')' }}></div>
-                    
-                    {/* Shadow Layer */}
-                    <div className="absolute inset-2 blur-xl opacity-30 group-hover:opacity-50 transition-opacity duration-300" style={{ backgroundColor: card.iconShadow.split(',').slice(0,3).join(',') + ')' }}></div>
+                    {/* Shadow Layer for depth */}
+                    <div 
+                      className="absolute inset-4 blur-2xl opacity-20 group-hover:opacity-40 transition-opacity duration-300" 
+                      style={{ backgroundColor: card.iconShadow.split(',').slice(0,3).join(',') + ')' }}
+                    ></div>
                     
                     {/* Squircle Icon Container */}
-                    <div className={`relative z-10 w-24 h-24 sm:w-32 sm:h-32 lg:w-40 lg:h-40 bg-gradient-to-br ${card.iconBg} rounded-[2rem] lg:rounded-[3rem] flex items-center justify-center shadow-2xl group-hover:scale-105 group-hover:-translate-y-3 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${card.hoverBg} overflow-hidden`}>
-                      {/* Inner Glow / Glass Reflection */}
-                      <div className="absolute inset-0 bg-gradient-to-tr from-white/0 via-white/5 to-white/20 pointer-events-none"></div>
-                      <div className="absolute inset-0 rounded-[inherit] border border-white/30 pointer-events-none shadow-[inset_0_2px_10px_rgba(255,255,255,0.4)]"></div>
-                      
-                      <Icon className="w-10 h-10 sm:w-14 sm:h-14 lg:w-20 lg:h-20 text-white drop-shadow-lg" strokeWidth={1.5} />
+                    <div className={`relative z-10 w-24 h-24 sm:w-32 sm:h-32 lg:w-36 lg:h-36 bg-gradient-to-br ${card.iconBg} rounded-[2rem] lg:rounded-[2.5rem] flex items-center justify-center shadow-lg group-hover:scale-105 group-hover:-translate-y-2 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${card.hoverBg} overflow-hidden`}>
+                      {/* Suble Reflection */}
+                      <div className="absolute inset-0 bg-gradient-to-tr from-white/0 via-white/5 to-white/10 pointer-events-none"></div>
+                      <Icon className="w-10 h-10 sm:w-14 sm:h-14 lg:w-16 lg:h-16 text-white drop-shadow-md" strokeWidth={2} />
                     </div>
                   </div>
 
-                  <p className="text-center text-sm md:text-base font-bold text-slate-600 group-hover:text-slate-900 transition-colors max-w-[180px] leading-tight px-2">
+                  <p className="text-center text-sm md:text-base font-bold text-slate-700 group-hover:text-slate-950 transition-colors max-w-[160px] leading-tight px-2">
                     {card.label}
                   </p>
                 </a>
@@ -193,7 +184,7 @@ export default function Index() {
             {permLoaded && visibleCards.length === 0 && (
               <div className="col-span-full flex flex-col items-center justify-center py-16 text-slate-400">
                 <Lock size={48} className="mb-4 text-slate-300" />
-                <p className="font-semibold text-lg">ไม่มีเมนูที่คุณสามารถเข้าถึงได้</p>
+                <p className="font-semibold text-lg text-slate-500">ไม่มีเมนูที่คุณสามารถเข้าถึงได้</p>
                 <p className="text-sm mt-1">กรุณาติดต่อผู้ดูแลระบบเพื่อขอสิทธิ์การเข้าถึง</p>
               </div>
             )}
