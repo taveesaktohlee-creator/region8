@@ -11,11 +11,11 @@ interface LeftSideProps {
 
 // เมนูทั้งหมดพร้อม menu_key สำหรับเช็คสิทธิ์
 const ALL_ITEMS = [
-  { key: 'home', name: 'หน้าหลัก', href: '/index', icon: (a: boolean) => <Home size={22} className={a ? 'relative z-10' : 'text-slate-400 group-hover:text-blue-600 transition-colors'} /> },
-  { key: 'profile', name: 'ข้อมูลส่วนตัว', href: '/profile', icon: (a: boolean) => <FileText size={22} className={a ? 'relative z-10' : 'text-slate-400 group-hover:text-blue-600 transition-colors'} /> },
-  { key: 'training', name: 'ประวัติการอบรม', href: '/training-history', icon: (a: boolean) => <ListTodo size={22} className={a ? 'relative z-10' : 'text-slate-400 group-hover:text-blue-600 transition-colors'} /> },
-  { key: 'change_password', name: 'เปลี่ยนรหัสผ่าน', href: '/change-password', icon: (a: boolean) => <Edit size={22} className={a ? 'relative z-10' : 'text-slate-400 group-hover:text-blue-600 transition-colors'} /> },
-  { key: 'user_settings', name: 'ตั้งค่าผู้ใช้งาน', href: '/user-settings', icon: (a: boolean) => <Settings size={22} className={a ? 'relative z-10' : 'text-slate-400 group-hover:text-blue-600 transition-colors'} /> },
+  { key: 'home', name: 'หน้าหลัก', href: '/index', icon: Home, color: 'bg-[#007AFF]' },
+  { key: 'profile', name: 'ข้อมูลส่วนตัว', href: '/profile', icon: FileText, color: 'bg-[#5856D6]' },
+  { key: 'training', name: 'ประวัติการอบรม', href: '/training-history', icon: ListTodo, color: 'bg-[#FF9500]' },
+  { key: 'change_password', name: 'เปลี่ยนรหัสผ่าน', href: '/change-password', icon: Edit, color: 'bg-[#FF3B30]' },
+  { key: 'user_settings', name: 'ตั้งค่าผู้ใช้งาน', href: '/user-settings', icon: Settings, color: 'bg-[#8E8E93]' },
 ];
 
 // Key สำหรับ cache สิทธิ์ใน sessionStorage
@@ -96,29 +96,29 @@ const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSideb
     <>
       {/* Sidebar Overlay for Mobile */}
       {isSidebarOpen && (
-        <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm z-30 lg:hidden block transition-opacity duration-300" onClick={() => setIsSidebarOpen(false)} />
+        <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-30 lg:hidden block transition-opacity duration-300" onClick={() => setIsSidebarOpen(false)} />
       )}
 
       {/* Sidebar */}
-      <aside className={`bg-white/70 backdrop-blur-2xl border-r border-white/60 flex-shrink-0 h-full z-40 shadow-[8px_0_30px_rgba(0,0,0,0.03)] transition-all duration-300 fixed lg:relative ${isSidebarOpen ? 'translate-x-0 w-[280px]' : '-translate-x-full w-[280px] lg:w-0 lg:border-r-0 lg:opacity-0 overflow-hidden'}`}>
+      <aside className={`bg-[#F6F6F6]/90 backdrop-blur-3xl border-r border-black/5 flex-shrink-0 h-full z-40 transition-all duration-300 fixed lg:relative ${isSidebarOpen ? 'translate-x-0 w-[280px]' : '-translate-x-full w-[280px] lg:w-0 lg:border-r-0 lg:opacity-0 overflow-hidden'}`}>
         <div className="w-[280px] h-full flex flex-col justify-between overflow-y-auto">
-          <div className="p-6 pb-2">
+          <div>
             {/* User Profile Section */}
-            <div className="flex flex-col items-center text-center gap-4 mb-10 px-2 relative">
+            <div className="flex flex-col items-center text-center gap-4 mb-10 px-2 relative pt-6">
               <div className="relative group cursor-pointer">
                 <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-full blur opacity-25 group-hover:opacity-50 transition duration-500"></div>
                 <div className="relative w-16 h-16 rounded-full flex items-center justify-center bg-[#006FEE] text-white font-bold text-xl shadow-xl border-2 border-white/80 transition-transform duration-300 group-hover:scale-105">
                   CAD
                 </div>
               </div>
-              <div className="w-full">
+              <div className="w-full px-4">
                 <h3 className="font-bold text-base tracking-tight text-slate-900 break-words whitespace-normal">
                   {userData?.Name_Surname || 'ชื่อ-นามสกุล'}
                 </h3>
                 <p className="text-sm text-slate-500 font-medium break-words whitespace-normal mt-1">
                   {userData?.position || 'ตำแหน่ง'}
                 </p>
-                <div className="mt-2 inline-flex items-center px-2.5 py-1 rounded-full bg-slate-100/80 border border-slate-200/50 shadow-sm">
+                <div className="mt-2 inline-flex items-center px-2.5 py-1 rounded-full bg-white border border-slate-200/50 shadow-sm">
                   <span className="text-[11px] text-slate-600 font-semibold break-words whitespace-normal">
                     {userData?.Division_Province || 'Division_Province'}
                   </span>
@@ -127,21 +127,25 @@ const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSideb
             </div>
 
             {/* Navigation */}
-            <nav className="space-y-2">
+            <nav className="px-4 space-y-0.5">
               {itemsToRender.map((item) => {
                 const isActive = currentPath.current === item.href;
+                const Icon = item.icon;
                 return (
                   <a
                     key={item.key}
                     href={item.href}
-                    className={`flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all duration-300 group relative overflow-hidden ${isActive
-                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/25'
-                      : 'text-slate-600 hover:bg-white/80 hover:text-blue-700 font-medium'
+                    className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 group ${isActive
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/25'
+                      : 'hover:bg-black/5'
                       }`}
                   >
-                    {isActive && <div className="absolute inset-0 bg-white/20"></div>}
-                    {item.icon(isActive)}
-                    <span className={`text-sm relative z-10 ${isActive ? 'font-semibold' : ''}`}>{item.name}</span>
+                    <div className={`w-[28px] h-[28px] rounded-[7px] flex items-center justify-center shadow-sm ${item.color} text-white shrink-0`}>
+                      <Icon size={16} strokeWidth={2.5} />
+                    </div>
+                    <span className={`text-[14px] ${isActive ? 'font-semibold text-white' : 'text-[#1C1C1E]'} truncate`}>
+                      {item.name}
+                    </span>
                   </a>
                 );
               })}
@@ -149,10 +153,15 @@ const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSideb
           </div>
 
           {/* Bottom Navigation */}
-          <div className="p-6 pt-2">
-            <button onClick={() => { sessionStorage.removeItem(PERM_CACHE_KEY); handleLogout(); }} className="w-full flex items-center gap-3 px-4 py-3.5 text-slate-600 hover:bg-red-50/80 hover:text-red-600 rounded-2xl font-medium transition-all border border-transparent hover:border-red-100 group">
-              <LogOut size={22} className="text-slate-400 group-hover:text-red-500 transition-colors" />
-              <span className="text-sm">ออกจากระบบ</span>
+          <div className="p-4">
+            <button
+              onClick={() => { sessionStorage.removeItem(PERM_CACHE_KEY); handleLogout(); }}
+              className="w-full flex items-center gap-3 px-3 py-2 text-[#FF3B30] hover:bg-red-50 rounded-lg font-medium transition-all group"
+            >
+              <div className="w-[28px] h-[28px] rounded-[7px] flex items-center justify-center bg-red-500 text-white shrink-0 shadow-sm">
+                <LogOut size={16} strokeWidth={2.5} />
+              </div>
+              <span className="text-[14px]">ออกจากระบบ</span>
             </button>
           </div>
         </div>
@@ -160,5 +169,4 @@ const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSideb
     </>
   );
 };
-
 export default LeftSide;
