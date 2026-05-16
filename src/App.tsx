@@ -80,24 +80,31 @@ export default function App() {
       <div className="max-w-4xl w-full flex flex-col md:flex-row bg-white rounded-[2rem] shadow-2xl overflow-hidden min-h-[550px]">
 
         {/* Left Side (Branding Panel) */}
-        <div className="md:w-5/12 bg-gradient-to-br from-sky-400 to-blue-500 p-8 md:p-10 flex flex-col justify-between relative overflow-hidden text-white">
-          {/* Abstract Decorations */}
-          <div className="absolute top-[-15%] right-[-15%] w-64 h-64 bg-white/10 rounded-full blur-3xl"></div>
-          <div className="absolute bottom-[-10%] left-[-10%] w-48 h-48 bg-white/10 rounded-full blur-2xl"></div>
-          <div className="absolute top-1/2 left-1/4 w-32 h-32 bg-sky-300/20 rounded-full blur-xl"></div>
+        <div className="md:w-5/12 relative flex flex-col justify-center p-8 md:p-10 overflow-hidden text-white group min-h-[200px] md:min-h-[550px]">
+          <img
+            src="/banner.jpg"
+            alt="Banner"
+            className="absolute inset-0 w-full h-full object-cover object-top md:object-center transition-transform duration-1000 group-hover:scale-105"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+              e.currentTarget.parentElement!.style.background = 'linear-gradient(135deg, #38bdf8 0%, #2563eb 100%)';
+            }}
+          />
+          <div className="absolute inset-0 bg-black/20 z-10 md:bg-black/10"></div>
 
-          <div className="relative z-10 flex flex-col items-center md:items-start text-center md:text-left mt-2 md:mt-8">
-            <div className="p-4 bg-white/20 backdrop-blur-md rounded-2xl inline-flex w-fit mb-6 shadow-lg border border-white/20">
-              <Landmark size={48} className="text-white" />
+          <div className="relative z-20 flex flex-col items-center text-center px-6">
+            <div className="relative group/title">
+              {/* Decorative glow effect */}
+              <div className="absolute -inset-8 bg-sky-500/20 blur-3xl rounded-full opacity-60 group-hover/title:opacity-100 transition-opacity duration-700"></div>
+              
+              <div className="relative px-6 py-3 bg-white/10 backdrop-blur-md rounded-2xl border border-white/30 shadow-[0_8px_32px_rgba(0,0,0,0.3)] transition-all duration-500 hover:bg-white/20 hover:border-white/40">
+                <h1 className="text-3xl font-bold tracking-wider text-white drop-shadow-[0_4px_12px_rgba(0,0,0,0.5)] whitespace-nowrap">
+                  ระบบสารสนเทศ
+                </h1>
+                <div className="h-1 w-16 bg-gradient-to-r from-sky-400 to-blue-500 mx-auto mt-2 rounded-full shadow-[0_0_15px_rgba(56,189,248,0.8)]"></div>
+              </div>
             </div>
-            <h1 className="text-3xl font-bold mb-3 tracking-wide drop-shadow-md">
-              ระบบสารสนเทศ
-            </h1>
-            <p className="text-white/90 leading-relaxed text-lg font-medium drop-shadow-sm">
-              สำนักงานตรวจบัญชีสหกรณ์ที่ 8
-            </p>
           </div>
-
         </div>
 
         {/* Right Side (Login Form) */}

@@ -12,7 +12,7 @@ import ProgramMonitoring from './monitor/ProgramMonitoring'
 import SystemUsageReport from './user/SystemUsageReport'
 import OfficeSecurityReport from './security_report/OfficeSecurityReport'
 import PermissionGuard from './lib/PermissionGuard'
-import { startHeartbeat, startPageTracking, getSessionId } from './lib/activityTracker'
+import { createSession, startHeartbeat, startPageTracking, getSessionId } from './lib/activityTracker'
 import './index.css'
 
 import { HeroUIProvider } from '@heroui/system'
@@ -22,11 +22,19 @@ const path = window.location.pathname;
 // เริ่ม heartbeat + page tracking สำหรับ logged-in users
 const userStr = localStorage.getItem('user');
 if (userStr && userStr !== 'undefined' && path !== '/' && path !== '/register') {
-  const sid = getSessionId();
-  if (sid) {
-    startHeartbeat();
-    startPageTracking();
-  }
+  void (async () => {
+    let sid = getSessionId();
+    if (!sid) {
+      try {
+        const user = JSON.parse(userStr);
+        if (user?.user_id) sid = await createSession(user.user_id);
+      } catch { /* ignore */ }
+    }
+    if (sid) {
+      startHeartbeat();
+      startPageTracking();
+    }
+  })();
 }
 
 // Mapping ระหว่าง path กับ menu_key สำหรับตรวจสอบสิทธิ์

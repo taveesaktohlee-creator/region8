@@ -3,6 +3,7 @@ import { Menu, Plus, Edit3, Trash2, Save, ToggleLeft, ToggleRight } from 'lucide
 import { toast } from 'react-toastify';
 import { Modal, type MenuItem } from './GroupsTab';
 import { API_BASE } from '../../lib/apiConfig';
+import { clearMenuAccessCache } from '../../lib/menuAccess';
 
 const API = `${API_BASE}/api/admin`;
 
@@ -19,11 +20,17 @@ export function MenusTab({ menus, onRefresh }: { menus: MenuItem[]; onRefresh: (
 
   const save = async () => {
     if (!form.menu_name?.trim() || !form.menu_key?.trim()) { toast.warning('กรุณากรอกชื่อเมนูและ Key'); return; }
+    const normalizedKey = form.menu_key.trim().toLowerCase();
+    const duplicated = menus.some(m =>
+      m.menu_id !== form.menu_id && m.menu_key.trim().toLowerCase() === normalizedKey
+    );
+    if (duplicated) { toast.warning('Key เมนูนี้ถูกใช้งานแล้ว'); return; }
     const url = editMode ? `${API}/menus/${form.menu_id}` : `${API}/menus`;
     const method = editMode ? 'PUT' : 'POST';
     const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) });
     const d = await r.json();
     if (!r.ok) { toast.error(d.error); return; }
+    clearMenuAccessCache();
     toast.success(d.message); setModal(false); await onRefresh();
   };
 
@@ -32,6 +39,7 @@ export function MenusTab({ menus, onRefresh }: { menus: MenuItem[]; onRefresh: (
     const r = await fetch(`${API}/menus/${m.menu_id}`, { method:'DELETE' });
     const d = await r.json();
     if (!r.ok) { toast.error(d.error); return; }
+    clearMenuAccessCache();
     toast.success(d.message); await onRefresh();
   };
 

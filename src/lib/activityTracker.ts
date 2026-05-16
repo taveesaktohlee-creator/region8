@@ -48,26 +48,33 @@ export async function closeSession() {
 
 export function getSessionId(): number | null {
   const v = localStorage.getItem(SESSION_KEY);
-  return v ? Number(v) : null;
+  const sessionId = v ? Number(v) : null;
+  return sessionId && Number.isFinite(sessionId) && sessionId > 0 ? sessionId : null;
 }
 
 // ---- Heartbeat (online status) ----
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-export function startHeartbeat() {
-  stopHeartbeat();
-  const beat = () => {
-    const sid = getSessionId();
-    if (!sid) return;
-    fetch(`${API_BASE}/api/usage/heartbeat`, {
+export async function sendHeartbeat() {
+  const sid = getSessionId();
+  if (!sid) return false;
+  try {
+    const res = await fetch(`${API_BASE}/api/usage/heartbeat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sid })
-    }).catch(() => {});
-  };
-  beat(); // send immediately
-  heartbeatTimer = setInterval(beat, 30_000); // every 30s
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function startHeartbeat() {
+  stopHeartbeat();
+  void sendHeartbeat(); // send immediately
+  heartbeatTimer = setInterval(() => { void sendHeartbeat(); }, 30_000); // every 30s
 }
 
 export function stopHeartbeat() {

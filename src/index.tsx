@@ -1,68 +1,26 @@
 import { useState, useEffect } from 'react';
-import {
-  Monitor,
-  BookOpen,
-  Users,
-  ShieldCheck,
-  Lock
-} from 'lucide-react';
+import { Lock } from 'lucide-react';
 
 import Header from './Header';
 import LeftSide from './LeftSide';
 import Footer from './Footer';
-import { API_BASE } from './lib/apiConfig';
 import { closeSession, stopHeartbeat } from './lib/activityTracker';
-
-// การ์ดเมนูหน้า Index พร้อม menu_key สำหรับเช็คสิทธิ์
-const INDEX_CARDS = [
-  {
-    key: 'report_monitor',
-    href: '/program-monitoring',
-    label: 'รายงานการกำกับติดตามฯ',
-    icon: Monitor,
-    color: 'blue',
-    iconBg: 'from-blue-500 to-blue-600',
-    iconShadow: 'rgba(37,99,235,0.4)',
-    hoverBg: 'group-hover:from-blue-600 group-hover:to-blue-700',
-  },
-  {
-    key: 'report_course',
-    href: '/training-courses',
-    label: 'หลักสูตรการอบรม',
-    icon: BookOpen,
-    color: 'emerald',
-    iconBg: 'from-emerald-500 to-emerald-600',
-    iconShadow: 'rgba(5,150,105,0.4)',
-    hoverBg: 'group-hover:from-emerald-600 group-hover:to-emerald-700',
-  },
-  {
-    key: 'report_usage',
-    href: '/system-usage-report',
-    label: 'รายงานการใช้งานระบบ',
-    icon: Users,
-    color: 'orange',
-    iconBg: 'from-orange-500 to-orange-600',
-    iconShadow: 'rgba(234,88,12,0.4)',
-    hoverBg: 'group-hover:from-orange-600 group-hover:to-orange-700',
-  },
-  {
-    key: 'report_security',
-    href: '/office-security-report',
-    label: 'รายงานความปลอดภัย',
-    icon: ShieldCheck,
-    color: 'purple',
-    iconBg: 'from-purple-500 to-purple-600',
-    iconShadow: 'rgba(147,51,234,0.4)',
-    hoverBg: 'group-hover:from-purple-600 group-hover:to-purple-700',
-  },
-];
+import {
+  fetchAllowedMenus,
+  getContentMenuStyle,
+  getMenuHref,
+  getMenuIcon,
+  readCachedMenus,
+  writeCachedMenus,
+  type UserMenuItem,
+} from './lib/menuAccess';
 
 export default function Index() {
   const [userData, setUserData] = useState<any>(null);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [allowedKeys, setAllowedKeys] = useState<string[] | null>(null);
+  const [menuItems, setMenuItems] = useState<UserMenuItem[] | undefined>(undefined);
   const [permLoaded, setPermLoaded] = useState(false);
 
   useEffect(() => {
@@ -93,19 +51,26 @@ export default function Index() {
   // ดึงสิทธิ์เมนูของผู้ใช้
   useEffect(() => {
     if (!userData?.user_id) { setPermLoaded(true); return; }
-    fetch(`${API_BASE}/api/users/${userData.user_id}/menu-permissions`)
-      .then(r => r.json())
-      .then(data => {
-        setAllowedKeys(data.allowed ?? null);
+
+    const cached = readCachedMenus(userData.user_id);
+    if (cached !== undefined) {
+      setMenuItems(cached);
+      setPermLoaded(true);
+    } else {
+      setMenuItems(undefined);
+      setPermLoaded(false);
+    }
+
+    fetchAllowedMenus(userData.user_id)
+      .then(menus => {
+        setMenuItems(menus);
         setPermLoaded(true);
+        writeCachedMenus(userData.user_id, menus);
       })
-      .catch(() => { setAllowedKeys(null); setPermLoaded(true); });
+      .catch(() => { setMenuItems(cached ?? []); setPermLoaded(true); });
   }, [userData]);
 
-  // filter cards ตามสิทธิ์ (null = แสดงทุกรายการ)
-  const visibleCards = allowedKeys === null
-    ? INDEX_CARDS
-    : INDEX_CARDS.filter(card => allowedKeys.includes(card.key));
+  const visibleCards = (menuItems ?? []).filter(menu => menu.menu_type === 'content');
 
   const handleLogout = async () => {
     stopHeartbeat();
@@ -150,23 +115,24 @@ export default function Index() {
 
           {/* Services Grid - Premium Squircle Design */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-12 lg:gap-16 mt-2">
-            {visibleCards.map((card) => {
-              const Icon = card.icon;
+            {visibleCards.map((card, index) => {
+              const Icon = getMenuIcon(card.menu_icon);
+              const style = getContentMenuStyle(index);
               return (
-                <a 
-                  key={card.key} 
-                  href={card.href} 
+                <a
+                  key={card.menu_id}
+                  href={getMenuHref(card)}
                   className="group flex flex-col items-center gap-6 transition-all duration-300"
                 >
                   <div className="relative">
                     {/* Shadow Layer for depth */}
                     <div 
                       className="absolute inset-4 blur-2xl opacity-20 group-hover:opacity-40 transition-opacity duration-300" 
-                      style={{ backgroundColor: card.iconShadow.split(',').slice(0,3).join(',') + ')' }}
+                      style={{ backgroundColor: style.iconShadow }}
                     ></div>
                     
                     {/* Squircle Icon Container */}
-                    <div className={`relative z-10 w-24 h-24 sm:w-32 sm:h-32 lg:w-36 lg:h-36 bg-gradient-to-br ${card.iconBg} rounded-[2rem] lg:rounded-[2.5rem] flex items-center justify-center shadow-lg group-hover:scale-105 group-hover:-translate-y-2 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${card.hoverBg} overflow-hidden`}>
+                    <div className={`relative z-10 w-24 h-24 sm:w-32 sm:h-32 lg:w-36 lg:h-36 bg-gradient-to-br ${style.iconBg} rounded-[2rem] lg:rounded-[2.5rem] flex items-center justify-center shadow-lg group-hover:scale-105 group-hover:-translate-y-2 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${style.hoverBg} overflow-hidden`}>
                       {/* Suble Reflection */}
                       <div className="absolute inset-0 bg-gradient-to-tr from-white/0 via-white/5 to-white/10 pointer-events-none"></div>
                       <Icon className="w-10 h-10 sm:w-14 sm:h-14 lg:w-16 lg:h-16 text-white drop-shadow-md" strokeWidth={2} />
@@ -174,7 +140,7 @@ export default function Index() {
                   </div>
 
                   <p className="text-center text-sm md:text-base font-bold text-slate-700 group-hover:text-slate-950 transition-colors max-w-[160px] leading-tight px-2">
-                    {card.label}
+                    {card.menu_name}
                   </p>
                 </a>
               );

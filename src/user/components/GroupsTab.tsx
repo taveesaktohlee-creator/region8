@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import { Settings, Users, Layout, X, Save, Edit3, Trash2, Check, Plus } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { API_BASE } from '../../lib/apiConfig';
+import { clearMenuAccessCache } from '../../lib/menuAccess';
 
 const API = `${API_BASE}/api/admin`;
 export type MenuItem = { menu_id: number; menu_key: string; menu_name: string; menu_type: 'sidebar'|'content'; menu_icon: string; menu_href: string; sort_order: number; is_active: number; can_view?: number; };
@@ -105,6 +106,7 @@ const PermissionsModal = memo(function PermissionsModal({ group, onClose, onSave
       });
       const d = await r.json();
       if (!r.ok) { toast.error(d.error); return; }
+      clearMenuAccessCache();
       toast.success(d.message);
       onSaved();
       onClose();
@@ -175,12 +177,17 @@ export function GroupsTab({ groups, onRefresh }: { groups: Group[]; onRefresh: (
 
   const save = useCallback(async () => {
     if (!form.group_name?.trim()) { toast.warning('กรุณาระบุชื่อกลุ่ม'); return; }
+    const normalizedName = form.group_name.trim().toLowerCase();
+    const duplicated = groups.some(g =>
+      g.group_id !== form.group_id && g.group_name.trim().toLowerCase() === normalizedName
+    );
+    if (duplicated) { toast.warning('ชื่อกลุ่มนี้ถูกใช้งานแล้ว'); return; }
     const url = editMode ? `${API}/groups/${form.group_id}` : `${API}/groups`;
     const r = await fetch(url, { method: editMode?'PUT':'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) });
     const d = await r.json();
     if (!r.ok) { toast.error(d.error); return; }
     toast.success(d.message); setModal(false); await onRefresh();
-  }, [form, editMode, onRefresh]);
+  }, [form, groups, editMode, onRefresh]);
 
   const del = useCallback(async (g: Group) => {
     if (!confirm(`ลบกลุ่ม "${g.group_name}" ใช่หรือไม่?`)) return;

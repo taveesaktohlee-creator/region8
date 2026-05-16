@@ -8,6 +8,10 @@ interface PermissionGuardProps {
   children: React.ReactNode;
 }
 
+interface StoredUser {
+  user_id?: number;
+}
+
 /**
  * PermissionGuard — ตรวจสอบสิทธิ์ก่อนแสดงหน้า
  * ถ้าไม่มีสิทธิ์เข้าถึง menu_key นั้น จะแสดงหน้า Access Denied
@@ -23,13 +27,16 @@ export default function PermissionGuard({ menuKey, children }: PermissionGuardPr
       return;
     }
 
-    let userData: any;
+    let userData: StoredUser;
     try { userData = JSON.parse(savedUser); } catch { window.location.href = '/'; return; }
 
-    if (!userData?.user_id) { setStatus('allowed'); return; }
+    if (!userData?.user_id) { window.location.href = '/'; return; }
 
     fetch(`${API_BASE}/api/users/${userData.user_id}/menu-permissions`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error('Cannot verify permissions');
+        return r.json();
+      })
       .then(data => {
         if (data.allowed === null || data.allowed === undefined) {
           // null = ไม่จำกัดสิทธิ์ แสดงทุกหน้า
@@ -41,8 +48,7 @@ export default function PermissionGuard({ menuKey, children }: PermissionGuardPr
         }
       })
       .catch(() => {
-        // Error fetching → ให้เข้าได้ (fail open)
-        setStatus('allowed');
+        setStatus('denied');
       });
   }, [menuKey]);
 

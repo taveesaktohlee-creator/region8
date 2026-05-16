@@ -1,15 +1,15 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Users, UserCheck, Shield, Briefcase, Search, Eye, X, Clock, Monitor, ChevronLeft, ChevronRight, RefreshCcw, Loader2, Calendar, Filter } from 'lucide-react';
+import { Users, UserCheck, Shield, Briefcase, Search, Eye, X, Clock, Monitor, ChevronLeft, ChevronRight, RefreshCcw, Loader2, Calendar, Filter, MapPin } from 'lucide-react';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
-import { closeSession, stopHeartbeat } from '../lib/activityTracker';
+import { closeSession, createSession, getSessionId, sendHeartbeat, startHeartbeat, stopHeartbeat } from '../lib/activityTracker';
 
 interface Summary { totalRegistered: number; totalLogins: number; totalGovOfficers: number; totalGovEmployees: number; }
-interface UserRow { user_id: number; Name_Surname: string; username: string; position: string; type: string; Division_Province: string; is_online: number; last_login: string | null; total_logins: number; total_active_seconds: number; registration_date: string | null; }
+interface UserRow { user_id: number; Name_Surname: string; username: string; position: string; type: string; Division_Province: string; is_online: number; last_seen_at: string | null; last_login: string | null; total_logins: number; total_active_seconds: number; registration_date: string | null; }
 interface HistoryRow { date: string; menu_key: string; menu_name: string; total_seconds: number; visit_count: number; first_visit: string; last_visit: string; }
 
 
@@ -19,7 +19,7 @@ function fmtTime(sec: number) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   if (h > 0 && m > 0) return `${h} ชม. ${m} นาที`;
   if (h > 0) return `${h} ชม.`;
-  return m > 0 ? `${m} นาที` : '< 1 นาที';
+  return m > 0 ? `${m} นาที` : `${s} วินาที`;
 }
 
 function fmtDateTimeTH(d: string | null) { if (!d) return '-'; try { return new Date(d).toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return d; } }
@@ -46,6 +46,7 @@ export default function SystemUsageReport() {
   const [summary, setSummary] = useState<Summary>({ totalRegistered: 0, totalLogins: 0, totalGovOfficers: 0, totalGovEmployees: 0 });
   const [users, setUsers] = useState<UserRow[]>([]);
   const [search, setSearch] = useState('');
+  const [selectedDivision, setSelectedDivision] = useState('all');
   const [page, setPage] = useState(1);
   const perPage = 10;
   const [modalUser, setModalUser] = useState<UserRow | null>(null);
@@ -91,9 +92,26 @@ export default function SystemUsageReport() {
     const now = new Date();
     const ms = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const [from, to] = getMonthDateRange(ms);
-    loadData(from, to);
+    const initUsageReport = async () => {
+      const saved = localStorage.getItem('user');
+      let sessionReady = false;
+      if (saved && saved !== 'undefined') {
+        try {
+          const user = JSON.parse(saved);
+          let sid = getSessionId();
+          if (!sid && user?.user_id) sid = await createSession(user.user_id);
+          if (sid) {
+            startHeartbeat();
+            sessionReady = await sendHeartbeat();
+          }
+        } catch { /* ignore */ }
+      }
+      await fetch(`${API_BASE}/api/admin/setup-usage-tables`, { method: 'POST' }).catch(() => {});
+      if (!sessionReady) await new Promise(resolve => setTimeout(resolve, 300));
+      await loadData(from, to);
+    };
+    initUsageReport();
   }, [loadData]);
-  useEffect(() => { fetch(`${API_BASE}/api/admin/setup-usage-tables`, { method: 'POST' }).catch(() => {}); }, []);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -132,7 +150,30 @@ export default function SystemUsageReport() {
     loadHistory(u.user_id, from, to);
   };
 
-  const filtered = users.filter(u => (u.Name_Surname || '').includes(search) || (u.username || '').includes(search) || (u.Division_Province || '').includes(search) || (u.position || '').includes(search));
+  const divisionOptions = useMemo(() => {
+    return Array.from(new Set(users.map(u => u.Division_Province).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'th'));
+  }, [users]);
+
+  useEffect(() => {
+    if (selectedDivision !== 'all' && !divisionOptions.includes(selectedDivision)) {
+      setSelectedDivision('all');
+    }
+  }, [divisionOptions, selectedDivision]);
+
+  const divisionFilteredUsers = useMemo(() => {
+    if (selectedDivision === 'all') return users;
+    return users.filter(u => u.Division_Province === selectedDivision);
+  }, [users, selectedDivision]);
+
+  const filteredSummary = useMemo<Summary>(() => ({
+    totalRegistered: divisionFilteredUsers.length,
+    totalLogins: divisionFilteredUsers.filter(u => Number(u.total_logins) > 0).length,
+    totalGovOfficers: divisionFilteredUsers.filter(u => u.type === 'ข้าราชการ').length,
+    totalGovEmployees: divisionFilteredUsers.filter(u => u.type === 'พนักงานราชการ').length,
+  }), [divisionFilteredUsers]);
+
+  const reportSummary = selectedDivision === 'all' ? summary : filteredSummary;
+  const filtered = divisionFilteredUsers.filter(u => (u.Name_Surname || '').includes(search) || (u.username || '').includes(search) || (u.Division_Province || '').includes(search) || (u.position || '').includes(search));
   const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
   const paged = filtered.slice((page - 1) * perPage, page * perPage);
 
@@ -154,10 +195,58 @@ export default function SystemUsageReport() {
   const filteredTotalVisits = useMemo(() => history.reduce((s, r) => s + (Number(r.visit_count) || 0), 0), [history]);
 
   const cards = [
-    { label: 'ผู้ลงทะเบียนทั้งหมด', value: summary.totalRegistered, icon: Users, bg: 'bg-blue-50', tc: 'text-blue-600' },
-    { label: 'ผู้เข้าใช้งานระบบ', value: summary.totalLogins, icon: UserCheck, bg: 'bg-emerald-50', tc: 'text-emerald-600' },
-    { label: 'ข้าราชการ', value: summary.totalGovOfficers, icon: Shield, bg: 'bg-orange-50', tc: 'text-orange-600' },
-    { label: 'พนักงานราชการ', value: summary.totalGovEmployees, icon: Briefcase, bg: 'bg-purple-50', tc: 'text-purple-600' },
+    {
+      label: 'ผู้ลงทะเบียนทั้งหมด',
+      value: reportSummary.totalRegistered,
+      icon: Users,
+      hint: 'บัญชีผู้ใช้ในระบบ',
+      badge: 'Users',
+      card: 'from-blue-50 via-white to-white border-blue-100/80',
+      accent: 'bg-blue-500',
+      iconBox: 'bg-blue-600 text-white shadow-blue-500/25',
+      valueText: 'text-blue-950',
+      badgeStyle: 'bg-blue-100 text-blue-700',
+      line: 'from-blue-500 to-cyan-400',
+    },
+    {
+      label: 'ผู้เข้าใช้งานระบบ',
+      value: reportSummary.totalLogins,
+      icon: UserCheck,
+      hint: 'มีประวัติเข้าระบบ',
+      badge: 'Active',
+      card: 'from-emerald-50 via-white to-white border-emerald-100/80',
+      accent: 'bg-emerald-500',
+      iconBox: 'bg-emerald-600 text-white shadow-emerald-500/25',
+      valueText: 'text-emerald-950',
+      badgeStyle: 'bg-emerald-100 text-emerald-700',
+      line: 'from-emerald-500 to-teal-400',
+    },
+    {
+      label: 'ข้าราชการ',
+      value: reportSummary.totalGovOfficers,
+      icon: Shield,
+      hint: 'กลุ่มบุคลากรภาครัฐ',
+      badge: 'Gov',
+      card: 'from-orange-50 via-white to-white border-orange-100/80',
+      accent: 'bg-orange-500',
+      iconBox: 'bg-orange-500 text-white shadow-orange-500/25',
+      valueText: 'text-orange-950',
+      badgeStyle: 'bg-orange-100 text-orange-700',
+      line: 'from-orange-500 to-amber-400',
+    },
+    {
+      label: 'พนักงานราชการ',
+      value: reportSummary.totalGovEmployees,
+      icon: Briefcase,
+      hint: 'กลุ่มพนักงานราชการ',
+      badge: 'Staff',
+      card: 'from-violet-50 via-white to-white border-violet-100/80',
+      accent: 'bg-violet-500',
+      iconBox: 'bg-violet-600 text-white shadow-violet-500/25',
+      valueText: 'text-violet-950',
+      badgeStyle: 'bg-violet-100 text-violet-700',
+      line: 'from-violet-500 to-fuchsia-400',
+    },
   ];
 
   if (pageLoading) return (
@@ -177,20 +266,50 @@ export default function SystemUsageReport() {
       <main className="flex-1 flex flex-col h-full overflow-y-auto z-10 scroll-smooth transition-all duration-300">
         <Header setIsSidebarOpen={setIsSidebarOpen} handleRefresh={handleRefresh} isRefreshing={isRefreshing} handleLogout={handleLogout} />
         <div className="px-4 sm:px-6 lg:px-8 py-6 lg:py-8 flex flex-col gap-6 max-w-[1400px] mx-auto w-full animate-[fadeIn_0.4s_ease]">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
             <div><h2 className="text-xl lg:text-2xl font-bold text-slate-800">รายงานการใช้งานระบบ</h2><p className="text-slate-500 text-sm mt-1">สรุปข้อมูลและสถิติการใช้งานระบบสารสนเทศ</p></div>
-            <button onClick={handleRefresh} className="self-start flex items-center gap-2 px-4 py-2.5 bg-white/80 border border-slate-200 rounded-xl text-sm font-medium text-slate-600 hover:bg-white hover:shadow-md transition-all">
-              <RefreshCcw size={16} className={isRefreshing ? 'animate-spin' : ''} /> รีเฟรช
-            </button>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 xl:ml-auto">
+              <label className="flex items-center gap-2 px-3 py-2.5 bg-white/80 border border-slate-200 rounded-xl shadow-sm min-w-0 sm:min-w-[320px]">
+                <MapPin size={16} className="text-blue-500 shrink-0" />
+                <span className="text-xs font-bold text-slate-500 whitespace-nowrap">หน่วยงาน/จังหวัด</span>
+                <select
+                  value={selectedDivision}
+                  onChange={e => { setSelectedDivision(e.target.value); setPage(1); }}
+                  className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-slate-700 outline-none cursor-pointer"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  {divisionOptions.map(division => (
+                    <option key={division} value={division}>{division}</option>
+                  ))}
+                </select>
+              </label>
+              <button onClick={handleRefresh} className="self-start sm:self-auto flex items-center gap-2 px-4 py-2.5 bg-white/80 border border-slate-200 rounded-xl text-sm font-medium text-slate-600 hover:bg-white hover:shadow-md transition-all">
+                <RefreshCcw size={16} className={isRefreshing ? 'animate-spin' : ''} /> รีเฟรช
+              </button>
+            </div>
           </div>
 
           {/* Summary Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-5">
             {cards.map((c, i) => { const Icon = c.icon; return (
-              <div key={i} className="bg-white/80 rounded-2xl p-4 lg:p-6 border border-white/60 shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-300 group">
-                <div className={`${c.bg} w-10 h-10 lg:w-12 lg:h-12 rounded-xl flex items-center justify-center mb-3`}><Icon size={20} className={c.tc} /></div>
-                <p className="text-2xl lg:text-3xl font-extrabold text-slate-800">{c.value.toLocaleString()}</p>
-                <p className="text-xs lg:text-sm text-slate-500 font-medium mt-1">{c.label}</p>
+              <div key={i} className={`relative overflow-hidden rounded-2xl p-4 lg:p-5 border bg-gradient-to-br ${c.card} shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group`}>
+                <div className={`absolute left-0 top-0 h-full w-1 ${c.accent}`} />
+                <div className="flex items-start justify-between gap-3">
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg ${c.iconBox}`}>
+                    <Icon size={22} strokeWidth={2.4} />
+                  </div>
+                  <span className={`px-2.5 py-1 rounded-full text-[11px] font-black tracking-wide ${c.badgeStyle}`}>
+                    {c.badge}
+                  </span>
+                </div>
+                <div className="mt-5">
+                  <p className={`text-3xl lg:text-4xl font-black leading-none ${c.valueText}`}>{c.value.toLocaleString()}</p>
+                  <p className="text-sm font-black text-slate-700 mt-2">{c.label}</p>
+                  <p className="text-xs font-semibold text-slate-400 mt-1">{c.hint}</p>
+                </div>
+                <div className="mt-4 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                  <div className={`h-full w-2/3 rounded-full bg-gradient-to-r ${c.line} group-hover:w-full transition-all duration-500`} />
+                </div>
               </div>
             ); })}
           </div>

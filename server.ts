@@ -7,6 +7,78 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function getDateRange(query: { from?: unknown; to?: unknown }) {
+  const { from, to } = query;
+  if (typeof from !== 'string' || typeof to !== 'string') return null;
+  if (!DATE_ONLY_RE.test(from) || !DATE_ONLY_RE.test(to)) return null;
+  return { from, to };
+}
+
+let usageTablesReady: Promise<void> | null = null;
+
+async function ensureColumn(tableName: string, columnName: string, definition: string) {
+  const [rows]: any = await pool.query(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [tableName, columnName]
+  );
+  if (rows.length === 0) {
+    await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+async function ensureUsageTables() {
+  if (!usageTablesReady) {
+    usageTablesReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_sessions (
+          session_id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          login_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+          logout_time DATETIME NULL,
+          last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          is_online TINYINT(1) DEFAULT 1,
+          ip_address VARCHAR(50),
+          user_agent VARCHAR(500),
+          INDEX idx_user_online (user_id, is_online),
+          INDEX idx_login_time (login_time)
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await ensureColumn('user_sessions', 'last_seen_at', 'DATETIME NULL DEFAULT CURRENT_TIMESTAMP');
+      await pool.query(`
+        UPDATE user_sessions
+        SET last_seen_at = COALESCE(last_seen_at, logout_time, login_time)
+        WHERE last_seen_at IS NULL
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_activity_log (
+          log_id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          session_id INT,
+          menu_key VARCHAR(100) NOT NULL,
+          menu_name VARCHAR(200) NOT NULL,
+          start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+          end_time DATETIME NULL,
+          active_seconds INT DEFAULT 0,
+          created_date DATE GENERATED ALWAYS AS (DATE(start_time)) STORED,
+          INDEX idx_user_date (user_id, created_date),
+          INDEX idx_session (session_id)
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+    })().catch((error) => {
+      usageTablesReady = null;
+      throw error;
+    });
+  }
+
+  return usageTablesReady;
+}
+
 // หน้าแรกสำหรับตรวจสอบสถานะ Server
 app.get('/', (req, res) => {
   res.send('Region 8 API Server is running!');
@@ -143,12 +215,13 @@ app.post('/api/users/login', async (req, res) => {
     // สร้าง session อัตโนมัติ (ปิด session เก่าก่อน)
     let session_id: number | null = null;
     try {
+      await ensureUsageTables();
       await pool.query(
         'UPDATE user_sessions SET is_online = 0, logout_time = NOW() WHERE user_id = ? AND is_online = 1',
         [user.user_id]
       );
       const [sResult]: any = await pool.query(
-        'INSERT INTO user_sessions (user_id, ip_address, user_agent) VALUES (?, ?, ?)',
+        'INSERT INTO user_sessions (user_id, ip_address, user_agent, last_seen_at) VALUES (?, ?, ?, NOW())',
         [user.user_id, req.ip || '', req.headers['user-agent'] || '']
       );
       session_id = sResult.insertId;
@@ -248,6 +321,44 @@ app.get('/api/users/:id/menu-permissions', async (req, res) => {
   }
 });
 
+// ดึงรายการเมนูที่ผู้ใช้มองเห็นได้ พร้อมรายละเอียดสำหรับ sidebar / หน้าหลัก
+app.get('/api/users/:id/menus', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [userRows]: any = await pool.query(
+      'SELECT user_status FROM user WHERE user_id = ?',
+      [id]
+    );
+    if (userRows.length === 0) return res.status(404).json({ error: 'ไม่พบผู้ใช้งาน' });
+
+    const groupId = userRows[0].user_status;
+    if (!groupId) {
+      const [rows]: any = await pool.query(
+        `SELECT menu_id, menu_key, menu_name, menu_type, menu_icon, menu_href, sort_order, is_active
+         FROM menu_items
+         WHERE is_active = 1
+         ORDER BY menu_type, sort_order, menu_name`
+      );
+      return res.json(rows);
+    }
+
+    const [rows]: any = await pool.query(
+      `SELECT m.menu_id, m.menu_key, m.menu_name, m.menu_type, m.menu_icon, m.menu_href, m.sort_order, m.is_active
+       FROM menu_items m
+       INNER JOIN group_permissions gp ON m.menu_id = gp.menu_id
+       WHERE gp.group_id = ? AND gp.can_view = 1 AND m.is_active = 1
+       ORDER BY m.menu_type, m.sort_order, m.menu_name`,
+      [groupId]
+    );
+
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงรายการเมนู' });
+  }
+});
+
 // เปลี่ยนรหัสผ่าน
 app.post('/api/users/change-password', async (req, res) => {
   try {
@@ -336,13 +447,27 @@ app.post('/api/admin/setup-tables', async (_req, res) => {
         INSERT INTO menu_items (menu_key, menu_name, menu_type, menu_icon, menu_href, sort_order) VALUES
         ('home',            'หน้าหลัก',                   'sidebar',  'Home',        '/index',           1),
         ('profile',         'ข้อมูลส่วนตัว',               'sidebar',  'FileText',    '/profile',         2),
-        ('training',        'ประวัติการอบรม',               'sidebar',  'ListTodo',    '#',                3),
+        ('training',        'ประวัติการอบรม',               'sidebar',  'ListTodo',    '/training-history', 3),
         ('change_password', 'เปลี่ยนรหัสผ่าน',             'sidebar',  'KeyRound',    '/change-password', 4),
         ('user_settings',   'ตั้งค่าผู้ใช้งาน',            'sidebar',  'Settings',    '/user-settings',   5),
-        ('report_monitor',  'รายงานการกำกับติดตามฯ',        'content',  'Monitor',     '#',                10),
-        ('report_course',   'หลักสูตรการอบรม',              'content',  'BookOpen',    '#',                11),
-        ('report_usage',    'รายงานการใช้งานระบบ',          'content',  'Users',       '#',                12),
-        ('report_security', 'รายงานการรักษาความปลอดภัย',   'content',  'ShieldCheck', '#',                13)
+        ('report_monitor',  'รายงานการกำกับติดตามฯ',        'content',  'Monitor',     '/program-monitoring', 10),
+        ('report_course',   'หลักสูตรการอบรม',              'content',  'BookOpen',    '/training-courses', 11),
+        ('report_usage',    'รายงานการใช้งานระบบ',          'content',  'Users',       '/system-usage-report', 12),
+        ('report_security', 'รายงานการรักษาความปลอดภัย',   'content',  'ShieldCheck', '/office-security-report', 13)
+      `);
+    } else {
+      await pool.query(`
+        UPDATE menu_items
+        SET menu_href = CASE menu_key
+          WHEN 'training' THEN '/training-history'
+          WHEN 'report_monitor' THEN '/program-monitoring'
+          WHEN 'report_course' THEN '/training-courses'
+          WHEN 'report_usage' THEN '/system-usage-report'
+          WHEN 'report_security' THEN '/office-security-report'
+          ELSE menu_href
+        END
+        WHERE menu_key IN ('training', 'report_monitor', 'report_course', 'report_usage', 'report_security')
+          AND (menu_href IS NULL OR menu_href = '' OR menu_href = '#')
       `);
     }
 
@@ -370,11 +495,19 @@ app.get('/api/admin/groups', async (_req, res) => {
 app.post('/api/admin/groups', async (req, res) => {
   try {
     const { group_name, group_description } = req.body;
-    if (!group_name) return res.status(400).json({ error: 'กรุณาระบุชื่อกลุ่ม' });
+    if (!group_name?.trim()) return res.status(400).json({ error: 'กรุณาระบุชื่อกลุ่ม' });
+
+    const [existing]: any = await pool.query(
+      'SELECT group_id FROM user_groups WHERE LOWER(group_name) = LOWER(?)',
+      [group_name.trim()]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'ชื่อกลุ่มนี้ถูกใช้งานแล้ว' });
+    }
 
     const [result]: any = await pool.query(
       'INSERT INTO user_groups (group_name, group_description) VALUES (?, ?)',
-      [group_name, group_description || '']
+      [group_name.trim(), group_description || '']
     );
     res.json({ message: 'สร้างกลุ่มเรียบร้อยแล้ว', group_id: result.insertId });
   } catch (error) {
@@ -388,9 +521,19 @@ app.put('/api/admin/groups/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { group_name, group_description } = req.body;
+    if (!group_name?.trim()) return res.status(400).json({ error: 'กรุณาระบุชื่อกลุ่ม' });
+
+    const [existing]: any = await pool.query(
+      'SELECT group_id FROM user_groups WHERE LOWER(group_name) = LOWER(?) AND group_id != ?',
+      [group_name.trim(), id]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'ชื่อกลุ่มนี้ถูกใช้งานแล้ว' });
+    }
+
     await pool.query(
       'UPDATE user_groups SET group_name = ?, group_description = ? WHERE group_id = ?',
-      [group_name, group_description || '', id]
+      [group_name.trim(), group_description || '', id]
     );
     res.json({ message: 'แก้ไขกลุ่มเรียบร้อยแล้ว' });
   } catch (error) {
@@ -427,10 +570,22 @@ app.get('/api/admin/menus', async (_req, res) => {
 // เพิ่มเมนูใหม่
 app.post('/api/admin/menus', async (req, res) => {
   try {
-    const { menu_key, menu_name, menu_type, menu_icon, menu_href, sort_order } = req.body;
+    const { menu_key, menu_name, menu_type, menu_icon, menu_href, sort_order, is_active } = req.body;
+    if (!menu_key?.trim() || !menu_name?.trim()) {
+      return res.status(400).json({ error: 'กรุณากรอกชื่อเมนูและ Key' });
+    }
+
+    const [existing]: any = await pool.query(
+      'SELECT menu_id FROM menu_items WHERE menu_key = ?',
+      [menu_key.trim()]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'Key เมนูนี้ถูกใช้งานแล้ว' });
+    }
+
     const [result]: any = await pool.query(
-      'INSERT INTO menu_items (menu_key, menu_name, menu_type, menu_icon, menu_href, sort_order) VALUES (?,?,?,?,?,?)',
-      [menu_key, menu_name, menu_type || 'sidebar', menu_icon || '', menu_href || '#', sort_order || 0]
+      'INSERT INTO menu_items (menu_key, menu_name, menu_type, menu_icon, menu_href, sort_order, is_active) VALUES (?,?,?,?,?,?,?)',
+      [menu_key.trim(), menu_name.trim(), menu_type || 'sidebar', menu_icon || '', menu_href || '#', sort_order || 0, is_active ?? 1]
     );
     res.json({ message: 'เพิ่มเมนูเรียบร้อยแล้ว', menu_id: result.insertId });
   } catch (error) {
@@ -486,10 +641,22 @@ app.post('/api/admin/groups/:id/permissions', async (req, res) => {
 app.put('/api/admin/menus/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { menu_name, menu_type, menu_icon, menu_href, sort_order, is_active } = req.body;
+    const { menu_key, menu_name, menu_type, menu_icon, menu_href, sort_order, is_active } = req.body;
+    if (!menu_key?.trim() || !menu_name?.trim()) {
+      return res.status(400).json({ error: 'กรุณากรอกชื่อเมนูและ Key' });
+    }
+
+    const [existing]: any = await pool.query(
+      'SELECT menu_id FROM menu_items WHERE menu_key = ? AND menu_id != ?',
+      [menu_key.trim(), id]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'Key เมนูนี้ถูกใช้งานแล้ว' });
+    }
+
     await pool.query(
-      'UPDATE menu_items SET menu_name=?, menu_type=?, menu_icon=?, menu_href=?, sort_order=?, is_active=? WHERE menu_id=?',
-      [menu_name, menu_type || 'sidebar', menu_icon || '', menu_href || '#', sort_order || 0, is_active ?? 1, id]
+      'UPDATE menu_items SET menu_key=?, menu_name=?, menu_type=?, menu_icon=?, menu_href=?, sort_order=?, is_active=? WHERE menu_id=?',
+      [menu_key.trim(), menu_name.trim(), menu_type || 'sidebar', menu_icon || '', menu_href || '#', sort_order || 0, is_active ?? 1, id]
     );
     res.json({ message: 'แก้ไขเมนูเรียบร้อยแล้ว' });
   } catch (error) {
@@ -628,34 +795,7 @@ app.put('/api/admin/users/:id', async (req, res) => {
 // สร้างตาราง activity tracking
 app.post('/api/admin/setup-usage-tables', async (_req, res) => {
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_sessions (
-        session_id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        login_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-        logout_time DATETIME NULL,
-        is_online TINYINT(1) DEFAULT 1,
-        ip_address VARCHAR(50),
-        user_agent VARCHAR(500),
-        INDEX idx_user_online (user_id, is_online),
-        INDEX idx_login_time (login_time)
-      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_activity_log (
-        log_id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        session_id INT,
-        menu_key VARCHAR(100) NOT NULL,
-        menu_name VARCHAR(200) NOT NULL,
-        start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-        end_time DATETIME NULL,
-        active_seconds INT DEFAULT 0,
-        created_date DATE GENERATED ALWAYS AS (DATE(start_time)) STORED,
-        INDEX idx_user_date (user_id, created_date),
-        INDEX idx_session (session_id)
-      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-    `);
+    await ensureUsageTables();
     res.json({ message: 'ตาราง usage tracking ถูกสร้างเรียบร้อยแล้ว' });
   } catch (error) {
     console.error(error);
@@ -667,13 +807,14 @@ app.post('/api/admin/setup-usage-tables', async (_req, res) => {
 app.post('/api/usage/login-session', async (req, res) => {
   try {
     const { user_id, ip_address, user_agent } = req.body;
+    await ensureUsageTables();
     // ปิด session เก่าที่ยังค้างอยู่
     await pool.query(
       'UPDATE user_sessions SET is_online = 0, logout_time = NOW() WHERE user_id = ? AND is_online = 1',
       [user_id]
     );
     const [result]: any = await pool.query(
-      'INSERT INTO user_sessions (user_id, ip_address, user_agent) VALUES (?, ?, ?)',
+      'INSERT INTO user_sessions (user_id, ip_address, user_agent, last_seen_at) VALUES (?, ?, ?, NOW())',
       [user_id, ip_address || '', user_agent || '']
     );
     res.json({ session_id: result.insertId });
@@ -687,14 +828,15 @@ app.post('/api/usage/login-session', async (req, res) => {
 app.post('/api/usage/logout-session', async (req, res) => {
   try {
     const { session_id, user_id } = req.body;
+    await ensureUsageTables();
     if (session_id) {
       await pool.query(
-        'UPDATE user_sessions SET is_online = 0, logout_time = NOW() WHERE session_id = ?',
+        'UPDATE user_sessions SET is_online = 0, logout_time = NOW(), last_seen_at = NOW() WHERE session_id = ?',
         [session_id]
       );
     } else if (user_id) {
       await pool.query(
-        'UPDATE user_sessions SET is_online = 0, logout_time = NOW() WHERE user_id = ? AND is_online = 1',
+        'UPDATE user_sessions SET is_online = 0, logout_time = NOW(), last_seen_at = NOW() WHERE user_id = ? AND is_online = 1',
         [user_id]
       );
     }
@@ -709,6 +851,7 @@ app.post('/api/usage/logout-session', async (req, res) => {
 app.post('/api/usage/log-activity', async (req, res) => {
   try {
     const { user_id, session_id, menu_key, menu_name, active_seconds } = req.body;
+    await ensureUsageTables();
     if (active_seconds && active_seconds > 0) {
       // อัปเดต record ที่มีอยู่แล้ว (end_time)
       await pool.query(
@@ -733,9 +876,10 @@ app.post('/api/usage/log-activity', async (req, res) => {
 app.post('/api/usage/heartbeat', async (req, res) => {
   try {
     const { session_id } = req.body;
+    await ensureUsageTables();
     if (session_id) {
       await pool.query(
-        'UPDATE user_sessions SET logout_time = NOW() WHERE session_id = ? AND is_online = 1',
+        'UPDATE user_sessions SET is_online = 1, logout_time = NULL, last_seen_at = NOW() WHERE session_id = ?',
         [session_id]
       );
     }
@@ -748,8 +892,8 @@ app.post('/api/usage/heartbeat', async (req, res) => {
 // ดึงสรุปข้อมูลรายงานการใช้งาน (รองรับ ?from=YYYY-MM-DD&to=YYYY-MM-DD)
 app.get('/api/usage/summary', async (req, res) => {
   try {
-    const { from, to } = req.query as { from?: string; to?: string };
-    const hasRange = from && to;
+    await ensureUsageTables();
+    const range = getDateRange(req.query);
 
     // จำนวนผู้ลงทะเบียนทั้งหมด (ไม่กรองตามช่วงเวลา)
     const [totalUsers]: any = await pool.query('SELECT COUNT(*) as count FROM user');
@@ -757,10 +901,10 @@ app.get('/api/usage/summary', async (req, res) => {
     // จำนวน unique users ที่ login ในช่วงเวลาที่เลือก
     let totalLogins = [{ count: 0 }];
     try {
-      if (hasRange) {
+      if (range) {
         const [r]: any = await pool.query(
           'SELECT COUNT(DISTINCT user_id) as count FROM user_sessions WHERE DATE(login_time) >= ? AND DATE(login_time) <= ?',
-          [from, to]
+          [range.from, range.to]
         );
         totalLogins = r;
       } else {
@@ -789,40 +933,50 @@ app.get('/api/usage/summary', async (req, res) => {
 // ดึงตารางการใช้งานระบบพร้อมสถานะออนไลน์ (รองรับ ?from=YYYY-MM-DD&to=YYYY-MM-DD)
 app.get('/api/usage/users-table', async (req, res) => {
   try {
-    const { from, to } = req.query as { from?: string; to?: string };
-    const hasRange = from && to;
+    await ensureUsageTables();
+    const range = getDateRange(req.query);
 
     // ปิด session ที่ไม่มี heartbeat มานานกว่า 2 นาที
     try {
       await pool.query(
-        "UPDATE user_sessions SET is_online = 0, logout_time = COALESCE(logout_time, NOW()) WHERE is_online = 1 AND logout_time < DATE_SUB(NOW(), INTERVAL 2 MINUTE)"
+        `UPDATE user_sessions
+         SET is_online = 0, logout_time = COALESCE(logout_time, last_seen_at, NOW())
+         WHERE is_online = 1
+           AND COALESCE(last_seen_at, logout_time, login_time) < DATE_SUB(NOW(), INTERVAL 2 MINUTE)`
       );
     } catch (_) { /* ignore */ }
 
     // สร้าง sub-query สำหรับกรองตามช่วงเวลา
-    const sessionFilter = hasRange
-      ? `AND DATE(login_time) >= '${from}' AND DATE(login_time) <= '${to}'`
+    const sessionFilter = range
+      ? 'AND DATE(login_time) >= ? AND DATE(login_time) <= ?'
       : '';
-    const activityFilter = hasRange
-      ? `AND DATE(start_time) >= '${from}' AND DATE(start_time) <= '${to}'`
+    const activityFilter = range
+      ? 'AND DATE(start_time) >= ? AND DATE(start_time) <= ?'
       : '';
-    const lastLoginFilter = hasRange
-      ? `AND DATE(login_time) >= '${from}' AND DATE(login_time) <= '${to}'`
+    const lastLoginFilter = range
+      ? 'AND DATE(login_time) >= ? AND DATE(login_time) <= ?'
       : '';
+    const rangeParams = range
+      ? [range.from, range.to, range.from, range.to, range.from, range.to]
+      : [];
 
     const [rows]: any = await pool.query(`
       SELECT 
         u.user_id, u.Name_Surnam AS Name_Surname, u.username, u.position, u.type,
         u.Division_Province, u.registration_date,
         COALESCE(MAX(s_online.is_online), 0) AS is_online,
+        MAX(s_online.last_seen_at) AS last_seen_at,
         (SELECT MAX(login_time) FROM user_sessions WHERE user_id = u.user_id ${lastLoginFilter}) AS last_login,
         (SELECT COUNT(*) FROM user_sessions WHERE user_id = u.user_id ${sessionFilter}) AS total_logins,
         (SELECT COALESCE(SUM(active_seconds), 0) FROM user_activity_log WHERE user_id = u.user_id ${activityFilter}) AS total_active_seconds
       FROM user u
-      LEFT JOIN user_sessions s_online ON u.user_id = s_online.user_id AND s_online.is_online = 1
+      LEFT JOIN user_sessions s_online
+        ON u.user_id = s_online.user_id
+       AND s_online.is_online = 1
+       AND COALESCE(s_online.last_seen_at, s_online.logout_time, s_online.login_time) >= DATE_SUB(NOW(), INTERVAL 2 MINUTE)
       GROUP BY u.user_id
       ORDER BY COALESCE(MAX(s_online.is_online), 0) DESC, u.Name_Surnam
-    `);
+    `, rangeParams);
     res.json(rows);
   } catch (error) {
     console.error(error);
@@ -845,13 +999,14 @@ app.get('/api/usage/users-table', async (req, res) => {
 // ดึงรายละเอียดประวัติการใช้งานของ user (รองรับ ?from=YYYY-MM-DD&to=YYYY-MM-DD)
 app.get('/api/usage/user-history/:userId', async (req, res) => {
   try {
+    await ensureUsageTables();
     const { userId } = req.params;
-    const { from, to } = req.query as { from?: string; to?: string };
-    const hasRange = from && to;
+    const range = getDateRange(req.query);
 
-    const dateFilter = hasRange
-      ? `AND DATE(start_time) >= '${from}' AND DATE(start_time) <= '${to}'`
+    const dateFilter = range
+      ? 'AND DATE(start_time) >= ? AND DATE(start_time) <= ?'
       : '';
+    const params = range ? [userId, range.from, range.to] : [userId];
 
     const [rows]: any = await pool.query(`
       SELECT 
@@ -865,7 +1020,7 @@ app.get('/api/usage/user-history/:userId', async (req, res) => {
       WHERE user_id = ? ${dateFilter}
       GROUP BY created_date, menu_key, menu_name
       ORDER BY created_date DESC, menu_name
-    `, [userId]);
+    `, params);
     res.json(rows);
   } catch (error) {
     console.error(error);

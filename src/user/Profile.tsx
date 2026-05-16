@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { User, Mail, Briefcase, MapPin, Building2, IdCard, ShieldCheck, Edit3, ChevronRight, ArrowLeft, X } from 'lucide-react';
 import { API_BASE } from '../lib/apiConfig';
 import Header from '../Header';
@@ -15,6 +15,22 @@ export default function Profile() {
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
+
+  const fetchProfile = useCallback(async (id: number) => {
+    try {
+      setIsLoading(true);
+      const res = await fetch(`${API_BASE}/api/users/profile/${id}`);
+      if (!res.ok) throw new Error('Failed to fetch');
+      const data = await res.json();
+      setProfileData(data);
+      setEditForm(data);
+    } catch (err) {
+      console.error(err);
+      toast.error('ไม่สามารถโหลดข้อมูลได้');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('user');
@@ -36,23 +52,7 @@ export default function Profile() {
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  const fetchProfile = async (id: number) => {
-    try {
-      setIsLoading(true);
-      const res = await fetch(`${API_BASE}/api/users/profile/${id}`);
-      if (!res.ok) throw new Error('Failed to fetch');
-      const data = await res.json();
-      setProfileData(data);
-      setEditForm(data);
-    } catch (err) {
-      console.error(err);
-      toast.error('ไม่สามารถโหลดข้อมูลได้');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  }, [fetchProfile]);
 
   const handleLogout = () => {
     localStorage.removeItem('user');

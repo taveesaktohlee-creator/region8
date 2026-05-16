@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import {
   ShieldCheck,
   Search,
@@ -32,6 +32,31 @@ const FALLBACK_MOCK_DATA = [
   { "วันที่": "24/10/2023", "เวลา": "15:45", "จุดตรวจ": "โกดังเก็บของ", "ผู้ตรวจ": "วิชัย รักษาความปลอดภัย", "สถานะ": "ผิดปกติ", "หมายเหตุ": "พบรอยงัดแงะที่แม่กุญแจ ได้แจ้งหัวหน้าแล้ว" }
 ];
 
+// เปลี่ยนจาก App Script เป็นลิงก์ Google Sheets CSV (ไม่มีปัญหา CORS 100%)
+const SECURITY_REPORT_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ19m-yrpFmOhL7HzPlSnupVa80QBRH3e0zWcI0joKWgkKiM-h9THfsiIM5gVDnKPJMeD3RJ1FuuxJ0/pub?output=csv';
+
+// ฟังก์ชันช่วยแปลงข้อมูล CSV เป็น JSON
+const csvToJson = (csv: string) => {
+  const lines = csv.split(/\r?\n/);
+  if (lines.length === 0) return [];
+
+  const splitRegex = /,(?=(?:(?:[^"]*"){2})*[^"]*$)/;
+  const headers = lines[0].split(splitRegex).map(h => h.replace(/^"|"$/g, '').trim());
+  const result = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const currentline = lines[i].split(splitRegex);
+    const obj: any = {};
+    for (let j = 0; j < headers.length; j++) {
+      const val = currentline[j] || '';
+      obj[headers[j]] = val.replace(/^"|"$/g, '').trim();
+    }
+    result.push(obj);
+  }
+  return result;
+};
+
 export default function OfficeSecurityReport() {
   const [userData, setUserData] = useState<any>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -50,39 +75,14 @@ export default function OfficeSecurityReport() {
   // Modal States
   const [showAbnormalModal, setShowAbnormalModal] = useState(false);
 
-  // เปลี่ยนจาก App Script เป็นลิงก์ Google Sheets CSV (ไม่มีปัญหา CORS 100%)
-  const API_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ19m-yrpFmOhL7HzPlSnupVa80QBRH3e0zWcI0joKWgkKiM-h9THfsiIM5gVDnKPJMeD3RJ1FuuxJ0/pub?output=csv';
-
-  // ฟังก์ชันช่วยแปลงข้อมูล CSV เป็น JSON
-  const csvToJson = (csv: string) => {
-    const lines = csv.split(/\r?\n/);
-    if (lines.length === 0) return [];
-
-    const splitRegex = /,(?=(?:(?:[^"]*"){2})*[^"]*$)/;
-    const headers = lines[0].split(splitRegex).map(h => h.replace(/^"|"$/g, '').trim());
-    const result = [];
-
-    for (let i = 1; i < lines.length; i++) {
-      if (!lines[i].trim()) continue;
-      const currentline = lines[i].split(splitRegex);
-      const obj: any = {};
-      for (let j = 0; j < headers.length; j++) {
-        let val = currentline[j] || '';
-        obj[headers[j]] = val.replace(/^"|"$/g, '').trim();
-      }
-      result.push(obj);
-    }
-    return result;
-  };
-
-  const fetchData = async (showToast = false) => {
+  const fetchData = useCallback(async (showToast = false) => {
     setIsLoading(true);
     setError(null);
     setIsUsingMockData(false);
     if (showToast) toast.info('กำลังอัปเดตข้อมูล...', { autoClose: 1500 });
 
     try {
-      const response = await fetch(API_URL);
+      const response = await fetch(SECURITY_REPORT_CSV_URL);
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
       const csvText = await response.text();
       const finalData = csvToJson(csvText);
@@ -99,7 +99,7 @@ export default function OfficeSecurityReport() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('user');
@@ -121,7 +121,7 @@ export default function OfficeSecurityReport() {
     fetchData();
 
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  }, [fetchData]);
 
   const handleLogout = () => {
     localStorage.removeItem('user');

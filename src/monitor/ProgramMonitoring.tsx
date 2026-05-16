@@ -324,7 +324,7 @@ export default function ProgramMonitoring() {
 
         const keys = Object.keys(rawData[0]);
         const findKey = (keywords: string[]): string => {
-            for (let kw of keywords) {
+            for (const kw of keywords) {
                 const exact = keys.find(k => k.trim().toLowerCase() === kw.toLowerCase());
                 if (exact) return exact;
                 const contains = keys.find(k => String(k).toLowerCase().includes(kw.toLowerCase()));
@@ -340,19 +340,19 @@ export default function ProgramMonitoring() {
         const visitDateKey = findKey(['วันที่เข้ากำกับติดตาม']);
 
         return rawData.map(item => {
-            let prov = item[provKey] || "ไม่ระบุ";
-            let coop = item[coopKey] || "ไม่ระบุ";
-            let proj = item[projectKey] || "ไม่ระบุ";
+            const prov = item[provKey] || "ไม่ระบุ";
+            const coop = item[coopKey] || "ไม่ระบุ";
+            const proj = item[projectKey] || "ไม่ระบุ";
             let cleanProv = String(prov).replace('สำนักงานตรวจบัญชีสหกรณ์', '').replace(/^จ\./, '').trim();
             if (!cleanProv) cleanProv = "ไม่ระบุ";
 
             let monthStr = "ไม่ระบุ";
-            let visitDateVal = visitDateKey ? item[visitDateKey] : null;
+            const visitDateVal = visitDateKey ? item[visitDateKey] : null;
             if (visitDateVal) {
-                let datePart = String(visitDateVal).split(/[ T]/)[0];
-                let parts = datePart.split(/[\/\-]/);
+                const datePart = String(visitDateVal).split(/[ T]/)[0];
+                const parts = datePart.split(/[/-]/);
                 if (parts.length >= 2) {
-                    let m = parseInt(parts[1], 10);
+                    const m = parseInt(parts[1], 10);
                     if (m >= 1 && m <= 12) monthStr = thaiMonths[m - 1];
                 }
             }
@@ -436,7 +436,7 @@ export default function ProgramMonitoring() {
     const evaluationKeys = useMemo(() => {
         if (filteredData.length === 0) return [];
         const row = filteredData[0];
-        let keys = Object.keys(row).filter(k =>
+        const keys = Object.keys(row).filter(k =>
             !k.startsWith('_') &&
             k !== row._dateKey &&
             k !== row._provKey &&

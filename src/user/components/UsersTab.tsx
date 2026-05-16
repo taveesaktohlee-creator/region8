@@ -3,8 +3,23 @@ import { Users, UserCheck, Search, Plus, Edit, X, AlertCircle } from 'lucide-rea
 import { toast } from 'react-toastify';
 import type { Group } from './GroupsTab';
 import { API_BASE } from '../../lib/apiConfig';
+import { clearMenuAccessCache } from '../../lib/menuAccess';
 
 const API = `${API_BASE}/api/admin`;
+const USERS_API = `${API_BASE}/api/users`;
+
+type UserFormData = {
+  Name_Surname: string;
+  position: string;
+  type: string;
+  Division_Province: string;
+  Department: string;
+  email: string;
+  National_ID_number: string;
+  username: string;
+  password: string;
+  user_status: string;
+};
 
 interface UserRow {
   user_id: number;
@@ -20,6 +35,63 @@ interface UserRow {
   group_name: string | null;
 }
 
+type ApiResult = {
+  ok: boolean;
+  status: number;
+  data?: any;
+  text?: string;
+  isJson: boolean;
+};
+
+type UserFormSource = Partial<Omit<UserFormData, 'user_status'>> & {
+  user_status?: number | string | null;
+};
+
+async function readApiResponse(response: Response): Promise<ApiResult> {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return {
+      ok: response.ok,
+      status: response.status,
+      data: await response.json(),
+      isJson: true,
+    };
+  }
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    text: await response.text(),
+    isJson: false,
+  };
+}
+
+function isMissingRoute(result: ApiResult) {
+  return result.status === 404 && (!result.isJson || result.text?.includes('Cannot '));
+}
+
+function buildUserPayload(formData: UserFormData) {
+  return {
+    ...formData,
+    user_status: formData.user_status ? Number(formData.user_status) : null
+  };
+}
+
+function userToFormData(user: UserFormSource): UserFormData {
+  return {
+    Name_Surname: user.Name_Surname || '',
+    position: user.position || '',
+    type: user.type || '',
+    Division_Province: user.Division_Province || '',
+    Department: user.Department || '',
+    email: user.email || '',
+    National_ID_number: user.National_ID_number || '',
+    username: user.username || '',
+    password: '',
+    user_status: user.user_status == null ? '' : String(user.user_status)
+  };
+}
+
 export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users: UserRow[]; onRefresh: ()=>Promise<void>; }) {
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState<number|null>(null);
@@ -27,7 +99,7 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserRow | null>(null);
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<UserFormData>({
     Name_Surname: '', position: '', type: '', Division_Province: '', Department: '',
     email: '', National_ID_number: '', username: '', password: '', user_status: ''
   });
@@ -50,6 +122,7 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
       });
       const d = await r.json();
       if (!r.ok) { toast.error(d.error); return; }
+      clearMenuAccessCache();
       toast.success(d.message);
       await onRefresh();
     } finally {
@@ -68,35 +141,138 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
   // Modal Handlers
   const openAddModal = () => {
     setEditingUser(null);
-    setFormData({
-      Name_Surname: '', position: '', type: '', Division_Province: '', Department: '',
-      email: '', National_ID_number: '', username: '', password: '', user_status: ''
-    });
+    setFormData(userToFormData({}));
     setFormError('');
     setIsModalOpen(true);
   };
 
-  const openEditModal = (u: UserRow) => {
+  const openEditModal = async (u: UserRow) => {
     setEditingUser(u);
-    setFormData({
-      Name_Surname: u.Name_Surname || '',
-      position: u.position || '',
-      type: u.type || '',
-      Division_Province: u.Division_Province || '',
-      Department: u.Department || '',
-      email: u.email || '',
-      National_ID_number: u.National_ID_number || '',
-      username: u.username || '',
-      password: '', // ปล่อยว่างถ้าไม่ต้องการเปลี่ยนรหัสผ่าน
-      user_status: u.user_status?.toString() || ''
-    });
+    setFormData(userToFormData(u));
     setFormError('');
     setIsModalOpen(true);
+
+    try {
+      const profileResponse = await fetch(`${USERS_API}/profile/${u.user_id}`);
+      const profileResult = await readApiResponse(profileResponse);
+      const profile = profileResult.ok && profileResult.data ? profileResult.data : {};
+
+      let confirmed: Partial<UserRow> = {};
+      if (!profile.type || !profile.Department) {
+        const confirmResponse = await fetch(`${USERS_API}/search-confirm?q=${encodeURIComponent(profile.Name_Surname || u.Name_Surname)}`);
+        const confirmResult = await readApiResponse(confirmResponse);
+        if (confirmResult.ok && Array.isArray(confirmResult.data)) {
+          confirmed = confirmResult.data.find((item: UserRow) => item.Name_Surname === (profile.Name_Surname || u.Name_Surname)) || {};
+        }
+      }
+
+      setFormData(userToFormData({
+        ...u,
+        ...profile,
+        position: profile.position || confirmed.position || u.position,
+        type: profile.type || confirmed.type || u.type,
+        Division_Province: profile.Division_Province || confirmed.Division_Province || u.Division_Province,
+        Department: profile.Department || confirmed.Department || u.Department,
+        user_status: u.user_status,
+      }));
+    } catch {
+      // ถ้าดึงข้อมูลเต็มไม่ได้ ให้ใช้ข้อมูลจากตารางรายชื่อที่มีอยู่แล้ว
+    }
   };
 
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const updateUserWithCompatibleRoutes = async (user: UserRow, body: ReturnType<typeof buildUserPayload>) => {
+    if (body.username !== user.username || body.password) {
+      throw new Error('Backend ปัจจุบันยังไม่รองรับการเปลี่ยน username หรือ password ผ่านหน้าแก้ไขนี้');
+    }
+
+    const profileResponse = await fetch(`${USERS_API}/profile/${user.user_id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        Name_Surname: body.Name_Surname,
+        position: body.position,
+        type: body.type,
+        Division_Province: body.Division_Province,
+        Department: body.Department,
+        email: body.email,
+        National_ID_number: body.National_ID_number,
+      })
+    });
+    const profileResult = await readApiResponse(profileResponse);
+    if (!profileResult.ok) {
+      throw new Error(profileResult.data?.error || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลส่วนตัว');
+    }
+
+    const groupResponse = await fetch(`${API}/users/${user.user_id}/group`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ group_id: body.user_status })
+    });
+    const groupResult = await readApiResponse(groupResponse);
+    if (!groupResult.ok) {
+      throw new Error(groupResult.data?.error || 'เกิดข้อผิดพลาดในการบันทึกกลุ่มสิทธิ์');
+    }
+  };
+
+  const createUserWithCompatibleRoutes = async (body: ReturnType<typeof buildUserPayload>) => {
+    const registerResponse = await fetch(`${USERS_API}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        Name_Surname: body.Name_Surname,
+        position: body.position,
+        type: body.type,
+        Division_Province: body.Division_Province,
+        Department: body.Department,
+        email: body.email,
+        username: body.username,
+        password: body.password,
+      })
+    });
+    const registerResult = await readApiResponse(registerResponse);
+    if (!registerResult.ok) {
+      throw new Error(registerResult.data?.error || 'เกิดข้อผิดพลาดในการเพิ่มผู้ใช้งาน');
+    }
+
+    const usersResponse = await fetch(`${API}/users`);
+    const usersResult = await readApiResponse(usersResponse);
+    if (!usersResult.ok || !Array.isArray(usersResult.data)) return;
+
+    const createdUser = usersResult.data.find((u: any) => u.username === body.username);
+    if (!createdUser?.user_id) return;
+
+    if (body.user_status) {
+      const groupResponse = await fetch(`${API}/users/${createdUser.user_id}/group`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group_id: body.user_status })
+      });
+      const groupResult = await readApiResponse(groupResponse);
+      if (!groupResult.ok) {
+        throw new Error(groupResult.data?.error || 'เพิ่มผู้ใช้งานสำเร็จ แต่บันทึกกลุ่มสิทธิ์ไม่สำเร็จ');
+      }
+    }
+
+    if (body.National_ID_number) {
+      await fetch(`${USERS_API}/profile/${createdUser.user_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          Name_Surname: body.Name_Surname,
+          position: body.position,
+          type: body.type,
+          Division_Province: body.Division_Province,
+          Department: body.Department,
+          email: body.email,
+          National_ID_number: body.National_ID_number,
+        })
+      });
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -117,10 +293,7 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
     try {
       const url = editingUser ? `${API}/users/${editingUser.user_id}` : `${API}/users`;
       const method = editingUser ? 'PUT' : 'POST';
-      const body = {
-        ...formData,
-        user_status: formData.user_status ? Number(formData.user_status) : null
-      };
+      const body = buildUserPayload(formData);
 
       const r = await fetch(url, {
         method,
@@ -128,21 +301,32 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
         body: JSON.stringify(body)
       });
 
-      const contentType = r.headers.get("content-type");
-      if (contentType && contentType.indexOf("application/json") !== -1) {
-        const d = await r.json();
-        if (!r.ok) {
-          setFormError(d.error || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
-          return;
+      const result = await readApiResponse(r);
+      if (isMissingRoute(result)) {
+        if (editingUser) {
+          await updateUserWithCompatibleRoutes(editingUser, body);
+          toast.success('แก้ไขข้อมูลผู้ใช้งานเรียบร้อยแล้ว');
+        } else {
+          await createUserWithCompatibleRoutes(body);
+          toast.success('เพิ่มผู้ใช้งานเรียบร้อยแล้ว');
         }
-        toast.success(d.message);
+        clearMenuAccessCache();
         setIsModalOpen(false);
         await onRefresh();
-      } else {
-        setFormError('เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง โปรดรีสตาร์ท Backend (API ไม่พบเส้นทางนี้)');
+        return;
       }
+
+      if (!result.ok) {
+        setFormError(result.data?.error || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
+        return;
+      }
+
+      toast.success(result.data?.message || 'บันทึกข้อมูลเรียบร้อยแล้ว');
+      clearMenuAccessCache();
+      setIsModalOpen(false);
+      await onRefresh();
     } catch (err) {
-      setFormError('เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์');
+      setFormError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์');
     } finally {
       setIsSubmitting(false);
     }

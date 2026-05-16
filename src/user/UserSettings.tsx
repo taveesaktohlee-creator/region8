@@ -9,6 +9,7 @@ import { GroupsTab, type Group, type MenuItem } from './components/GroupsTab';
 import { MenusTab } from './components/MenusTab';
 import { UsersTab } from './components/UsersTab';
 import { API_BASE } from '../lib/apiConfig';
+import { clearMenuAccessCache } from '../lib/menuAccess';
 
 const API = `${API_BASE}/api/admin`;
 
@@ -70,6 +71,7 @@ export default function UserSettings() {
   const handleLogout = () => { localStorage.removeItem('user'); window.location.href = '/'; };
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
+    clearMenuAccessCache();
     Promise.all([loadGroups(), loadMenus(), loadUsers()]).then(() => {
       setIsRefreshing(false);
       toast.success('โหลดข้อมูลใหม่แล้ว');
