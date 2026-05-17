@@ -24,6 +24,8 @@ import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
 
 type SystemKey = 'ledger' | 'member' | 'loan' | 'deposit' | 'stock';
+type PermissionKey = 'member' | 'loan' | 'deposit' | 'stock' | 'ledger' | 'savings';
+type BackupKey = 'none' | 'single' | 'multiple';
 
 interface SystemForm {
   status: string;
@@ -44,11 +46,19 @@ interface MonitorForm {
   systems: Record<SystemKey, SystemForm>;
   data_recording: string;
   permission_note: string;
+  permissions: Record<PermissionKey, string>;
   backup_note: string;
+  backups: Record<BackupKey, string>;
   ups_status: string;
   access_register: string;
   upload_responsible: string;
   send_method: string;
+  send_current_method: string;
+  send_not_current_method: string;
+  backup_to_auditor: string;
+  tech_officer: string;
+  coop_officer: string;
+  office_officer: string;
   advice: string;
   problem: string;
 }
@@ -72,6 +82,7 @@ const SHEET_KEYS = {
   permissionDeposit: '5. กำหนดสิทธิ์การใช้งานโปรแกรม [ระบบเงินรับฝาก]',
   permissionStock: '5. กำหนดสิทธิ์การใช้งานโปรแกรม [ระบบสินค้า]',
   permissionLedger: '5. กำหนดสิทธิ์การใช้งานโปรแกรม [ระบบบัญชีแยกประเภท]',
+  permissionSavings: '5. กำหนดสิทธิ์การใช้งานโปรแกรม [ระบบออมทรัพย์]',
   backupNone: '6. การสำรองข้อมูลและการเก็บรักษาข้อมูล [ไม่ได้สำรองข้อมูลไว้ในสื่อบันทึกอื่น]',
   backupSingle: '6. การสำรองข้อมูลและการเก็บรักษาข้อมูล [สำรองข้อมูลในสื่ออื่นเพียงชุดเดียว]',
   backupMultiple: '6. การสำรองข้อมูลและการเก็บรักษาข้อมูล [สำรองข้อมูลในสื่อบันทึกอื่นมากกว่า 1 ชุด]',
@@ -124,12 +135,107 @@ const SYSTEMS: { key: SystemKey; label: string }[] = [
   { key: 'stock', label: 'ระบบสินค้า' },
 ];
 
+const PERMISSION_PROGRAMS: { key: PermissionKey; label: string }[] = [
+  { key: 'member', label: 'ระบบสมาชิกและหุ้น' },
+  { key: 'loan', label: 'ระบบเงินให้กู้' },
+  { key: 'deposit', label: 'ระบบเงินรับฝาก' },
+  { key: 'stock', label: 'ระบบสินค้า' },
+  { key: 'ledger', label: 'ระบบบัญชีแยกประเภท' },
+  { key: 'savings', label: 'ระบบออมทรัพย์' },
+];
+
+const BACKUP_SECTIONS: { key: BackupKey; label: string }[] = [
+  { key: 'none', label: 'ไม่ได้สำรองข้อมูลไว้ในสื่อบันทึกอื่น' },
+  { key: 'single', label: 'สำรองข้อมูลในสื่ออื่นเพียงชุดเดียว' },
+  { key: 'multiple', label: 'สำรองข้อมูลในสื่อบันทึกอื่นมากกว่า 1 ชุด' },
+];
+
+const SYSTEM_STATUS_OPTIONS = ['', 'ยกยอด', 'ย้อนหลัง', 'ปัจจุบัน', 'ปรับเปลี่ยน'];
+
+const DATA_RECORDING_OPTIONS = [
+  '',
+  'บันทึกเป็นปัจจุบันทุกวันทำการ',
+  'บันทึกสัปดาห์ละ 1 ครั้ง',
+  'บันทึกเดือนละ 2 ครั้ง',
+  'บันทึกเดือนละ 1 ครั้ง',
+];
+
+const PERMISSION_OPTIONS = [
+  '',
+  'มีการกำหนดสิทธิ์แต่ละ user ชัดเจน',
+  'มีการกำหนดสิทธิ์แต่ผู้ใช้งานมีสิทธิยกเลิกแก้ไขได้',
+  'ไม่มีการกำหนดสิทธิ์(ใช้รหัสตั้งต้น)',
+  'การกำหนดสิทธิให้ผู้ใช้งานชัดเจนแต่มีสิทธิ(เมนูกำหนดสิทธิ/log)',
+  'มีการกำหนดสิทธิของผู้ปฎิบัติงานแต่ละระบบ(แต่เปิดใช้งานทุกเมนู)',
+  'ยังมีสิทธิของผู้ใช้งานที่ลาออก/เกษียน',
+  'ผู้ควบคุมระบบมีสิทธิ์(ระบบรับจ่ายเงิน/ฝาก-ถอน)',
+  'ผู้ควบคุม/ผู้ปฏิบัติงานสิทธิเรียกคืน',
+];
+
+const BACKUP_OPTIONS = [
+  '',
+  'เก็บรักษาโดยเจ้าหน้าที่ผู้ปฏิบัติงาน(ไม่มีมติมอบหมาย)',
+  'เก็บรักษาโดยเจ้าหน้าที่ผู้ปฏิบัติงาน(มีมติมอบหมาย)',
+  'เก็บรักษาภายนอกสหกรณ์',
+  'เก็บรักษาใว้ที่สหกรณ์เพียงอยางเดียว',
+  'สำรองใว้ในเครื่องคอมพิวเตอร์',
+  'เก็บรักษาใน Google Drive',
+];
+
+const UPS_OPTIONS = ['', 'มี/ใช้งานได้', 'มี/ใช้งานไม่ได้', 'ไม่มี'];
+
+const ACCESS_REGISTER_OPTIONS = [
+  '',
+  'มีการจัดทำทะเบียนคุมการเข้าถึงข้อมูลชุดสำรอง',
+  'ไม่มีการจัดทำทะเบียนคุมการเข้าถึงข้อมูลชุดสำรอง (สตส.แนะนำให้แบบฟอร์ม)',
+  'ไม่มีการจัดทำทะเบียนคุมการเข้าถึงข้อมูลชุดสำรอง (สตส.ไม่ได้แนะนำ)',
+];
+
+const SEND_METHOD_OPTIONS = [
+  '',
+  'ส่งข้อมูลภายในเครื่องเดียวกันที่บันทึกงาน',
+  'มีการเชื่อมต่อผ่านระบบเครือข่ายในการนำส่งข้อมูลที่อยู่ต่างเครื่อง',
+  'นำก้อนข้อมูลมาเรียกคืนต่างเครื่องเพื่อนำส่งข้อมูล',
+];
+
+const BACKUP_TO_AUDITOR_OPTIONS = [
+  '',
+  'ส่งแฟ้มข้อมูลสำรองให้ผู้สอบบัญชี',
+  'ส่งแฟ้มข้อมูลสำรองให้ผู้สอบบัญชีไม่ถูกต้อง',
+  'ไม่ได้ส่งแฟ้มข้อมูลสำรองให้ผู้สอบบัญชี(สตส.มีการแนะนำ)',
+  'ไม่ได้ส่งแฟ้มข้อมูลสำรองให้ผู้สอบบัญชี(สตส.ไม่มีการแนะนำ)',
+];
+
+const TECH_OFFICER_OPTIONS = [
+  '',
+  'นางภัทร์ชยาพร  บุญภิบาล',
+  'นางกิตติมา  สุขจันทรา',
+  'นางสาวพัชรินทร์ คีรีเพ็ชร',
+  'นายทวีศักดิ์  โต๊ะหลี',
+  'นายสุภลักษณ์  จันโบ',
+];
+
 const emptySystems = (): Record<SystemKey, SystemForm> => ({
   ledger: { status: '', version: '', saved_to_date: '' },
   member: { status: '', version: '', saved_to_date: '' },
   loan: { status: '', version: '', saved_to_date: '' },
   deposit: { status: '', version: '', saved_to_date: '' },
   stock: { status: '', version: '', saved_to_date: '' },
+});
+
+const emptyPermissions = (): Record<PermissionKey, string> => ({
+  member: '',
+  loan: '',
+  deposit: '',
+  stock: '',
+  ledger: '',
+  savings: '',
+});
+
+const emptyBackups = (): Record<BackupKey, string> => ({
+  none: '',
+  single: '',
+  multiple: '',
 });
 
 const initialForm = (): MonitorForm => ({
@@ -145,16 +251,34 @@ const initialForm = (): MonitorForm => ({
   systems: emptySystems(),
   data_recording: '',
   permission_note: '',
+  permissions: emptyPermissions(),
   backup_note: '',
+  backups: emptyBackups(),
   ups_status: '',
   access_register: '',
   upload_responsible: '',
   send_method: '',
+  send_current_method: '',
+  send_not_current_method: '',
+  backup_to_auditor: '',
+  tech_officer: '',
+  coop_officer: '',
+  office_officer: '',
   advice: '',
   problem: '',
 });
 
 const toText = (value: unknown) => String(value ?? '').trim();
+
+const splitSheetChoices = (value: unknown) => toText(value)
+  .split(',')
+  .map(item => item.trim())
+  .filter(Boolean);
+
+const joinSheetChoices = (values: string[]) => values
+  .map(item => item.trim())
+  .filter(Boolean)
+  .join(', ');
 
 const normalizeRound = (value: unknown) => {
   const raw = toText(value).replace(/\s+/g, ' ');
@@ -204,6 +328,7 @@ const buildPermissionNote = (row: SheetRow) => [
   toText(row[SHEET_KEYS.permissionLoan]),
   toText(row[SHEET_KEYS.permissionDeposit]),
   toText(row[SHEET_KEYS.permissionStock]),
+  toText(row[SHEET_KEYS.permissionSavings]),
 ].filter(Boolean).join(' | ');
 
 const buildBackupNote = (row: SheetRow) => [
@@ -237,17 +362,36 @@ const sheetRowToForm = (row: SheetRow, userData?: any): MonitorForm => {
     systems,
     data_recording: toText(row[SHEET_KEYS.dataRecording]),
     permission_note: buildPermissionNote(row),
+    permissions: {
+      member: toText(row[SHEET_KEYS.permissionMember]),
+      loan: toText(row[SHEET_KEYS.permissionLoan]),
+      deposit: toText(row[SHEET_KEYS.permissionDeposit]),
+      stock: toText(row[SHEET_KEYS.permissionStock]),
+      ledger: toText(row[SHEET_KEYS.permissionLedger]),
+      savings: toText(row[SHEET_KEYS.permissionSavings]),
+    },
     backup_note: buildBackupNote(row),
+    backups: {
+      none: toText(row[SHEET_KEYS.backupNone]),
+      single: toText(row[SHEET_KEYS.backupSingle]),
+      multiple: toText(row[SHEET_KEYS.backupMultiple]),
+    },
     ups_status: toText(row[SHEET_KEYS.ups]),
     access_register: toText(row[SHEET_KEYS.accessRegister]),
     upload_responsible: toText(row[SHEET_KEYS.uploadResponsible]) || userData?.Name_Surname || '',
     send_method: toText(row[SHEET_KEYS.sendCurrent]) || toText(row[SHEET_KEYS.sendNotCurrent]),
+    send_current_method: toText(row[SHEET_KEYS.sendCurrent]),
+    send_not_current_method: toText(row[SHEET_KEYS.sendNotCurrent]),
+    backup_to_auditor: toText(row[SHEET_KEYS.backupToAuditor]),
+    tech_officer: toText(row[SHEET_KEYS.techOfficer]),
+    coop_officer: toText(row[SHEET_KEYS.coopOfficer]),
+    office_officer: toText(row[SHEET_KEYS.officeOfficer]),
     advice: toText(row[SHEET_KEYS.advice]),
     problem: toText(row[SHEET_KEYS.problem]),
   };
 };
 
-const formToSheetRow = (form: MonitorForm, userData?: any): SheetRow => {
+const formToSheetRow = (form: MonitorForm, _userData?: any): SheetRow => {
   const row: SheetRow = {
     [SHEET_KEYS.timestamp]: thaiTimestamp(),
     [SHEET_KEYS.office]: form.office,
@@ -260,24 +404,25 @@ const formToSheetRow = (form: MonitorForm, userData?: any): SheetRow => {
     [SHEET_KEYS.notebook]: form.notebook_count,
     [SHEET_KEYS.network]: form.network_usage,
     [SHEET_KEYS.dataRecording]: form.data_recording,
-    [SHEET_KEYS.permissionMember]: form.permission_note,
-    [SHEET_KEYS.permissionLoan]: '',
-    [SHEET_KEYS.permissionDeposit]: '',
-    [SHEET_KEYS.permissionStock]: '',
-    [SHEET_KEYS.permissionLedger]: form.permission_note,
-    [SHEET_KEYS.backupNone]: '',
-    [SHEET_KEYS.backupSingle]: form.backup_note,
-    [SHEET_KEYS.backupMultiple]: '',
+    [SHEET_KEYS.permissionMember]: form.permissions.member,
+    [SHEET_KEYS.permissionLoan]: form.permissions.loan,
+    [SHEET_KEYS.permissionDeposit]: form.permissions.deposit,
+    [SHEET_KEYS.permissionStock]: form.permissions.stock,
+    [SHEET_KEYS.permissionLedger]: form.permissions.ledger,
+    [SHEET_KEYS.permissionSavings]: form.permissions.savings,
+    [SHEET_KEYS.backupNone]: form.backups.none,
+    [SHEET_KEYS.backupSingle]: form.backups.single,
+    [SHEET_KEYS.backupMultiple]: form.backups.multiple,
     [SHEET_KEYS.accessRegister]: form.access_register,
     [SHEET_KEYS.uploadResponsible]: form.upload_responsible,
-    [SHEET_KEYS.sendCurrent]: form.send_method,
-    [SHEET_KEYS.sendNotCurrent]: '',
-    [SHEET_KEYS.backupToAuditor]: '',
+    [SHEET_KEYS.sendCurrent]: form.send_current_method,
+    [SHEET_KEYS.sendNotCurrent]: form.send_not_current_method,
+    [SHEET_KEYS.backupToAuditor]: form.backup_to_auditor,
     [SHEET_KEYS.advice]: form.advice,
     [SHEET_KEYS.problem]: form.problem,
-    [SHEET_KEYS.techOfficer]: userData?.Name_Surname || '',
-    [SHEET_KEYS.coopOfficer]: '',
-    [SHEET_KEYS.officeOfficer]: userData?.Name_Surname || '',
+    [SHEET_KEYS.techOfficer]: form.tech_officer,
+    [SHEET_KEYS.coopOfficer]: form.coop_officer,
+    [SHEET_KEYS.officeOfficer]: form.office_officer,
     [SHEET_KEYS.ups]: form.ups_status,
   };
 
@@ -382,6 +527,46 @@ export default function MonitorData() {
     }));
   };
 
+  const updatePermission = (permission: PermissionKey, value: string) => {
+    setForm(current => ({
+      ...current,
+      permissions: {
+        ...current.permissions,
+        [permission]: value,
+      },
+      permission_note: Object.entries({ ...current.permissions, [permission]: value })
+        .map(([, item]) => item)
+        .filter(Boolean)
+        .join(' | '),
+    }));
+  };
+
+  const updateBackup = (backup: BackupKey, value: string) => {
+    setForm(current => ({
+      ...current,
+      backups: {
+        ...current.backups,
+        [backup]: value,
+      },
+      backup_note: Object.entries({ ...current.backups, [backup]: value })
+        .map(([, item]) => item)
+        .filter(Boolean)
+        .join(' | '),
+    }));
+  };
+
+  const handleSourceSearchChange = (value: string) => {
+    setSourceSearch(value);
+    if (hasSelectedSource && value !== form.coop_name) {
+      setSelectedRowIndex(null);
+      setForm(current => ({
+        ...current,
+        coop_name: '',
+        project: '',
+      }));
+    }
+  };
+
   const resetForm = () => {
     setForm({
       ...initialForm(),
@@ -389,10 +574,12 @@ export default function MonitorData() {
       upload_responsible: userData?.Name_Surname || '',
     });
     setSelectedRowIndex(null);
+    setSourceSearch('');
     toast.info('ล้างฟอร์มเรียบร้อยแล้ว');
   };
 
   const validateForm = () => {
+    if (!hasSelectedSource) return 'กรุณาค้นหาและเลือกชื่อสหกรณ์จากข้อมูลครั้งที่ 1';
     if (!form.office.trim()) return 'กรุณากรอกสำนักงานตรวจบัญชีสหกรณ์';
     if (!form.visit_date) return 'กรุณาเลือกวันที่เข้ากำกับติดตาม';
     if (!form.coop_name.trim()) return 'กรุณากรอกชื่อสหกรณ์';
@@ -421,6 +608,7 @@ export default function MonitorData() {
 
       toast.success(result.message || 'เพิ่มข้อมูลกำกับติดตามครั้งที่ 2 ลง Google Sheets แล้ว');
       setSelectedRowIndex(null);
+      setSourceSearch('');
       setForm({
         ...initialForm(),
         office: userData?.Division_Province || '',
@@ -437,6 +625,7 @@ export default function MonitorData() {
   const handleSelectSource = (row: SheetRow, index: number) => {
     setSelectedRowIndex(index);
     setForm(sheetRowToForm(row, userData));
+    setSourceSearch(toText(row[SHEET_KEYS.coop]));
     window.scrollTo({ top: 0, behavior: 'smooth' });
     toast.info(`ดึงข้อมูลครั้งที่ 1 ของ ${toText(row[SHEET_KEYS.coop]) || 'สหกรณ์ที่เลือก'} มาแก้ไขเป็นครั้งที่ 2 แล้ว`);
   };
@@ -452,10 +641,12 @@ export default function MonitorData() {
     ].some(value => toText(value).toLowerCase().includes(keyword)));
   }, [sheetRows, sourceSearch]);
 
+  const sourceSuggestions = useMemo(() => filteredSheetRows.slice(0, 8), [filteredSheetRows]);
+
   const completion = useMemo(() => {
-    const required = [form.office, form.visit_date, form.coop_name, form.visit_round];
+    const required = [hasSelectedSource ? 'selected' : '', form.office, form.visit_date, form.coop_name, form.visit_round];
     return Math.round((required.filter(Boolean).length / required.length) * 100);
-  }, [form]);
+  }, [form, hasSelectedSource]);
 
   return (
     <div className="flex h-screen bg-[#f8fafc] overflow-hidden text-slate-800">
@@ -494,9 +685,43 @@ export default function MonitorData() {
               <section className="space-y-6">
                 <Panel icon={<ClipboardEdit size={20} />} title="ข้อมูลทั่วไป">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                      <div className="relative">
+                        <FieldWrap label="ค้นหาและเลือกชื่อสหกรณ์จากข้อมูลครั้งที่ 1" required icon={<Search size={16} />}>
+                          <input
+                            value={sourceSearch}
+                            onChange={(event) => handleSourceSearchChange(event.target.value)}
+                            placeholder="พิมพ์ชื่อสหกรณ์เพื่อค้นหา..."
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-50"
+                          />
+                        </FieldWrap>
+                        {sourceSearch && !hasSelectedSource && (
+                          <div className="absolute z-30 mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-blue-100 bg-white p-2 shadow-xl shadow-slate-200/70">
+                            {sheetLoading ? (
+                              <div className="flex items-center justify-center gap-2 px-3 py-4 text-sm font-bold text-blue-600">
+                                <Loader2 size={16} className="animate-spin" />
+                                กำลังโหลดข้อมูล
+                              </div>
+                            ) : sourceSuggestions.length === 0 ? (
+                              <div className="px-3 py-4 text-center text-sm font-semibold text-slate-400">ไม่พบชื่อสหกรณ์ที่ค้นหา</div>
+                            ) : sourceSuggestions.map((row, index) => (
+                              <button
+                                key={`${toText(row[SHEET_KEYS.coop])}-suggest-${index}`}
+                                type="button"
+                                onClick={() => handleSelectSource(row, sheetRows.indexOf(row))}
+                                className="cursor-pointer w-full rounded-xl px-3 py-3 text-left transition hover:bg-blue-50"
+                              >
+                                <p className="font-bold text-slate-800">{toText(row[SHEET_KEYS.coop]) || '-'}</p>
+                                <p className="mt-0.5 text-xs font-semibold text-slate-500">{toText(row[SHEET_KEYS.office]) || '-'}</p>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                     <TextInput label="สำนักงานตรวจบัญชีสหกรณ์" value={form.office} onChange={(v) => updateField('office', v)} icon={<Building2 size={16} />} required />
                     <DateInput label="วันที่เข้ากำกับติดตาม" value={form.visit_date} onChange={(v) => updateField('visit_date', v)} required />
-                    <TextInput label="ชื่อสหกรณ์" value={form.coop_name} onChange={(v) => updateField('coop_name', v)} required />
+                    <TextInput label="ชื่อสหกรณ์" value={form.coop_name} onChange={(v) => updateField('coop_name', v)} required readOnly />
                     <SelectInput label="กำกับติดตามครั้งที่" value={form.visit_round} onChange={(v) => updateField('visit_round', v)} options={['ครั้งที่ 2']} required />
                     <div className="md:col-span-2">
                       <TextInput label="สหกรณ์เป้าหมายตามโครงการ" value={form.project} onChange={(v) => updateField('project', v)} />
@@ -519,7 +744,7 @@ export default function MonitorData() {
                       <div key={system.key} className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
                         <p className="font-bold text-slate-800 mb-3">{system.label}</p>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <SelectInput label="สถานะ" value={form.systems[system.key].status} onChange={(v) => updateSystem(system.key, 'status', v)} options={['', 'ใช้งานปกติ', 'ปรับเปลี่ยน', 'ไม่ได้ใช้งาน', 'พบปัญหา']} />
+                          <SelectInput label="สถานะ" value={form.systems[system.key].status} onChange={(v) => updateSystem(system.key, 'status', v)} options={SYSTEM_STATUS_OPTIONS} />
                           <TextInput label="เวอร์ชั่น" value={form.systems[system.key].version} onChange={(v) => updateSystem(system.key, 'version', v)} />
                           <DateInput label="บันทึกงานถึงวันที่" value={form.systems[system.key].saved_to_date} onChange={(v) => updateSystem(system.key, 'saved_to_date', v)} />
                         </div>
@@ -530,16 +755,60 @@ export default function MonitorData() {
 
                 <Panel icon={<FilePenLine size={20} />} title="รายละเอียดการควบคุมและข้อเสนอแนะ">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <TextareaInput label="การบันทึกข้อมูลในโปรแกรมระบบบัญชี" value={form.data_recording} onChange={(v) => updateField('data_recording', v)} />
-                    <TextareaInput label="การกำหนดสิทธิ์การใช้งาน" value={form.permission_note} onChange={(v) => updateField('permission_note', v)} />
-                    <TextareaInput label="การสำรองข้อมูลและการเก็บรักษาข้อมูล" value={form.backup_note} onChange={(v) => updateField('backup_note', v)} />
-                    <TextareaInput label="เครื่องสำรองไฟ" value={form.ups_status} onChange={(v) => updateField('ups_status', v)} />
-                    <TextareaInput label="ทะเบียนคุมการเข้าถึงแฟ้มข้อมูล" value={form.access_register} onChange={(v) => updateField('access_register', v)} />
+                    <SingleChoiceInput label="4. การบันทึกข้อมูลในโปรแกรมระบบบัญชี" value={form.data_recording} onChange={(v) => updateField('data_recording', v)} options={DATA_RECORDING_OPTIONS} />
+                    <div className="md:col-span-2 rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
+                      <p className="mb-4 font-black text-slate-900">การกำหนดสิทธิ์การใช้งานโปรแกรม</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {PERMISSION_PROGRAMS.map(program => (
+                          <MultiChoiceInput
+                            key={program.key}
+                            label={program.label}
+                            value={form.permissions[program.key]}
+                            onChange={(v) => updatePermission(program.key, v)}
+                            options={PERMISSION_OPTIONS}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="md:col-span-2 rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
+                      <p className="mb-4 font-black text-slate-900">การสำรองข้อมูลและการเก็บรักษาข้อมูล</p>
+                      <div className="grid grid-cols-1 gap-4">
+                        {BACKUP_SECTIONS.map(section => (
+                          <MultiChoiceInput
+                            key={section.key}
+                            label={section.label}
+                            value={form.backups[section.key]}
+                            onChange={(v) => updateBackup(section.key, v)}
+                            options={BACKUP_OPTIONS}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <SingleChoiceInput label="เครื่องสำรองไฟ" value={form.ups_status} onChange={(v) => updateField('ups_status', v)} options={UPS_OPTIONS} />
+                    <SingleChoiceInput label="จัดทำทะเบียนคุมการเข้าถึงแฟ้มข้อมูล" value={form.access_register} onChange={(v) => updateField('access_register', v)} options={ACCESS_REGISTER_OPTIONS} />
                     <TextInput label="ผู้รับผิดชอบนำส่งแฟ้มข้อมูลออนไลน์" value={form.upload_responsible} onChange={(v) => updateField('upload_responsible', v)} />
-                    <TextareaInput label="วิธีการนำส่งข้อมูล SmartMember & SmartManage" value={form.send_method} onChange={(v) => updateField('send_method', v)} />
-                    <TextareaInput label="เรื่องที่แนะนำให้เจ้าหน้าที่/IT Provider" value={form.advice} onChange={(v) => updateField('advice', v)} />
+                    <div className="md:col-span-2 rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
+                      <p className="mb-4 font-black text-slate-900">วิธีการนำส่งข้อมูล SmartMember & SmartManage</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <SingleChoiceInput label="ส่งข้อมูลเป็นปัจจุบัน" value={form.send_current_method} onChange={(v) => updateField('send_current_method', v)} options={SEND_METHOD_OPTIONS} />
+                        <SingleChoiceInput label="ส่งข้อมูลไม่เป็นปัจจุบัน" value={form.send_not_current_method} onChange={(v) => updateField('send_not_current_method', v)} options={SEND_METHOD_OPTIONS} />
+                      </div>
+                    </div>
+                    <SingleChoiceInput label="ส่งแฟ้มข้อมูลสำรองให้ผู้สอบบัญชี" value={form.backup_to_auditor} onChange={(v) => updateField('backup_to_auditor', v)} options={BACKUP_TO_AUDITOR_OPTIONS} />
+                    <div className="md:col-span-2">
+                      <TextareaInput label="เรื่องที่แนะนำให้เจ้าหน้าที่/IT Provider" value={form.advice} onChange={(v) => updateField('advice', v)} rows={7} />
+                    </div>
                     <div className="md:col-span-2">
                       <TextareaInput label="ปัญหาการใช้งานโปรแกรม" value={form.problem} onChange={(v) => updateField('problem', v)} rows={4} />
+                    </div>
+                    <div className="md:col-span-2">
+                      <SelectInput label="ชื่อ-นามสกุล เจ้าหน้าที่กลุ่มเทคฯ (ผู้ติดตาม)" value={form.tech_officer} onChange={(v) => updateField('tech_officer', v)} options={TECH_OFFICER_OPTIONS} />
+                    </div>
+                    <div className="md:col-span-2">
+                      <TextInput label="ชื่อ-นามสกุล เจ้าหน้าที่สหกรณ์ (ผู้ให้ข้อมูล)" value={form.coop_officer} onChange={(v) => updateField('coop_officer', v)} />
+                    </div>
+                    <div className="md:col-span-2">
+                      <TextInput label="ชื่อ-นามสกุล เจ้าหน้าที่สำนักงานตรวจบัญชี" value={form.office_officer} onChange={(v) => updateField('office_officer', v)} />
                     </div>
                   </div>
                 </Panel>
@@ -576,15 +845,6 @@ export default function MonitorData() {
                     <button type="button" onClick={handleRefresh} className="cursor-pointer h-10 w-10 rounded-xl bg-slate-50 text-slate-500 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center transition">
                       <RefreshCw size={17} className={isRefreshing || sheetLoading ? 'animate-spin' : ''} />
                     </button>
-                  </div>
-                  <div className="relative mb-3">
-                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                      value={sourceSearch}
-                      onChange={(event) => setSourceSearch(event.target.value)}
-                      placeholder="ค้นหาชื่อสหกรณ์..."
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-50"
-                    />
                   </div>
                   <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
                     {sheetLoading ? (
@@ -652,14 +912,15 @@ function FieldWrap({ label, required, icon, children }: { label: string; require
   );
 }
 
-function TextInput({ label, value, onChange, type = 'text', required, icon }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean; icon?: React.ReactNode }) {
+function TextInput({ label, value, onChange, type = 'text', required, icon, readOnly }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean; icon?: React.ReactNode; readOnly?: boolean }) {
   return (
     <FieldWrap label={label} required={required} icon={icon}>
       <input
         type={type}
         value={value}
+        readOnly={readOnly}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-50"
+        className={`w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-50 ${readOnly ? 'cursor-not-allowed text-slate-500' : ''}`}
       />
     </FieldWrap>
   );
@@ -679,6 +940,8 @@ function DateInput({ label, value, onChange, required }: { label: string; value:
 }
 
 function SelectInput({ label, value, onChange, options, required }: { label: string; value: string; onChange: (value: string) => void; options: string[]; required?: boolean }) {
+  const selectOptions = value && !options.includes(value) ? [...options, value] : options;
+
   return (
     <FieldWrap label={label} required={required}>
       <select
@@ -686,8 +949,142 @@ function SelectInput({ label, value, onChange, options, required }: { label: str
         onChange={(event) => onChange(event.target.value)}
         className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-50"
       >
-        {options.map(option => <option key={option} value={option}>{option || 'ไม่ระบุ'}</option>)}
+        {selectOptions.map(option => <option key={option} value={option}>{option || 'ไม่ระบุ'}</option>)}
       </select>
+    </FieldWrap>
+  );
+}
+
+function SingleChoiceInput({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[] }) {
+  const normalizedOptions = options.filter(Boolean);
+  const extraOptions = value && !normalizedOptions.includes(value) ? [value] : [];
+  const allOptions = [...normalizedOptions, ...extraOptions];
+
+  return (
+    <FieldWrap label={label}>
+      <div className="rounded-2xl border border-slate-200 bg-white p-3">
+        <div className="grid grid-cols-1 gap-2">
+          {allOptions.map(option => {
+            const checked = value === option;
+            return (
+              <label
+                key={option}
+                className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${
+                  checked ? 'border-blue-200 bg-blue-50 text-slate-900' : 'border-slate-100 bg-slate-50 text-slate-600 hover:border-blue-100 hover:bg-blue-50/50'
+                }`}
+              >
+                <input
+                  type="radio"
+                  checked={checked}
+                  onChange={() => onChange(option)}
+                  className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="leading-relaxed">{option}</span>
+              </label>
+            );
+          })}
+        </div>
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange('')}
+            className="mt-3 cursor-pointer text-xs font-bold text-slate-400 transition hover:text-blue-600"
+          >
+            ล้างค่า
+          </button>
+        )}
+        {!value && (
+          <p className="mt-2 text-xs font-semibold text-slate-400">ไม่ระบุ</p>
+        )}
+      </div>
+    </FieldWrap>
+  );
+}
+
+function MultiChoiceInput({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[] }) {
+  const [otherText, setOtherText] = useState('');
+  const selected = splitSheetChoices(value);
+  const normalizedOptions = options.filter(Boolean);
+  const extraOptions = selected.filter(item => !normalizedOptions.includes(item));
+  const allOptions = [...normalizedOptions, ...extraOptions];
+
+  const updateChoices = (choices: string[]) => {
+    onChange(joinSheetChoices(Array.from(new Set(choices))));
+  };
+
+  const toggleValue = (option: string, checked: boolean) => {
+    const current = new Set(selected);
+    if (checked) {
+      current.add(option);
+    } else {
+      current.delete(option);
+    }
+    updateChoices(Array.from(current));
+  };
+
+  const addOtherChoice = () => {
+    const value = otherText.trim();
+    if (!value) return;
+    updateChoices([...selected, value]);
+    setOtherText('');
+  };
+
+  return (
+    <FieldWrap label={label}>
+      <div className="rounded-2xl border border-slate-200 bg-white p-3">
+        <div className="grid grid-cols-1 gap-2">
+          {allOptions.map(option => {
+            const checked = selected.includes(option);
+            return (
+              <label
+                key={option}
+                className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${
+                  checked ? 'border-blue-200 bg-blue-50 text-slate-900' : 'border-slate-100 bg-slate-50 text-slate-600 hover:border-blue-100 hover:bg-blue-50/50'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) => toggleValue(option, event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="leading-relaxed">
+                  {option}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <div className="mt-3 rounded-xl border border-dashed border-blue-100 bg-blue-50/40 p-3">
+          <p className="mb-2 text-xs font-black text-blue-700">อื่นๆ</p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              type="text"
+              value={otherText}
+              onChange={(event) => setOtherText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  addOtherChoice();
+                }
+              }}
+              placeholder="พิมพ์ระบุเพิ่มเติม..."
+              className="min-w-0 flex-1 rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
+            />
+            <button
+              type="button"
+              onClick={addOtherChoice}
+              className="cursor-pointer rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-blue-500/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!otherText.trim()}
+            >
+              เพิ่ม
+            </button>
+          </div>
+        </div>
+        {selected.length === 0 && (
+          <p className="mt-2 text-xs font-semibold text-slate-400">ไม่ระบุ</p>
+        )}
+      </div>
     </FieldWrap>
   );
 }
