@@ -482,13 +482,24 @@ app.post('/api/google-monitor-data', async (req, res) => {
     }
 
     try {
-      res.json(JSON.parse(text));
-    } catch {
+      const parsed = JSON.parse(text);
+      if (parsed?.ok === false) {
+        throw new Error(parsed.error || 'Google Apps Script บันทึกข้อมูลไม่สำเร็จ');
+      }
+      res.json(parsed);
+    } catch (parseOrScriptError) {
+      if (parseOrScriptError instanceof Error && text.trim().startsWith('{')) {
+        throw parseOrScriptError;
+      }
       res.json({ message: 'บันทึกข้อมูลลง Google Sheets เรียบร้อยแล้ว', response: text });
     }
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'ไม่สามารถบันทึกข้อมูลลง Google Sheets ได้ กรุณาตรวจสอบ doPost ของ Apps Script' });
+    res.status(500).json({
+      error: error instanceof Error
+        ? error.message
+        : 'Google Apps Script ยังไม่มี doPost(e) สำหรับบันทึกข้อมูล กรุณาอัปเดตและ Deploy Apps Script ใหม่',
+    });
   }
 });
 

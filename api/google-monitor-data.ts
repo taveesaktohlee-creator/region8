@@ -77,13 +77,24 @@ export default async function handler(req: any, res: any) {
       }
 
       try {
-        sendJson(res, 200, JSON.parse(text));
-      } catch {
+        const parsed = JSON.parse(text);
+        if (parsed?.ok === false) {
+          throw new Error(parsed.error || 'Google Apps Script บันทึกข้อมูลไม่สำเร็จ');
+        }
+        sendJson(res, 200, parsed);
+      } catch (parseOrScriptError) {
+        if (parseOrScriptError instanceof Error && text.trim().startsWith('{')) {
+          throw parseOrScriptError;
+        }
         sendJson(res, 200, { message: 'บันทึกข้อมูลลง Google Sheets เรียบร้อยแล้ว', response: text });
       }
     } catch (error) {
       console.error(error);
-      sendJson(res, 500, { error: 'ไม่สามารถบันทึกข้อมูลลง Google Sheets ได้ กรุณาตรวจสอบ doPost ของ Apps Script' });
+      sendJson(res, 500, {
+        error: error instanceof Error
+          ? error.message
+          : 'Google Apps Script ยังไม่มี doPost(e) สำหรับบันทึกข้อมูล กรุณาอัปเดตและ Deploy Apps Script ใหม่',
+      });
     }
     return;
   }
