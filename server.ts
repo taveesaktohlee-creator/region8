@@ -8,6 +8,7 @@ app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const GOOGLE_MONITOR_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwiK32Dwn80oGfbG4yElZQmKW0IwblvPO85yCW_1ex7LfcCzwd0FtgWMfG45aSqUd3H/exec';
 
 function getDateRange(query: { from?: unknown; to?: unknown }) {
   const { from, to } = query;
@@ -18,6 +19,20 @@ function getDateRange(query: { from?: unknown; to?: unknown }) {
 
 let usageTablesReady: Promise<void> | null = null;
 let profileAvatarReady: Promise<void> | null = null;
+let monitorRecordsReady: Promise<void> | null = null;
+
+const DEFAULT_MENU_ITEMS = [
+  ['home', 'หน้าหลัก', 'sidebar', 'Home', '/index', 1],
+  ['profile', 'ข้อมูลส่วนตัว', 'sidebar', 'FileText', '/profile', 2],
+  ['training', 'ประวัติการอบรม', 'sidebar', 'ListTodo', '/training-history', 3],
+  ['change_password', 'เปลี่ยนรหัสผ่าน', 'sidebar', 'KeyRound', '/change-password', 4],
+  ['user_settings', 'ตั้งค่าผู้ใช้งาน', 'sidebar', 'Settings', '/user-settings', 5],
+  ['monitor_data', 'บันทึกกำกับติดตามกลุ่มเทคฯ', 'sidebar', 'ClipboardEdit', '/monitor-data', 6],
+  ['report_monitor', 'รายงานการกำกับติดตามฯ', 'content', 'Monitor', '/program-monitoring', 10],
+  ['report_course', 'หลักสูตรการอบรม', 'content', 'BookOpen', '/training-courses', 11],
+  ['report_usage', 'รายงานการใช้งานระบบ', 'content', 'Users', '/system-usage-report', 12],
+  ['report_security', 'รายงานการรักษาความปลอดภัย', 'content', 'ShieldCheck', '/office-security-report', 13],
+];
 
 async function ensureColumn(tableName: string, columnName: string, definition: string) {
   const [rows]: any = await pool.query(
@@ -40,6 +55,53 @@ async function ensureProfileAvatarColumn() {
   }
 
   return profileAvatarReady;
+}
+
+async function ensureDefaultMenuItems() {
+  for (const item of DEFAULT_MENU_ITEMS) {
+    await pool.query(
+      `INSERT INTO menu_items (menu_key, menu_name, menu_type, menu_icon, menu_href, sort_order, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, 1)
+       ON DUPLICATE KEY UPDATE
+         menu_name = VALUES(menu_name),
+         menu_type = VALUES(menu_type),
+         menu_icon = VALUES(menu_icon),
+         menu_href = VALUES(menu_href),
+         sort_order = VALUES(sort_order),
+         is_active = 1`,
+      item
+    );
+  }
+
+  await pool.query(`
+    INSERT INTO group_permissions (group_id, menu_id, can_view)
+    SELECT g.group_id, m.menu_id, 1
+    FROM user_groups g
+    JOIN menu_items m ON m.menu_key = 'monitor_data'
+    LEFT JOIN group_permissions gp ON gp.group_id = g.group_id AND gp.menu_id = m.menu_id
+    WHERE gp.perm_id IS NULL
+  `);
+}
+
+async function ensureMonitorRecordsTable() {
+  if (!monitorRecordsReady) {
+    monitorRecordsReady = pool.query(`
+      CREATE TABLE IF NOT EXISTS monitor_records (
+        record_id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NULL,
+        payload LONGTEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_monitor_user (user_id),
+        INDEX idx_monitor_updated (updated_at)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `).then(() => undefined).catch((error) => {
+      monitorRecordsReady = null;
+      throw error;
+    });
+  }
+
+  return monitorRecordsReady;
 }
 
 function isValidAvatarDataUrl(value: unknown) {
@@ -311,10 +373,130 @@ app.put('/api/users/profile/:id', async (req, res) => {
   }
 });
 
+// บันทึกข้อมูลกำกับติดตามการใช้งานโปรแกรมฯ
+app.get('/api/monitor-records', async (req, res) => {
+  try {
+    await ensureMonitorRecordsTable();
+    const userId = typeof req.query.user_id === 'string' ? Number(req.query.user_id) : null;
+    const params: any[] = [];
+    let where = '';
+    if (userId && Number.isFinite(userId)) {
+      where = 'WHERE user_id = ?';
+      params.push(userId);
+    }
+
+    const [rows]: any = await pool.query(
+      `SELECT record_id, user_id, payload, created_at, updated_at
+       FROM monitor_records
+       ${where}
+       ORDER BY updated_at DESC, record_id DESC
+       LIMIT 100`,
+      params
+    );
+
+    res.json(rows.map((row: any) => ({
+      record_id: row.record_id,
+      user_id: row.user_id,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      payload: (() => {
+        try { return JSON.parse(row.payload); } catch { return {}; }
+      })(),
+    })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงข้อมูลกำกับติดตาม' });
+  }
+});
+
+app.post('/api/monitor-records', async (req, res) => {
+  try {
+    await ensureMonitorRecordsTable();
+    const { user_id, payload } = req.body;
+    if (!payload || typeof payload !== 'object') {
+      return res.status(400).json({ error: 'ไม่พบข้อมูลที่ต้องการบันทึก' });
+    }
+
+    const [result]: any = await pool.query(
+      'INSERT INTO monitor_records (user_id, payload) VALUES (?, ?)',
+      [user_id || null, JSON.stringify(payload)]
+    );
+    res.json({ message: 'บันทึกข้อมูลกำกับติดตามเรียบร้อยแล้ว', record_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการบันทึกข้อมูลกำกับติดตาม' });
+  }
+});
+
+app.put('/api/monitor-records/:id', async (req, res) => {
+  try {
+    await ensureMonitorRecordsTable();
+    const { id } = req.params;
+    const { payload } = req.body;
+    if (!payload || typeof payload !== 'object') {
+      return res.status(400).json({ error: 'ไม่พบข้อมูลที่ต้องการแก้ไข' });
+    }
+
+    const [result]: any = await pool.query(
+      'UPDATE monitor_records SET payload = ? WHERE record_id = ?',
+      [JSON.stringify(payload), id]
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'ไม่พบรายการที่ต้องการแก้ไข' });
+    res.json({ message: 'แก้ไขข้อมูลกำกับติดตามเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการแก้ไขข้อมูลกำกับติดตาม' });
+  }
+});
+
+// Proxy ข้อมูล Google Sheets สำหรับหน้าบันทึกกำกับติดตามกลุ่มเทคฯ
+app.get('/api/google-monitor-data', async (_req, res) => {
+  try {
+    const response = await fetch(GOOGLE_MONITOR_SCRIPT_URL, { method: 'GET', redirect: 'follow' });
+    const text = await response.text();
+    if (!response.ok) throw new Error(text || 'Cannot fetch Google Sheets data');
+    res.type('application/json').send(text);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงข้อมูลจาก Google Sheets ได้' });
+  }
+});
+
+app.post('/api/google-monitor-data', async (req, res) => {
+  try {
+    const { row } = req.body;
+    if (!row || typeof row !== 'object') {
+      return res.status(400).json({ error: 'ไม่พบข้อมูลที่ต้องการบันทึกลง Google Sheets' });
+    }
+
+    const response = await fetch(GOOGLE_MONITOR_SCRIPT_URL, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(row),
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(text || 'Cannot write Google Sheets data');
+    if (/script function not found|<!doctype|<html/i.test(text)) {
+      throw new Error('Google Apps Script ยังไม่รองรับการบันทึกแบบ POST');
+    }
+
+    try {
+      res.json(JSON.parse(text));
+    } catch {
+      res.json({ message: 'บันทึกข้อมูลลง Google Sheets เรียบร้อยแล้ว', response: text });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถบันทึกข้อมูลลง Google Sheets ได้ กรุณาตรวจสอบ doPost ของ Apps Script' });
+  }
+});
+
 // ดึงสิทธิ์เมนูของผู้ใช้ตาม group (user_status)
 app.get('/api/users/:id/menu-permissions', async (req, res) => {
   try {
     const { id } = req.params;
+    await ensureDefaultMenuItems();
 
     // ดึง user_status (group_id) ของ user
     const [userRows]: any = await pool.query(
@@ -349,6 +531,7 @@ app.get('/api/users/:id/menu-permissions', async (req, res) => {
 app.get('/api/users/:id/menus', async (req, res) => {
   try {
     const { id } = req.params;
+    await ensureDefaultMenuItems();
 
     const [userRows]: any = await pool.query(
       'SELECT user_status FROM user WHERE user_id = ?',
@@ -495,6 +678,8 @@ app.post('/api/admin/setup-tables', async (_req, res) => {
       `);
     }
 
+    await ensureDefaultMenuItems();
+
     res.json({ message: 'ตารางถูกสร้างและตั้งค่าเรียบร้อยแล้ว' });
   } catch (error) {
     console.error(error);
@@ -581,6 +766,7 @@ app.delete('/api/admin/groups/:id', async (req, res) => {
 // ดึงรายการเมนูทั้งหมด
 app.get('/api/admin/menus', async (_req, res) => {
   try {
+    await ensureDefaultMenuItems();
     const [rows]: any = await pool.query(
       'SELECT * FROM menu_items ORDER BY menu_type, sort_order'
     );

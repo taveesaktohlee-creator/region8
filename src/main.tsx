@@ -9,6 +9,7 @@ import UserSettings from './user/UserSettings'
 import TrainingHistory from './training/TrainingHistory'
 import TrainingCourses from './training/TrainingCourses'
 import ProgramMonitoring from './monitor/ProgramMonitoring'
+import MonitorData from './user/monitor_data'
 import SystemUsageReport from './user/SystemUsageReport'
 import OfficeSecurityReport from './security_report/OfficeSecurityReport'
 import PermissionGuard from './lib/PermissionGuard'
@@ -43,6 +44,7 @@ const PROTECTED_ROUTES: Record<string, { component: React.ReactNode; menuKey: st
   '/profile':              { component: <Profile />,              menuKey: 'profile' },
   '/change-password':      { component: <ChangePassword />,      menuKey: 'change_password' },
   '/user-settings':        { component: <UserSettings />,         menuKey: 'user_settings' },
+  '/monitor-data':         { component: <MonitorData />,          menuKey: 'monitor_data' },
   '/training-history':     { component: <TrainingHistory />,      menuKey: 'training' },
   '/training-courses':     { component: <TrainingCourses />,      menuKey: 'report_course' },
   '/program-monitoring':   { component: <ProgramMonitoring />,    menuKey: 'report_monitor' },

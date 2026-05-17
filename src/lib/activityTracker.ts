@@ -90,6 +90,7 @@ const MENU_MAP: Record<string, { menu_key: string; menu_name: string }> = {
   '/training-history':       { menu_key: 'training', menu_name: 'ประวัติการอบรม' },
   '/change-password':        { menu_key: 'change_password', menu_name: 'เปลี่ยนรหัสผ่าน' },
   '/user-settings':          { menu_key: 'user_settings', menu_name: 'ตั้งค่าผู้ใช้งาน' },
+  '/monitor-data':           { menu_key: 'monitor_data', menu_name: 'บันทึกกำกับติดตามกลุ่มเทคฯ' },
   '/program-monitoring':     { menu_key: 'report_monitor', menu_name: 'รายงานการกำกับติดตาม' },
   '/training-courses':       { menu_key: 'report_course', menu_name: 'หลักสูตรการอบรม' },
   '/system-usage-report':    { menu_key: 'report_usage', menu_name: 'รายงานการใช้งานระบบ' },

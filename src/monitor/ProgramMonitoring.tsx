@@ -22,8 +22,8 @@ import type { Content, TDocumentDefinitions } from 'pdfmake/interfaces';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
-import sarabunFontUrl from '../assets/fonts/THSarabunNew.ttf?url';
-import sarabunBoldFontUrl from '../assets/fonts/THSarabunNew-Bold.ttf?url';
+import sarabunFontUrl from '../assets/fonts/Sarabun-Regular.ttf?url';
+import sarabunBoldFontUrl from '../assets/fonts/Sarabun-Bold.ttf?url';
 
 // --- Types & Interfaces ---
 interface DataRow extends Record<string, any> { }
@@ -88,20 +88,28 @@ const ensurePdfThaiFont = async () => {
             fileToBase64(sarabunBoldFontUrl),
         ]).then(([regular, bold]) => {
             const pdf = pdfMake as any;
-            pdf.vfs = {
-                ...(pdf.vfs || {}),
-                'THSarabunNew.ttf': regular,
-                'THSarabunNew-Bold.ttf': bold,
+            const vfs = {
+                'Sarabun-Regular.ttf': regular,
+                'Sarabun-Bold.ttf': bold,
             };
-            pdf.fonts = {
-                ...(pdf.fonts || {}),
-                THSarabunNew: {
-                    normal: 'THSarabunNew.ttf',
-                    bold: 'THSarabunNew-Bold.ttf',
-                    italics: 'THSarabunNew.ttf',
-                    bolditalics: 'THSarabunNew-Bold.ttf',
+            const fonts = {
+                Sarabun: {
+                    normal: 'Sarabun-Regular.ttf',
+                    bold: 'Sarabun-Bold.ttf',
+                    italics: 'Sarabun-Regular.ttf',
+                    bolditalics: 'Sarabun-Bold.ttf',
                 },
             };
+            if (typeof pdf.addVirtualFileSystem === 'function') {
+                pdf.addVirtualFileSystem(vfs);
+            } else {
+                pdf.vfs = { ...(pdf.vfs || {}), ...vfs };
+            }
+            if (typeof pdf.addFonts === 'function') {
+                pdf.addFonts(fonts);
+            } else {
+                pdf.fonts = { ...(pdf.fonts || {}), ...fonts };
+            }
         }).catch((error) => {
             pdfFontReady = null;
             throw error;
@@ -111,6 +119,8 @@ const ensurePdfThaiFont = async () => {
 };
 
 const isFilled = (value: any) => value !== "" && value !== undefined && value !== null && String(value).trim() !== "" && String(value).trim() !== "-";
+
+const sanitizeFileName = (value: string) => value.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 80);
 
 const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[], index: number): TDocumentDefinitions => {
     const keys = Object.keys(row);
@@ -232,11 +242,11 @@ const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[],
     return {
         pageSize: 'A4',
         pageMargins: [40, 36, 40, 40],
-        defaultStyle: { font: 'THSarabunNew', fontSize: 15, lineHeight: 1.08, color: '#111827' },
+        defaultStyle: { font: 'Sarabun', fontSize: 13, lineHeight: 1.18, color: '#111827' },
         styles: {
-            title: { fontSize: 20, bold: true, alignment: 'center', margin: [0, 0, 0, 2] },
-            subtitle: { fontSize: 17, alignment: 'center', margin: [0, 0, 0, 8] },
-            sectionHeader: { fontSize: 16, bold: true, margin: [0, 8, 0, 3] },
+            title: { fontSize: 17, bold: true, alignment: 'center', margin: [0, 0, 0, 2] },
+            subtitle: { fontSize: 14, alignment: 'center', margin: [0, 0, 0, 8] },
+            sectionHeader: { fontSize: 14, bold: true, margin: [0, 8, 0, 3] },
             tableHeader: { bold: true, fillColor: '#eaf2ff', color: '#1e3a8a' },
         },
         content,
@@ -244,8 +254,8 @@ const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[],
             text: `หน้า ${currentPage} / ${pageCount}`,
             alignment: 'right',
             margin: [0, 0, 40, 0],
-            font: 'THSarabunNew',
-            fontSize: 12,
+            font: 'Sarabun',
+            fontSize: 10,
             color: '#64748b',
         }),
     };
@@ -258,7 +268,7 @@ const MOCK_DATA: DataRow[] = [
         "สำนักงานตรวจบัญชีสหกรณ์": "สำนักงานตรวจบัญชีสหกรณ์สุราษฎร์ธานี",
         "วันที่เข้ากำกับติดตาม": "11/3/2569",
         "คอลัมน์ 4": "สหกรณ์เครดิตยูเนี่ยนไชยราษฎร์ จำกัด",
-        "1.1 กำกับติดตามครั้งที่": "ครั้งที่ 1",
+        "1.1 กำกับติดตามครั้งที่": "ติดตามครั้งที่ 1",
         "สหกรณ์เป้าหมาย ตามโครงการ": "(1113) ผลักดันให้สหกรณ์ใช้งาน Smart4M เพื่อการสอบบัญชีระยะไกล",
         "2. จำนวนผู้ใช้งานโปรแกรมระบบบัญชี (คน)": "2",
         "จำนวนคอมพิวเตอร์ที่ใช้งานโปรแกรม (เครื่อง) [คอมพิวเตอร์ PC]": "2 เครื่อง",
@@ -467,7 +477,7 @@ const PdfReportCard: React.FC<PdfReportCardProps> = ({ row, evaluationKeys, inde
                 <button
                     type="button"
                     onClick={() => onPrintPdf(row, index)}
-                    className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-blue-500/20 transition hover:bg-blue-700"
+                    className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-blue-500/20 transition hover:bg-blue-700"
                 >
                     <Printer className="h-4 w-4" />
                     พิมพ์รายงาน PDF
@@ -737,12 +747,37 @@ export default function ProgramMonitoring() {
     };
 
     const handlePrintCoopPdf = async (row: ProcessedData, index: number) => {
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+            printWindow.document.write(`
+                <!doctype html>
+                <html>
+                    <head><title>กำลังเตรียมรายงาน PDF</title></head>
+                    <body style="font-family: system-ui, sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; color:#1e293b;">
+                        <div style="text-align:center;">
+                            <div style="font-size:18px; font-weight:700; margin-bottom:8px;">กำลังเตรียมรายงาน PDF...</div>
+                            <div style="font-size:14px; color:#64748b;">โปรดรอสักครู่ ระบบจะเปิดหน้าต่างพิมพ์ให้อัตโนมัติ</div>
+                        </div>
+                    </body>
+                </html>
+            `);
+            printWindow.document.close();
+        }
+
         try {
             await ensurePdfThaiFont();
             const docDefinition = buildProgramMonitoringPdf(row, evaluationKeys, index);
-            pdfMake.createPdf(docDefinition).print();
+            const pdfDoc = pdfMake.createPdf(docDefinition);
+            if (printWindow && !printWindow.closed) {
+                await pdfDoc.print(printWindow);
+            } else {
+                await pdfDoc.download(`รายงานกำกับติดตาม_${sanitizeFileName(row._coop || `รายการ_${index + 1}`)}.pdf`);
+            }
         } catch (error) {
             console.error(error);
+            if (printWindow && !printWindow.closed) {
+                printWindow.close();
+            }
             alert('ไม่สามารถออกรายงาน PDF ได้ กรุณาลองใหม่อีกครั้ง');
         }
     };
@@ -837,11 +872,10 @@ export default function ProgramMonitoring() {
                                         key={round}
                                         type="button"
                                         onClick={() => setSelectedVisitRound(round)}
-                                        className={`rounded-xl px-4 py-3 text-sm font-bold transition-all ${
-                                            selectedVisitRound === round
-                                                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
-                                                : 'bg-white text-slate-600 border border-blue-100 hover:border-blue-300 hover:text-blue-700'
-                                        }`}
+                                        className={`rounded-xl px-4 py-3 text-sm font-bold transition-all ${selectedVisitRound === round
+                                            ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
+                                            : 'bg-white text-slate-600 border border-blue-100 hover:border-blue-300 hover:text-blue-700'
+                                            }`}
                                     >
                                         {round}
                                     </button>
