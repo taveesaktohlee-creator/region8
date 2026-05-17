@@ -1,4 +1,5 @@
-const SHEET_NAME = 'Form_Responses';
+const SHEET_NAME = 'การตอบแบบฟอร์ม 1';
+const DRIVE_AVATAR_FOLDER_ID = '1aaQIZ3nUcr0iDLOq8xENFpM_halgcndE';
 
 function getMonitorSheet_() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -39,6 +40,10 @@ function doPost(e) {
     const payload = JSON.parse(rawBody);
     const rowData = payload.row && typeof payload.row === 'object' ? payload.row : payload;
 
+    if (rowData.action === 'uploadAvatar') {
+      return uploadAvatarToDrive_(rowData);
+    }
+
     if (!rowData || Object.keys(rowData).length === 0) {
       return outputJson_({
         ok: false,
@@ -73,4 +78,43 @@ function doPost(e) {
       error: error && error.message ? error.message : String(error),
     });
   }
+}
+
+function uploadAvatarToDrive_(payload) {
+  const folderId = payload.folderId || DRIVE_AVATAR_FOLDER_ID;
+  const folder = DriveApp.getFolderById(folderId);
+  const mimeType = payload.mimeType || 'image/webp';
+  const fileName = sanitizeDriveFileName_(payload.fileName || 'avatar.webp');
+  const base64 = payload.base64 || '';
+
+  if (!base64) {
+    return outputJson_({
+      ok: false,
+      error: 'ไม่พบข้อมูลรูปภาพสำหรับอัปโหลด',
+    });
+  }
+
+  const bytes = Utilities.base64Decode(base64);
+  const blob = Utilities.newBlob(bytes, mimeType, fileName);
+  const file = folder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  const fileId = file.getId();
+
+  return outputJson_({
+    ok: true,
+    message: 'อัปโหลดรูปประจำตัวไปยัง Google Drive เรียบร้อยแล้ว',
+    fileId: fileId,
+    fileName: file.getName(),
+    webViewLink: file.getUrl(),
+    url: 'https://drive.google.com/uc?export=view&id=' + fileId,
+    thumbnailUrl: 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w640',
+  });
+}
+
+function sanitizeDriveFileName_(value) {
+  return String(value || 'avatar.webp')
+    .replace(/[\\/:*?"<>|#%{}~&]/g, '-')
+    .replace(/\s+/g, '-')
+    .slice(0, 140);
 }

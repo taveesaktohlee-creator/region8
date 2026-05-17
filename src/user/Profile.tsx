@@ -7,7 +7,10 @@ import Footer from '../Footer';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
-const MAX_AVATAR_BYTES = 15 * 1024 * 1024;
+const MAX_AVATAR_BYTES = 30 * 1024 * 1024;
+const MAX_AVATAR_UPLOAD_BYTES = 5 * 1024 * 1024;
+const AVATAR_MAX_DIMENSION = 640;
+const AVATAR_WEBP_QUALITY = 0.86;
 const SUPPORTED_AVATAR_TYPES = [
   'image/jpeg',
   'image/png',
@@ -42,6 +45,88 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
+function readBlobAsDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function loadImageFromObjectUrl(url: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Cannot decode image'));
+    image.src = url;
+  });
+}
+
+function dataUrlToBase64(dataUrl: string) {
+  return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+}
+
+async function shrinkAvatarImage(file: File) {
+  const originalDataUrl = await readFileAsDataUrl(file);
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await loadImageFromObjectUrl(objectUrl);
+    const scale = Math.min(1, AVATAR_MAX_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { alpha: true });
+    if (!context) throw new Error('Cannot create canvas');
+
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(image, 0, 0, width, height);
+
+    const webpBlob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, 'image/webp', AVATAR_WEBP_QUALITY);
+    });
+
+    if (!webpBlob) throw new Error('Cannot encode image');
+
+    const shouldUseWebp = webpBlob.size < file.size || file.type !== 'image/webp';
+    const outputBlob = shouldUseWebp ? webpBlob : file;
+    const outputDataUrl = shouldUseWebp ? await readBlobAsDataUrl(webpBlob) : originalDataUrl;
+    const baseName = file.name.replace(/\.[^.]+$/, '') || 'avatar';
+
+    return {
+      dataUrl: outputDataUrl,
+      base64: dataUrlToBase64(outputDataUrl),
+      fileName: shouldUseWebp ? `${baseName}.webp` : file.name,
+      mimeType: shouldUseWebp ? 'image/webp' : file.type || 'image/webp',
+      originalSize: file.size,
+      outputSize: outputBlob.size,
+      resized: shouldUseWebp || width !== image.naturalWidth || height !== image.naturalHeight,
+      width,
+      height,
+    };
+  } catch (error) {
+    console.warn('Avatar compression fallback:', error);
+    return {
+      dataUrl: originalDataUrl,
+      base64: dataUrlToBase64(originalDataUrl),
+      fileName: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      originalSize: file.size,
+      outputSize: file.size,
+      resized: false,
+      width: 0,
+      height: 0,
+    };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 function formatFileSize(bytes: number) {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`;
@@ -59,6 +144,8 @@ export default function Profile() {
   const [avatarPreview, setAvatarPreview] = useState('');
   const [avatarFileName, setAvatarFileName] = useState('');
   const [avatarError, setAvatarError] = useState('');
+  const [pendingAvatarUpload, setPendingAvatarUpload] = useState<Awaited<ReturnType<typeof shrinkAvatarImage>> | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const fetchProfile = useCallback(async (id: number) => {
     try {
@@ -119,6 +206,7 @@ export default function Profile() {
     setAvatarPreview(profileData?.avatar_data_url || '');
     setAvatarFileName('');
     setAvatarError('');
+    setPendingAvatarUpload(null);
     setIsModalOpen(true);
   };
 
@@ -127,6 +215,7 @@ export default function Profile() {
     setAvatarPreview(profileData?.avatar_data_url || '');
     setAvatarFileName('');
     setAvatarError('');
+    setPendingAvatarUpload(null);
     setIsModalOpen(false);
   };
 
@@ -150,12 +239,20 @@ export default function Profile() {
     }
 
     try {
-      const dataUrl = await readFileAsDataUrl(file);
-      setEditForm((current: any) => ({ ...current, avatar_data_url: dataUrl }));
-      setAvatarPreview(dataUrl);
-      setAvatarFileName(`${file.name} (${formatFileSize(file.size)})`);
+      toast.info('กำลังย่อรูปภาพก่อนอัปโหลดไป Google Drive...');
+      const optimizedAvatar = await shrinkAvatarImage(file);
+      if (optimizedAvatar.outputSize > MAX_AVATAR_UPLOAD_BYTES) {
+        const message = `รูปหลังย่อยังมีขนาด ${formatFileSize(optimizedAvatar.outputSize)} กรุณาเลือกไฟล์ที่เบราว์เซอร์สามารถย่อได้ เช่น JPG, PNG หรือ WebP`;
+        setAvatarError(message);
+        toast.warning(message);
+        return;
+      }
+      setEditForm((current: any) => ({ ...current, avatar_data_url: optimizedAvatar.dataUrl }));
+      setAvatarPreview(optimizedAvatar.dataUrl);
+      setPendingAvatarUpload(optimizedAvatar);
+      setAvatarFileName(`${optimizedAvatar.fileName} (${formatFileSize(file.size)} → ${formatFileSize(optimizedAvatar.outputSize)})`);
       setAvatarError('');
-      toast.success('เลือกรูปประจำตัวแล้ว');
+      toast.success('ย่อรูปเรียบร้อยแล้ว กดบันทึกเพื่ออัปโหลดไป Google Drive');
     } catch (error) {
       console.error(error);
       const message = 'ไม่สามารถอ่านไฟล์รูปภาพนี้ได้';
@@ -169,35 +266,66 @@ export default function Profile() {
     setAvatarPreview('');
     setAvatarFileName('');
     setAvatarError('');
+    setPendingAvatarUpload(null);
     toast.info('ลบรูปประจำตัวแล้ว กดบันทึกเพื่อยืนยัน');
   };
 
   const handleSave = async () => {
+    setIsSaving(true);
     try {
+      let avatarUrl = editForm.avatar_data_url || null;
+
+      if (pendingAvatarUpload) {
+        const uploadRes = await fetch(`${API_BASE}/api/users/profile/avatar-drive`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: userData.user_id,
+            display_name: editForm.Name_Surname || profileData?.Name_Surname || userData?.Name_Surname,
+            file_name: pendingAvatarUpload.fileName,
+            mime_type: pendingAvatarUpload.mimeType,
+            base64: pendingAvatarUpload.base64,
+          }),
+        });
+        const uploadResult = await uploadRes.json();
+        if (!uploadRes.ok || uploadResult?.ok === false) {
+          throw new Error(uploadResult.error || 'ไม่สามารถอัปโหลดรูปไป Google Drive ได้');
+        }
+        avatarUrl = uploadResult.thumbnailUrl || uploadResult.url || uploadResult.webViewLink;
+      }
+
+      const payload = {
+        ...editForm,
+        avatar_data_url: avatarUrl,
+      };
+
       const res = await fetch(`${API_BASE}/api/users/profile/${userData.user_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editForm),
+        body: JSON.stringify(payload),
       });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || 'Update failed');
       toast.success(result.message);
-      setProfileData(editForm);
+      setProfileData(payload);
       const updatedUser = {
         ...userData,
-        Name_Surname: editForm.Name_Surname,
-        position: editForm.position,
-        Division_Province: editForm.Division_Province,
-        avatar_data_url: editForm.avatar_data_url || null,
+        Name_Surname: payload.Name_Surname,
+        position: payload.position,
+        Division_Province: payload.Division_Province,
+        avatar_data_url: payload.avatar_data_url || null,
       };
       localStorage.setItem('user', JSON.stringify(updatedUser));
       setUserData(updatedUser);
-      setAvatarPreview(editForm.avatar_data_url || '');
+      setAvatarPreview(payload.avatar_data_url || '');
       setAvatarFileName('');
+      setPendingAvatarUpload(null);
       setIsModalOpen(false);
     } catch (err) {
       console.error(err);
       toast.error(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการบันทึก');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -330,7 +458,7 @@ export default function Profile() {
                       รูปประจำตัว
                     </div>
                     <p className="mt-1 text-xs font-medium text-slate-500">
-                      รองรับ JPG, PNG, WebP, GIF, AVIF, BMP, SVG, TIFF, HEIC/HEIF ขนาดไม่เกิน {formatFileSize(MAX_AVATAR_BYTES)}
+                      รองรับ JPG, PNG, WebP, GIF, AVIF, BMP, SVG, TIFF, HEIC/HEIF ระบบจะย่อและแปลงเป็น WebP ก่อนเก็บใน Google Drive ขนาดไฟล์ต้นฉบับไม่เกิน {formatFileSize(MAX_AVATAR_BYTES)}
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow transition hover:bg-blue-700">
@@ -385,7 +513,13 @@ export default function Profile() {
             </div>
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-100">
               <button onClick={closeEditModal} className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition">ยกเลิก</button>
-              <button onClick={handleSave} className="px-5 py-2.5 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 shadow transition">บันทึกการเปลี่ยนแปลง</button>
+              <button
+                onClick={handleSave}
+                disabled={isSaving}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 text-white font-semibold shadow transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+              >
+                {isSaving ? 'กำลังบันทึก...' : 'บันทึกการเปลี่ยนแปลง'}
+              </button>
             </div>
           </div>
         </div>
