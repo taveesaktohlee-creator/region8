@@ -14,11 +14,16 @@ import {
     AlertCircle,
     PlayCircle,
     ArrowLeft,
-    ChevronRight
+    ChevronRight,
+    Printer
 } from 'lucide-react';
+import pdfMake from 'pdfmake/build/pdfmake';
+import type { Content, TDocumentDefinitions } from 'pdfmake/interfaces';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
+import sarabunFontUrl from '../assets/fonts/THSarabunNew.ttf?url';
+import sarabunBoldFontUrl from '../assets/fonts/THSarabunNew-Bold.ttf?url';
 
 // --- Types & Interfaces ---
 interface DataRow extends Record<string, any> { }
@@ -28,10 +33,14 @@ interface ProcessedData extends DataRow {
     _coop: string;
     _project: string;
     _month: string;
+    _visitDate: string;
+    _visitRound: string;
     _provKey: string;
     _coopKey: string;
     _projectKey: string;
     _dateKey: string;
+    _visitDateKey: string;
+    _visitRoundKey: string;
 }
 
 interface TopicGroup {
@@ -42,6 +51,205 @@ interface TopicGroup {
 
 // URL ของ API ที่ใช้งานจริง
 const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbwiK32Dwn80oGfbG4yElZQmKW0IwblvPO85yCW_1ex7LfcCzwd0FtgWMfG45aSqUd3H/exec";
+
+const normalizeVisitRound = (value: any) => {
+    const raw = String(value || '').trim();
+    if (!raw || raw === '-') return "ไม่ระบุ";
+    const numberMatch = raw.match(/[12]/);
+    if (numberMatch) return `ครั้งที่ ${numberMatch[0]}`;
+    return raw.replace(/\s+/g, ' ');
+};
+
+const formatVisitDate = (value: any) => {
+    const raw = String(value || '').trim();
+    if (!raw || raw === '-') return "-";
+    return raw.split(/[,\sT]+/)[0] || raw;
+};
+
+let pdfFontReady: Promise<void> | null = null;
+
+const fileToBase64 = async (url: string) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('ไม่สามารถโหลดฟอนต์สำหรับ PDF ได้');
+    const buffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+};
+
+const ensurePdfThaiFont = async () => {
+    if (!pdfFontReady) {
+        pdfFontReady = Promise.all([
+            fileToBase64(sarabunFontUrl),
+            fileToBase64(sarabunBoldFontUrl),
+        ]).then(([regular, bold]) => {
+            const pdf = pdfMake as any;
+            pdf.vfs = {
+                ...(pdf.vfs || {}),
+                'THSarabunNew.ttf': regular,
+                'THSarabunNew-Bold.ttf': bold,
+            };
+            pdf.fonts = {
+                ...(pdf.fonts || {}),
+                THSarabunNew: {
+                    normal: 'THSarabunNew.ttf',
+                    bold: 'THSarabunNew-Bold.ttf',
+                    italics: 'THSarabunNew.ttf',
+                    bolditalics: 'THSarabunNew-Bold.ttf',
+                },
+            };
+        }).catch((error) => {
+            pdfFontReady = null;
+            throw error;
+        });
+    }
+    return pdfFontReady;
+};
+
+const isFilled = (value: any) => value !== "" && value !== undefined && value !== null && String(value).trim() !== "" && String(value).trim() !== "-";
+
+const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[], index: number): TDocumentDefinitions => {
+    const keys = Object.keys(row);
+    const findKey = (matcher: (key: string) => boolean) => keys.find(matcher);
+    const getVal = (key: string | undefined) => key ? row[key] : "";
+    const textVal = (key: string | undefined) => isFilled(getVal(key)) ? String(getVal(key)) : "-";
+    const line = (label: string, value: any): Content => ({
+        columns: [
+            { text: label, width: 165, bold: true },
+            { text: isFilled(value) ? String(value) : "-", width: '*' },
+        ],
+        columnGap: 8,
+        margin: [0, 2, 0, 2],
+    });
+
+    const kCoopColumn = findKey(k => k.includes('คอลัมน์ 4') || k.toLowerCase().includes('column 4'));
+    const kCoop = findKey(k => k.includes('1. ชื่อสหกรณ์'));
+    const kOffice = findKey(k => k.includes('สำนักงานตรวจบัญชี'));
+    const kVisit = findKey(k => k.includes('กำกับติดตามครั้งที่'));
+    const kDate = findKey(k => k.includes('วันที่เข้า'));
+    const kProject = findKey(k => k.includes('สหกรณ์เป้าหมาย'));
+    const kUser = evaluationKeys.find(k => k.includes('จำนวนผู้ใช้งาน'));
+    const kPc = evaluationKeys.find(k => k.includes('คอมพิวเตอร์ PC'));
+    const kNb = evaluationKeys.find(k => k.includes('Notbook') || k.includes('Notebook'));
+    const kNetwork = evaluationKeys.find(k => k.includes('Network') || k.includes('เครือข่าย'));
+    const kRecord = evaluationKeys.find(k => k.startsWith('4.') && k.includes('การบันทึกข้อมูล'));
+
+    const systems = [
+        { id: '1', name: 'ระบบบัญชีแยกประเภท' },
+        { id: '2', name: 'ระบบสมาชิกและหุ้น' },
+        { id: '3', name: 'ระบบเงินให้กู้' },
+        { id: '4', name: 'ระบบเงินรับฝาก' },
+        { id: '5', name: 'ระบบสินค้า' },
+    ];
+    const perms = [
+        { id: '5.1', name: 'ระบบสมาชิกและหุ้น', search: 'สมาชิกและหุ้น' },
+        { id: '5.2', name: 'ระบบเงินให้กู้', search: 'เงินให้กู้' },
+        { id: '5.3', name: 'ระบบเงินรับฝาก', search: 'เงินรับฝาก' },
+        { id: '5.4', name: 'ระบบสินค้า', search: 'สินค้า' },
+        { id: '5.5', name: 'ระบบบัญชีแยกประเภท', search: 'บัญชีแยกประเภท' },
+        { id: '5.6', name: 'ระบบออมทรัพย์', search: 'ออมทรัพย์' },
+    ];
+
+    const usedKeys = new Set<string>();
+    [kCoopColumn, kOffice, kVisit, kDate, kCoop, kProject, kUser, kPc, kNb, kNetwork, kRecord].forEach(key => key && usedKeys.add(key));
+
+    const content: Content[] = [
+        { text: `#${index + 1}`, color: '#64748b', fontSize: 12, margin: [0, 0, 0, 6] },
+        { text: 'รายงานผลการกำกับติดตามการใช้งานโปรแกรมและการนำส่งข้อมูล', style: 'title' },
+        { text: `${textVal(kOffice) || row._province} ${textVal(kVisit) !== '-' ? textVal(kVisit) : row._visitRound}`, style: 'subtitle' },
+        { text: `วันที่เข้ากำกับติดตาม: ${textVal(kDate) !== '-' ? textVal(kDate) : row._visitDate}`, alignment: 'right', bold: true, margin: [0, 8, 0, 12] },
+        { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 0.5, lineColor: '#cbd5e1' }], margin: [0, 0, 0, 14] },
+        { text: '1. ข้อมูลสหกรณ์', style: 'sectionHeader' },
+        line('ชื่อสหกรณ์', getVal(kCoopColumn) || getVal(kCoop) || row._coop),
+        line('สหกรณ์เป้าหมายตามโครงการ', getVal(kProject) || row._project),
+        { text: '2. ผู้ใช้งานโปรแกรมระบบบัญชี', style: 'sectionHeader' },
+        line('2.1 จำนวนผู้ใช้งานโปรแกรม', isFilled(getVal(kUser)) ? `${getVal(kUser)} คน` : '-'),
+        line('2.2 คอมพิวเตอร์ PC', getVal(kPc)),
+        line('คอมพิวเตอร์ Notebook', getVal(kNb)),
+        line('2.3 การใช้งานผ่าน Network', getVal(kNetwork)),
+    ];
+
+    const systemRows = systems.flatMap((sys) => {
+        const statusKey = evaluationKeys.find(k => k.includes('สถานะใช้งาน') && k.includes(sys.name));
+        const dateKey = evaluationKeys.find(k => k.includes('การบันทึกงานถึงวันที่') && k.includes(sys.name));
+        const versionKey = evaluationKeys.find(k => k.includes('เวอร์ชั่น') && k.includes(sys.name));
+        [statusKey, dateKey, versionKey].forEach(key => key && usedKeys.add(key));
+        if (!isFilled(getVal(statusKey)) && !isFilled(getVal(dateKey)) && !isFilled(getVal(versionKey))) return [];
+        return [[
+            { text: `${sys.id}. ${sys.name}`, bold: true },
+            textVal(statusKey),
+            textVal(dateKey),
+            textVal(versionKey),
+        ]];
+    });
+
+    if (systemRows.length > 0) {
+        content.push(
+            { text: '3. โปรแกรมระบบบัญชีที่ใช้', style: 'sectionHeader' },
+            {
+                table: {
+                    widths: [130, '*', '*', '*'],
+                    body: [
+                        [
+                            { text: 'ระบบ', style: 'tableHeader' },
+                            { text: 'สถานะ', style: 'tableHeader' },
+                            { text: 'บันทึกงานถึงวันที่', style: 'tableHeader' },
+                            { text: 'เวอร์ชั่น', style: 'tableHeader' },
+                        ],
+                        ...systemRows,
+                    ],
+                },
+                layout: 'lightHorizontalLines',
+                margin: [0, 2, 0, 8],
+            }
+        );
+    }
+
+    if (isFilled(getVal(kRecord))) {
+        content.push({ text: '4. การบันทึกข้อมูลในโปรแกรมระบบบัญชี', style: 'sectionHeader' }, line('', getVal(kRecord)));
+    }
+
+    const permissionLines = perms.flatMap((perm) => {
+        const permKey = evaluationKeys.find(k => k.includes('กำหนดสิทธิ์') && k.includes(perm.search));
+        if (permKey) usedKeys.add(permKey);
+        if (!isFilled(getVal(permKey))) return [];
+        return [line(`${perm.id} ${perm.name}`, getVal(permKey))];
+    });
+    if (permissionLines.length > 0) {
+        content.push({ text: '5. การกำหนดสิทธิ์การใช้งานโปรแกรมระบบบัญชี', style: 'sectionHeader' }, ...permissionLines);
+    }
+
+    evaluationKeys
+        .filter(k => !usedKeys.has(k) && isFilled(getVal(k)))
+        .forEach((key) => {
+            content.push({ text: key, style: 'sectionHeader' }, { text: String(getVal(key)), color: '#1d4ed8', margin: [18, 0, 0, 6] });
+        });
+
+    return {
+        pageSize: 'A4',
+        pageMargins: [40, 36, 40, 40],
+        defaultStyle: { font: 'THSarabunNew', fontSize: 15, lineHeight: 1.08, color: '#111827' },
+        styles: {
+            title: { fontSize: 20, bold: true, alignment: 'center', margin: [0, 0, 0, 2] },
+            subtitle: { fontSize: 17, alignment: 'center', margin: [0, 0, 0, 8] },
+            sectionHeader: { fontSize: 16, bold: true, margin: [0, 8, 0, 3] },
+            tableHeader: { bold: true, fillColor: '#eaf2ff', color: '#1e3a8a' },
+        },
+        content,
+        footer: (currentPage, pageCount) => ({
+            text: `หน้า ${currentPage} / ${pageCount}`,
+            alignment: 'right',
+            margin: [0, 0, 40, 0],
+            font: 'THSarabunNew',
+            fontSize: 12,
+            color: '#64748b',
+        }),
+    };
+};
 
 // ข้อมูลจำลองอิงตามโครงสร้างจริง
 const MOCK_DATA: DataRow[] = [
@@ -97,9 +305,10 @@ interface PdfReportCardProps {
     row: ProcessedData;
     evaluationKeys: string[];
     index: number;
+    onPrintPdf: (row: ProcessedData, index: number) => void;
 }
 
-const PdfReportCard: React.FC<PdfReportCardProps> = ({ row, evaluationKeys, index }) => {
+const PdfReportCard: React.FC<PdfReportCardProps> = ({ row, evaluationKeys, index, onPrintPdf }) => {
     const hasData = (key: string | undefined): boolean => {
         if (!key) return false;
         const val = row[key];
@@ -254,6 +463,16 @@ const PdfReportCard: React.FC<PdfReportCardProps> = ({ row, evaluationKeys, inde
                     })}
                 </div>
             </div>
+            <div className="border-t border-slate-100 bg-slate-50 px-6 py-4 flex justify-end">
+                <button
+                    type="button"
+                    onClick={() => onPrintPdf(row, index)}
+                    className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-blue-500/20 transition hover:bg-blue-700"
+                >
+                    <Printer className="h-4 w-4" />
+                    พิมพ์รายงาน PDF
+                </button>
+            </div>
         </div>
     );
 };
@@ -277,6 +496,8 @@ export default function ProgramMonitoring() {
     const [selectedProvince, setSelectedProvince] = useState<string>("ทั้งหมด");
     const [selectedProject, setSelectedProject] = useState<string>("ทั้งหมด");
     const [selectedMonth, setSelectedMonth] = useState<string>("ทั้งหมด");
+    const [selectedVisitRound, setSelectedVisitRound] = useState<string>("ทั้งหมด");
+    const [coopSearch, setCoopSearch] = useState<string>("");
 
     const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
 
@@ -338,6 +559,7 @@ export default function ProgramMonitoring() {
         const projectKey = findKey(['สหกรณ์เป้าหมาย', 'โครงการ']) || keys[5];
         const dateKey = findKey(['ประทับเวลา', 'Timestamp', 'วันที่เข้า']) || keys[0];
         const visitDateKey = findKey(['วันที่เข้ากำกับติดตาม']);
+        const visitRoundKey = findKey(['1.1 กำกับติดตามครั้งที่', 'กำกับติดตามครั้งที่', 'ครั้งที่']);
 
         return rawData.map(item => {
             const prov = item[provKey] || "ไม่ระบุ";
@@ -347,7 +569,7 @@ export default function ProgramMonitoring() {
             if (!cleanProv) cleanProv = "ไม่ระบุ";
 
             let monthStr = "ไม่ระบุ";
-            const visitDateVal = visitDateKey ? item[visitDateKey] : null;
+            const visitDateVal = visitDateKey ? item[visitDateKey] : item[dateKey];
             if (visitDateVal) {
                 const datePart = String(visitDateVal).split(/[ T]/)[0];
                 const parts = datePart.split(/[/-]/);
@@ -363,10 +585,14 @@ export default function ProgramMonitoring() {
                 _coop: String(coop).trim() || "ไม่ระบุ",
                 _project: String(proj).trim() || "ไม่ระบุ",
                 _month: monthStr,
+                _visitDate: formatVisitDate(visitDateVal),
+                _visitRound: normalizeVisitRound(visitRoundKey ? item[visitRoundKey] : ''),
                 _provKey: provKey,
                 _coopKey: coopKey,
                 _projectKey: projectKey,
-                _dateKey: dateKey
+                _dateKey: dateKey,
+                _visitDateKey: visitDateKey,
+                _visitRoundKey: visitRoundKey
             };
         });
     };
@@ -424,14 +650,21 @@ export default function ProgramMonitoring() {
     const uniqueProvinces = useMemo(() => ["ทั้งหมด", ...new Set(data.map(d => d._province).filter(Boolean))], [data]);
     const uniqueProjects = useMemo(() => ["ทั้งหมด", ...new Set(data.map(d => d._project).filter(Boolean))], [data]);
     const uniqueMonths = useMemo(() => ["ทั้งหมด", ...new Set(data.map(d => d._month).filter(Boolean))], [data]);
+    const visitRoundOptions = useMemo(() => {
+        const rounds = new Set(data.map(d => d._visitRound).filter(Boolean));
+        return ["ทั้งหมด", "ครั้งที่ 1", "ครั้งที่ 2", ...Array.from(rounds).filter(round => !["ทั้งหมด", "ครั้งที่ 1", "ครั้งที่ 2"].includes(round))];
+    }, [data]);
 
     const filteredData = useMemo(() => {
+        const normalizedSearch = coopSearch.trim().toLowerCase();
         return data.filter(d => {
             return (selectedProvince === "ทั้งหมด" || d._province === selectedProvince) &&
                 (selectedProject === "ทั้งหมด" || d._project === selectedProject) &&
-                (selectedMonth === "ทั้งหมด" || d._month === selectedMonth);
+                (selectedMonth === "ทั้งหมด" || d._month === selectedMonth) &&
+                (selectedVisitRound === "ทั้งหมด" || d._visitRound === selectedVisitRound) &&
+                (!normalizedSearch || d._coop.toLowerCase().includes(normalizedSearch));
         });
-    }, [data, selectedProvince, selectedProject, selectedMonth]);
+    }, [data, selectedProvince, selectedProject, selectedMonth, selectedVisitRound, coopSearch]);
 
     const evaluationKeys = useMemo(() => {
         if (filteredData.length === 0) return [];
@@ -442,6 +675,8 @@ export default function ProgramMonitoring() {
             k !== row._provKey &&
             k !== row._coopKey &&
             k !== row._projectKey &&
+            k !== row._visitDateKey &&
+            k !== row._visitRoundKey &&
             k !== 'ประทับเวลา' &&
             !k.includes('กำกับติดตามครั้งที่') &&
             !k.includes('ชื่อ-นามสกุล')
@@ -499,6 +734,17 @@ export default function ProgramMonitoring() {
         const isEmpty = (val: any) => val === "" || val === undefined || val === null || String(val).trim() === "" || String(val).trim() === "-";
         const hasData = !isEmpty(status) || !isEmpty(version) || !isEmpty(date);
         return { hasData, status, version, date };
+    };
+
+    const handlePrintCoopPdf = async (row: ProcessedData, index: number) => {
+        try {
+            await ensurePdfThaiFont();
+            const docDefinition = buildProgramMonitoringPdf(row, evaluationKeys, index);
+            pdfMake.createPdf(docDefinition).print();
+        } catch (error) {
+            console.error(error);
+            alert('ไม่สามารถออกรายงาน PDF ได้ กรุณาลองใหม่อีกครั้ง');
+        }
     };
 
     // --- Render Content ---
@@ -584,6 +830,24 @@ export default function ProgramMonitoring() {
                         <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
                             <Filter className="w-5 h-5 text-blue-600" /> กรองข้อมูลที่ต้องการประมวลผล
                         </h2>
+                        <div className="mb-6 rounded-2xl border border-blue-100 bg-blue-50/70 p-2 shadow-inner">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                {visitRoundOptions.map(round => (
+                                    <button
+                                        key={round}
+                                        type="button"
+                                        onClick={() => setSelectedVisitRound(round)}
+                                        className={`rounded-xl px-4 py-3 text-sm font-bold transition-all ${
+                                            selectedVisitRound === round
+                                                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
+                                                : 'bg-white text-slate-600 border border-blue-100 hover:border-blue-300 hover:text-blue-700'
+                                        }`}
+                                    >
+                                        {round}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div>
                                 <label className="block text-sm font-medium text-gray-600 mb-2">📍 จังหวัด (สนง.ตรวจบัญชี)</label>
@@ -602,6 +866,19 @@ export default function ProgramMonitoring() {
                                 <select className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}>
                                     {uniqueMonths.map(month => <option key={month} value={month}>{month}</option>)}
                                 </select>
+                            </div>
+                        </div>
+                        <div className="mt-5">
+                            <label className="block text-sm font-medium text-gray-600 mb-2">🔎 ค้นหาชื่อสหกรณ์</label>
+                            <div className="relative">
+                                <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-blue-500" />
+                                <input
+                                    type="search"
+                                    value={coopSearch}
+                                    onChange={(e) => setCoopSearch(e.target.value)}
+                                    placeholder="พิมพ์ชื่อสหกรณ์ที่ต้องการค้นหา..."
+                                    className="w-full rounded-xl border border-blue-100 bg-blue-50/50 py-3 pl-12 pr-4 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                                />
                             </div>
                         </div>
                     </div>
@@ -724,6 +1001,7 @@ export default function ProgramMonitoring() {
                                                         <thead className="text-xs text-gray-700 bg-blue-50/50 border-b border-blue-200">
                                                             <tr>
                                                                 <th className="px-4 py-3 font-bold sticky left-0 z-10 bg-blue-50/90 border-r border-blue-100 min-w-[200px] shadow-[1px_0_0_0_#bfdbfe] backdrop-blur-sm align-middle">ชื่อสหกรณ์</th>
+                                                                {group.id === 2 && <th className="px-4 py-3 min-w-[140px] whitespace-normal align-middle border-r border-blue-100 leading-relaxed text-center text-gray-800">วันที่เข้ากำกับติดตาม</th>}
                                                                 {group.keys.map(k => (<th key={k} className="px-4 py-3 min-w-[150px] max-w-[250px] whitespace-normal align-bottom border-r border-blue-100 last:border-0 leading-relaxed text-gray-800">{k}</th>))}
                                                             </tr>
                                                         </thead>
@@ -731,6 +1009,7 @@ export default function ProgramMonitoring() {
                                                             {validRows.map((row, i) => (
                                                                 <tr key={i} className="border-b border-gray-100 hover:bg-amber-50/50 transition duration-150 even:bg-gray-50/70">
                                                                     <td className={`px-4 py-3 font-semibold text-blue-800 sticky left-0 z-10 border-r border-gray-200 shadow-[1px_0_0_0_#e5e7eb] ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>{row._coop}</td>
+                                                                    {group.id === 2 && <td className="px-4 py-3 border-r border-gray-100 text-center font-semibold text-slate-600 whitespace-nowrap">{row._visitDate}</td>}
                                                                     {group.keys.map(k => {
                                                                         const val = row[k];
                                                                         const isEmpty = val === "" || val === undefined || val === null || String(val).trim() === "" || String(val).trim() === "-";
@@ -748,7 +1027,7 @@ export default function ProgramMonitoring() {
                             ) : (
                                 <div className="space-y-8">
                                     {filteredData.map((row, index) => (
-                                        <PdfReportCard key={index} row={row} evaluationKeys={evaluationKeys} index={index} />
+                                        <PdfReportCard key={index} row={row} evaluationKeys={evaluationKeys} index={index} onPrintPdf={handlePrintCoopPdf} />
                                     ))}
                                 </div>
                             )}

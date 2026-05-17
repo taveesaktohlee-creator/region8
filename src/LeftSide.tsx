@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { LogOut } from 'lucide-react';
+import { API_BASE } from './lib/apiConfig';
 import {
   clearMenuAccessCache,
   fetchAllowedMenus,
@@ -21,6 +22,7 @@ interface LeftSideProps {
 const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSidebarOpen, handleLogout }) => {
   const [menuItems, setMenuItems] = useState<UserMenuItem[] | undefined>(undefined);
   const [permLoaded, setPermLoaded] = useState(false);
+  const [profileAvatar, setProfileAvatar] = useState<string | null>(userData?.avatar_data_url || null);
 
   // เก็บ path ไว้ใน ref ป้องกัน re-render
   const currentPath = useRef(window.location.pathname);
@@ -54,6 +56,32 @@ const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSideb
     return () => { cancelled = true; };
   }, [userData]);
 
+  useEffect(() => {
+    if (!userData?.user_id) {
+      setProfileAvatar(null);
+      return;
+    }
+
+    setProfileAvatar(userData.avatar_data_url || null);
+    let cancelled = false;
+
+    fetch(`${API_BASE}/api/users/profile/${userData.user_id}`)
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch profile avatar');
+        return res.json();
+      })
+      .then((profile) => {
+        if (cancelled) return;
+        setProfileAvatar(profile.avatar_data_url || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setProfileAvatar(userData.avatar_data_url || null);
+      });
+
+    return () => { cancelled = true; };
+  }, [userData?.user_id, userData?.avatar_data_url]);
+
   const visibleItems = useMemo(() => {
     return (menuItems ?? []).filter(item => item.menu_type === 'sidebar');
   }, [menuItems]);
@@ -75,8 +103,17 @@ const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSideb
             <div className="flex flex-col items-center text-center gap-4 mb-10 px-2 relative pt-6">
               <div className="relative group cursor-pointer">
                 <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-full blur opacity-25 group-hover:opacity-50 transition duration-500"></div>
-                <div className="relative w-16 h-16 rounded-full flex items-center justify-center bg-[#006FEE] text-white font-bold text-xl shadow-xl border-2 border-white/80 transition-transform duration-300 group-hover:scale-105">
-                  CAD
+                <div className="relative w-16 h-16 overflow-hidden rounded-full flex items-center justify-center bg-[#006FEE] text-white font-bold text-xl shadow-xl border-2 border-white/80 transition-transform duration-300 group-hover:scale-105">
+                  {profileAvatar ? (
+                    <img
+                      src={profileAvatar}
+                      onError={() => setProfileAvatar(null)}
+                      className="h-full w-full object-cover"
+                      alt="รูปประจำตัว"
+                    />
+                  ) : (
+                    'CAD'
+                  )}
                 </div>
               </div>
               <div className="w-full px-4">

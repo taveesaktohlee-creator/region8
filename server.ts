@@ -5,7 +5,7 @@ import { pool } from './src/lib/dbconnect.js';
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -17,6 +17,7 @@ function getDateRange(query: { from?: unknown; to?: unknown }) {
 }
 
 let usageTablesReady: Promise<void> | null = null;
+let profileAvatarReady: Promise<void> | null = null;
 
 async function ensureColumn(tableName: string, columnName: string, definition: string) {
   const [rows]: any = await pool.query(
@@ -28,6 +29,23 @@ async function ensureColumn(tableName: string, columnName: string, definition: s
   if (rows.length === 0) {
     await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
   }
+}
+
+async function ensureProfileAvatarColumn() {
+  if (!profileAvatarReady) {
+    profileAvatarReady = ensureColumn('user', 'avatar_data_url', 'LONGTEXT NULL').catch((error) => {
+      profileAvatarReady = null;
+      throw error;
+    });
+  }
+
+  return profileAvatarReady;
+}
+
+function isValidAvatarDataUrl(value: unknown) {
+  if (value === null || value === undefined || value === '') return true;
+  if (typeof value !== 'string') return false;
+  return /^data:image\/(jpeg|jpg|png|webp|gif|avif|bmp|svg\+xml|tiff|heic|heif);base64,[A-Za-z0-9+/=\s]+$/i.test(value);
 }
 
 async function ensureUsageTables() {
@@ -250,8 +268,9 @@ app.post('/api/users/login', async (req, res) => {
 app.get('/api/users/profile/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    await ensureProfileAvatarColumn();
     const [rows]: any = await pool.query(
-      'SELECT Name_Surnam as Name_Surname, position, type, Division_Province, Department, email, National_ID_number, username FROM user WHERE user_id = ?',
+      'SELECT Name_Surnam as Name_Surname, position, type, Division_Province, Department, email, National_ID_number, username, avatar_data_url FROM user WHERE user_id = ?',
       [id]
     );
     if (rows.length === 0) {
@@ -269,15 +288,20 @@ app.put('/api/users/profile/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { 
-      Name_Surname, position, type, Division_Province, Department, email, National_ID_number
+      Name_Surname, position, type, Division_Province, Department, email, National_ID_number, avatar_data_url
     } = req.body;
 
+    if (!isValidAvatarDataUrl(avatar_data_url)) {
+      return res.status(400).json({ error: 'รูปประจำตัวต้องเป็นไฟล์รูปภาพที่รองรับเท่านั้น' });
+    }
+
+    await ensureProfileAvatarColumn();
     await pool.query(
       `UPDATE user SET 
        Name_Surnam = ?, position = ?, type = ?, Division_Province = ?, 
-       Department = ?, email = ?, National_ID_number = ? 
+       Department = ?, email = ?, National_ID_number = ?, avatar_data_url = ? 
        WHERE user_id = ?`,
-      [Name_Surname, position, type, Division_Province, Department, email, National_ID_number, id]
+      [Name_Surname, position, type, Division_Province, Department, email, National_ID_number, avatar_data_url || null, id]
     );
 
     res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
@@ -854,11 +878,28 @@ app.post('/api/usage/log-activity', async (req, res) => {
     await ensureUsageTables();
     if (active_seconds && active_seconds > 0) {
       // อัปเดต record ที่มีอยู่แล้ว (end_time)
-      await pool.query(
+      const sessionClause = session_id ? 'session_id = ?' : 'session_id IS NULL';
+      const params = session_id
+        ? [active_seconds, user_id, menu_key, session_id]
+        : [active_seconds, user_id, menu_key];
+      const [result]: any = await pool.query(
         `UPDATE user_activity_log SET end_time = NOW(), active_seconds = active_seconds + ?
-         WHERE log_id = (SELECT log_id FROM (SELECT log_id FROM user_activity_log WHERE user_id = ? AND menu_key = ? AND session_id = ? ORDER BY start_time DESC LIMIT 1) AS t)`,
-        [active_seconds, user_id, menu_key, session_id]
+         WHERE log_id = (
+           SELECT log_id FROM (
+             SELECT log_id FROM user_activity_log
+             WHERE user_id = ? AND menu_key = ? AND ${sessionClause}
+             ORDER BY start_time DESC LIMIT 1
+           ) AS t
+         )`,
+        params
       );
+      if (result.affectedRows === 0) {
+        await pool.query(
+          `INSERT INTO user_activity_log (user_id, session_id, menu_key, menu_name, end_time, active_seconds)
+           VALUES (?, ?, ?, ?, NOW(), ?)`,
+          [user_id, session_id || null, menu_key, menu_name, active_seconds]
+        );
+      }
       return res.json({ message: 'updated' });
     }
     const [result]: any = await pool.query(

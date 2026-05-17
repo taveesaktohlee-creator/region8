@@ -100,7 +100,7 @@ let activeStartTime: number | null = null;
 let currentMenuKey: string | null = null;
 let currentMenuName: string | null = null;
 let flushTimer: ReturnType<typeof setInterval> | null = null;
-let isPageVisible = true;
+let trackingCleanup: (() => void) | null = null;
 
 function getUserId(): number | null {
   try {
@@ -126,18 +126,30 @@ function sendActiveTime(seconds: number) {
   }).catch(() => {});
 }
 
+function shouldTrackActiveTime() {
+  return document.visibilityState === 'visible' && document.hasFocus();
+}
+
 function pauseTracking() {
-  if (activeStartTime && isPageVisible) {
+  if (activeStartTime) {
     const elapsed = Math.floor((Date.now() - activeStartTime) / 1000);
     if (elapsed > 0) sendActiveTime(elapsed);
     activeStartTime = null;
   }
-  isPageVisible = false;
 }
 
 function resumeTracking() {
-  isPageVisible = true;
-  activeStartTime = Date.now();
+  if (!activeStartTime && shouldTrackActiveTime()) {
+    activeStartTime = Date.now();
+  }
+}
+
+function syncTrackingState() {
+  if (shouldTrackActiveTime()) {
+    resumeTracking();
+  } else {
+    pauseTracking();
+  }
 }
 
 /**
@@ -145,6 +157,11 @@ function resumeTracking() {
  * เรียกครั้งเดียวต่อ page load
  */
 export function startPageTracking() {
+  if (trackingCleanup) {
+    trackingCleanup();
+    trackingCleanup = null;
+  }
+
   const path = window.location.pathname;
   const menu = MENU_MAP[path];
   if (!menu) return;
@@ -168,40 +185,35 @@ export function startPageTracking() {
     })
   }).catch(() => {});
 
-  // เริ่มนับเวลา
-  activeStartTime = Date.now();
-  isPageVisible = true;
+  // เริ่มนับเวลาเฉพาะเมื่อหน้าเว็บเป็นหน้าต่างที่ผู้ใช้กำลังดูอยู่จริง
+  activeStartTime = shouldTrackActiveTime() ? Date.now() : null;
 
   // ฟัง visibility change (minimize, switch tab, etc.)
-  const handleVisibility = () => {
-    if (document.hidden) {
-      pauseTracking();
-    } else {
-      resumeTracking();
-    }
-  };
+  const handleVisibility = () => syncTrackingState();
   document.addEventListener('visibilitychange', handleVisibility);
 
   // ฟัง focus/blur (หน้าต่างอื่นบดบัง)
-  const handleBlur = () => pauseTracking();
-  const handleFocus = () => resumeTracking();
+  const handleBlur = () => syncTrackingState();
+  const handleFocus = () => syncTrackingState();
   window.addEventListener('blur', handleBlur);
   window.addEventListener('focus', handleFocus);
 
-  // Flush active time ทุก 60 วินาที
+  // Flush active time ระหว่างใช้งาน เพื่อลดความคลาดเคลื่อนของรายงาน
   flushTimer = setInterval(() => {
-    if (isPageVisible && activeStartTime) {
+    if (shouldTrackActiveTime() && activeStartTime) {
       const elapsed = Math.floor((Date.now() - activeStartTime) / 1000);
       if (elapsed > 0) {
         sendActiveTime(elapsed);
         activeStartTime = Date.now(); // reset
       }
+    } else {
+      pauseTracking();
     }
-  }, 60_000);
+  }, 15_000);
 
   // ก่อนออกจากหน้า flush เวลาที่ค้าง
   const handleBeforeUnload = () => {
-    if (isPageVisible && activeStartTime) {
+    if (activeStartTime) {
       const elapsed = Math.floor((Date.now() - activeStartTime) / 1000);
       if (elapsed > 0) {
         // Use sendBeacon for reliability
@@ -214,17 +226,24 @@ export function startPageTracking() {
         });
         navigator.sendBeacon(`${API_BASE}/api/usage/log-activity`, new Blob([payload], { type: 'application/json' }));
       }
+      activeStartTime = null;
     }
   };
   window.addEventListener('beforeunload', handleBeforeUnload);
+  window.addEventListener('pagehide', handleBeforeUnload);
 
-  // Return cleanup function (optional for React useEffect)
-  return () => {
+  trackingCleanup = () => {
     handleBeforeUnload();
+    activeStartTime = null;
     document.removeEventListener('visibilitychange', handleVisibility);
     window.removeEventListener('blur', handleBlur);
     window.removeEventListener('focus', handleFocus);
     window.removeEventListener('beforeunload', handleBeforeUnload);
+    window.removeEventListener('pagehide', handleBeforeUnload);
     if (flushTimer) clearInterval(flushTimer);
+    flushTimer = null;
+    trackingCleanup = null;
   };
+
+  return trackingCleanup;
 }
