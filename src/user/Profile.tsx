@@ -425,7 +425,7 @@ export default function Profile() {
                   onError={(event) => {
                     event.currentTarget.src = getAvatarUrl(profileData?.Name_Surname);
                   }}
-                  className="w-28 h-28 rounded-full border-4 border-white shadow-lg object-cover bg-blue-50"
+                  className="w-28 h-28 rounded-full border-4 border-white shadow-lg object-contain bg-white"
                   alt="Avatar"
                 />
                 <button
@@ -491,7 +491,7 @@ export default function Profile() {
                     onError={(event) => {
                       event.currentTarget.src = getAvatarUrl(editForm?.Name_Surname || profileData?.Name_Surname);
                     }}
-                    className="h-24 w-24 rounded-full border-4 border-white bg-white object-cover shadow"
+                    className="h-24 w-24 rounded-full border-4 border-white bg-white object-contain shadow"
                     alt="Avatar preview"
                   />
                   <div className="flex-1">

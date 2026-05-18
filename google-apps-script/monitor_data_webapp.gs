@@ -163,6 +163,11 @@ function uploadAvatarToDrive_(payload) {
   });
 }
 
+function authorizeDriveAccess() {
+  DriveApp.getFolderById(DRIVE_AVATAR_FOLDER_ID).getName();
+  return 'อนุญาตสิทธิ์ Google Drive เรียบร้อยแล้ว';
+}
+
 function sanitizeDriveFileName_(value) {
   return String(value || 'avatar.webp')
     .replace(/[\\/:*?"<>|#%{}~&]/g, '-')

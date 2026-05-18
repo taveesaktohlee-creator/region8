@@ -123,7 +123,7 @@ const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSideb
                     <img
                       src={profileAvatar}
                       onError={() => setProfileAvatar(null)}
-                      className="h-full w-full object-cover"
+                      className="h-full w-full bg-white object-contain"
                       alt="รูปประจำตัว"
                     />
                   ) : (

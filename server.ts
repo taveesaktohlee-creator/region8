@@ -119,6 +119,13 @@ function sanitizeAvatarFileName(value: unknown, fallbackName = 'avatar') {
   return raw.replace(/[\\/:*?"<>|#%{}~&]/g, '-').replace(/\s+/g, '-').slice(0, 120);
 }
 
+function getAvatarUploadErrorMessage(message: string) {
+  if (/DriveApp|getFolderById|Required permissions|Authorization|permission/i.test(message)) {
+    return 'Google Apps Script ยังไม่ได้รับสิทธิ์ Google Drive สำหรับอัปโหลดรูป โปรดอัปเดต appsscript.json จากโฟลเดอร์ google-apps-script แล้ว Deploy เป็น New version โดยตั้ง Execute as: Me และ Who has access: Anyone จากนั้นกดอนุญาตสิทธิ์ Drive';
+  }
+  return message;
+}
+
 async function ensureUsageTables() {
   if (!usageTablesReady) {
     usageTablesReady = (async () => {
@@ -406,7 +413,7 @@ app.post('/api/users/profile/avatar-drive', async (req, res) => {
     }
 
     if (parsed?.ok === false) {
-      throw new Error(parsed.error || 'อัปโหลดรูปไป Google Drive ไม่สำเร็จ');
+      throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลดรูปไป Google Drive ไม่สำเร็จ'));
     }
 
     res.json(parsed);

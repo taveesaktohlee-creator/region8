@@ -406,7 +406,7 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
                 {normalizeAvatarUrl(u.avatar_data_url) ? (
                   <img
                     src={normalizeAvatarUrl(u.avatar_data_url) || ''}
-                    className="h-10 w-10 rounded-full object-cover ring-2 ring-white shadow-sm shrink-0"
+                    className="h-10 w-10 rounded-full bg-white object-contain ring-2 ring-white shadow-sm shrink-0"
                     alt={`รูปประจำตัว ${u.Name_Surname}`}
                   />
                 ) : (
@@ -452,7 +452,7 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
                       {normalizeAvatarUrl(u.avatar_data_url) ? (
                         <img
                           src={normalizeAvatarUrl(u.avatar_data_url) || ''}
-                          className="h-8 w-8 rounded-full object-cover ring-2 ring-white shadow-sm shrink-0"
+                          className="h-8 w-8 rounded-full bg-white object-contain ring-2 ring-white shadow-sm shrink-0"
                           alt={`รูปประจำตัว ${u.Name_Surname}`}
                         />
                       ) : (
