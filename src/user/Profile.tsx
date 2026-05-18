@@ -8,9 +8,9 @@ import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
 const MAX_AVATAR_BYTES = 30 * 1024 * 1024;
-const MAX_AVATAR_UPLOAD_BYTES = 5 * 1024 * 1024;
-const AVATAR_MAX_DIMENSION = 640;
-const AVATAR_WEBP_QUALITY = 0.86;
+const MAX_AVATAR_UPLOAD_BYTES = 1024 * 1024;
+const AVATAR_DIMENSION_STEPS = [640, 512, 448, 384, 320];
+const AVATAR_WEBP_QUALITY_STEPS = [0.86, 0.78, 0.7, 0.62, 0.54, 0.46, 0.38];
 const SUPPORTED_AVATAR_TYPES = [
   'image/jpeg',
   'image/png',
@@ -67,47 +67,89 @@ function dataUrlToBase64(dataUrl: string) {
   return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
 }
 
+function encodeCanvasToWebp(canvas: HTMLCanvasElement, quality: number) {
+  return new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, 'image/webp', quality);
+  });
+}
+
+function createAvatarCanvas(image: HTMLImageElement, maxDimension: number) {
+  const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext('2d', { alpha: true });
+  if (!context) throw new Error('Cannot create canvas');
+
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(image, 0, 0, width, height);
+
+  return { canvas, width, height };
+}
+
 async function shrinkAvatarImage(file: File) {
   const originalDataUrl = await readFileAsDataUrl(file);
   const objectUrl = URL.createObjectURL(file);
 
   try {
     const image = await loadImageFromObjectUrl(objectUrl);
-    const scale = Math.min(1, AVATAR_MAX_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
-    const width = Math.max(1, Math.round(image.naturalWidth * scale));
-    const height = Math.max(1, Math.round(image.naturalHeight * scale));
-
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext('2d', { alpha: true });
-    if (!context) throw new Error('Cannot create canvas');
-
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = 'high';
-    context.drawImage(image, 0, 0, width, height);
-
-    const webpBlob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, 'image/webp', AVATAR_WEBP_QUALITY);
-    });
-
-    if (!webpBlob) throw new Error('Cannot encode image');
-
-    const shouldUseWebp = webpBlob.size < file.size || file.type !== 'image/webp';
-    const outputBlob = shouldUseWebp ? webpBlob : file;
-    const outputDataUrl = shouldUseWebp ? await readBlobAsDataUrl(webpBlob) : originalDataUrl;
     const baseName = file.name.replace(/\.[^.]+$/, '') || 'avatar';
+    let bestCandidate: {
+      blob: Blob;
+      dataUrl: string;
+      width: number;
+      height: number;
+    } | null = null;
+
+    for (const dimension of AVATAR_DIMENSION_STEPS) {
+      const { canvas, width, height } = createAvatarCanvas(image, dimension);
+
+      for (const quality of AVATAR_WEBP_QUALITY_STEPS) {
+        const blob = await encodeCanvasToWebp(canvas, quality);
+        if (!blob) continue;
+
+        if (!bestCandidate || blob.size < bestCandidate.blob.size) {
+          bestCandidate = {
+            blob,
+            dataUrl: await readBlobAsDataUrl(blob),
+            width,
+            height,
+          };
+        }
+
+        if (blob.size <= MAX_AVATAR_UPLOAD_BYTES) {
+          const dataUrl = bestCandidate.blob === blob ? bestCandidate.dataUrl : await readBlobAsDataUrl(blob);
+          return {
+            dataUrl,
+            base64: dataUrlToBase64(dataUrl),
+            fileName: `${baseName}.webp`,
+            mimeType: 'image/webp',
+            originalSize: file.size,
+            outputSize: blob.size,
+            resized: true,
+            width,
+            height,
+          };
+        }
+      }
+    }
+
+    if (!bestCandidate) throw new Error('Cannot encode image');
 
     return {
-      dataUrl: outputDataUrl,
-      base64: dataUrlToBase64(outputDataUrl),
-      fileName: shouldUseWebp ? `${baseName}.webp` : file.name,
-      mimeType: shouldUseWebp ? 'image/webp' : file.type || 'image/webp',
+      dataUrl: bestCandidate.dataUrl,
+      base64: dataUrlToBase64(bestCandidate.dataUrl),
+      fileName: `${baseName}.webp`,
+      mimeType: 'image/webp',
       originalSize: file.size,
-      outputSize: outputBlob.size,
-      resized: shouldUseWebp || width !== image.naturalWidth || height !== image.naturalHeight,
-      width,
-      height,
+      outputSize: bestCandidate.blob.size,
+      resized: true,
+      width: bestCandidate.width,
+      height: bestCandidate.height,
     };
   } catch (error) {
     console.warn('Avatar compression fallback:', error);
@@ -242,7 +284,7 @@ export default function Profile() {
       toast.info('กำลังย่อรูปภาพก่อนอัปโหลดไป Google Drive...');
       const optimizedAvatar = await shrinkAvatarImage(file);
       if (optimizedAvatar.outputSize > MAX_AVATAR_UPLOAD_BYTES) {
-        const message = `รูปหลังย่อยังมีขนาด ${formatFileSize(optimizedAvatar.outputSize)} กรุณาเลือกไฟล์ที่เบราว์เซอร์สามารถย่อได้ เช่น JPG, PNG หรือ WebP`;
+        const message = `รูปหลังย่อยังมีขนาด ${formatFileSize(optimizedAvatar.outputSize)} กรุณาเลือกไฟล์ที่เบราว์เซอร์สามารถย่อให้ต่ำกว่า ${formatFileSize(MAX_AVATAR_UPLOAD_BYTES)} ได้ เช่น JPG, PNG หรือ WebP`;
         setAvatarError(message);
         toast.warning(message);
         return;
@@ -458,7 +500,7 @@ export default function Profile() {
                       รูปประจำตัว
                     </div>
                     <p className="mt-1 text-xs font-medium text-slate-500">
-                      รองรับ JPG, PNG, WebP, GIF, AVIF, BMP, SVG, TIFF, HEIC/HEIF ระบบจะย่อและแปลงเป็น WebP ก่อนเก็บใน Google Drive ขนาดไฟล์ต้นฉบับไม่เกิน {formatFileSize(MAX_AVATAR_BYTES)}
+                      รองรับ JPG, PNG, WebP, GIF, AVIF, BMP, SVG, TIFF, HEIC/HEIF ระบบจะย่อให้ต่ำกว่า {formatFileSize(MAX_AVATAR_UPLOAD_BYTES)} และแปลงเป็น WebP ก่อนเก็บใน Google Drive ขนาดไฟล์ต้นฉบับไม่เกิน {formatFileSize(MAX_AVATAR_BYTES)}
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow transition hover:bg-blue-700">

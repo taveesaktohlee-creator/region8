@@ -65,10 +65,23 @@ function doPost(e) {
       return value;
     });
 
+    if (payload.mode === 'upsert') {
+      const updatedRowNumber = updateExistingMonitorRow_(sheet, headers, rowData, row, payload.upsert || {});
+      if (updatedRowNumber) {
+        return outputJson_({
+          ok: true,
+          mode: 'updated',
+          message: 'อัปเดตข้อมูลกำกับติดตามครั้งที่ 2 แถวเดิมเรียบร้อยแล้ว',
+          rowNumber: updatedRowNumber,
+        });
+      }
+    }
+
     sheet.appendRow(row);
 
     return outputJson_({
       ok: true,
+      mode: 'created',
       message: 'บันทึกข้อมูลลง Google Sheets เรียบร้อยแล้ว',
       rowNumber: sheet.getLastRow(),
     });
@@ -78,6 +91,44 @@ function doPost(e) {
       error: error && error.message ? error.message : String(error),
     });
   }
+}
+
+function updateExistingMonitorRow_(sheet, headers, rowData, row, options) {
+  const coopKey = options.coopKey || '1. ชื่อสหกรณ์';
+  const roundKey = options.roundKey || '1.1 กำกับติดตามครั้งที่';
+  const roundValue = normalizeRound_(options.roundValue || rowData[roundKey] || 'ครั้งที่ 2');
+  const coopValue = normalizeText_(rowData[coopKey]);
+
+  if (!coopValue || !roundValue) return 0;
+
+  const coopIndex = headers.indexOf(coopKey);
+  const roundIndex = headers.indexOf(roundKey);
+  if (coopIndex === -1 || roundIndex === -1 || sheet.getLastRow() < 2) return 0;
+
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getDisplayValues();
+
+  for (let index = 0; index < values.length; index += 1) {
+    const currentCoop = normalizeText_(values[index][coopIndex]);
+    const currentRound = normalizeRound_(values[index][roundIndex]);
+
+    if (currentCoop === coopValue && currentRound === roundValue) {
+      const rowNumber = index + 2;
+      sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+      return rowNumber;
+    }
+  }
+
+  return 0;
+}
+
+function normalizeText_(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizeRound_(value) {
+  const raw = normalizeText_(value);
+  const matched = raw.match(/[12]/);
+  return matched ? 'ครั้งที่ ' + matched[0] : raw;
 }
 
 function uploadAvatarToDrive_(payload) {

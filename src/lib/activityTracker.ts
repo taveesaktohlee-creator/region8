@@ -9,10 +9,21 @@
 import { API_BASE } from './apiConfig';
 
 const SESSION_KEY = 'usage_session_id';
+const USAGE_RESET_VERSION = '2026-05-18T09:57:34+07:00';
+const USAGE_RESET_VERSION_KEY = 'usage_tracking_reset_version';
 
 // ---- Session Management ----
 
+function ensureUsageResetVersion() {
+  const currentVersion = localStorage.getItem(USAGE_RESET_VERSION_KEY);
+  if (currentVersion !== USAGE_RESET_VERSION) {
+    localStorage.removeItem(SESSION_KEY);
+    localStorage.setItem(USAGE_RESET_VERSION_KEY, USAGE_RESET_VERSION);
+  }
+}
+
 export async function createSession(userId: number): Promise<number | null> {
+  ensureUsageResetVersion();
   try {
     const res = await fetch(`${API_BASE}/api/usage/login-session`, {
       method: 'POST',
@@ -47,6 +58,7 @@ export async function closeSession() {
 }
 
 export function getSessionId(): number | null {
+  ensureUsageResetVersion();
   const v = localStorage.getItem(SESSION_KEY);
   const sessionId = v ? Number(v) : null;
   return sessionId && Number.isFinite(sessionId) && sessionId > 0 ? sessionId : null;

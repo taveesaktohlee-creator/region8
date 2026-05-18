@@ -68,7 +68,7 @@ export default async function handler(req: any, res: any) {
         method: 'POST',
         redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(row),
+        body: JSON.stringify(body),
       });
       const text = await response.text();
       if (!response.ok) throw new Error(text || 'Cannot write Google Sheets data');

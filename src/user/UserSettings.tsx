@@ -14,7 +14,7 @@ import { clearMenuAccessCache } from '../lib/menuAccess';
 const API = `${API_BASE}/api/admin`;
 
 type TabKey = 'groups' | 'menus' | 'users';
-interface UserRow { user_id: number; Name_Surname: string; username: string; email: string; position: string; Division_Province: string; user_status: number|null; group_name: string|null; }
+interface UserRow { user_id: number; Name_Surname: string; username: string; email: string; position: string; Division_Province: string; user_status: number|null; group_name: string|null; avatar_data_url?: string | null; }
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: 'groups', label: 'กลุ่มผู้ใช้งาน', icon: <Settings size={16}/> },

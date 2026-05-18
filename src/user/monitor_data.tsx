@@ -601,12 +601,20 @@ export default function MonitorData() {
       const response = await fetch(`${API_BASE}/api/google-monitor-data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ row }),
+        body: JSON.stringify({
+          row,
+          mode: 'upsert',
+          upsert: {
+            coopKey: SHEET_KEYS.coop,
+            roundKey: SHEET_KEYS.round,
+            roundValue: 'ครั้งที่ 2',
+          },
+        }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Save failed');
 
-      toast.success(result.message || 'เพิ่มข้อมูลกำกับติดตามครั้งที่ 2 ลง Google Sheets แล้ว');
+      toast.success(result.message || 'บันทึกข้อมูลกำกับติดตามครั้งที่ 2 ลง Google Sheets แล้ว');
       setSelectedRowIndex(null);
       setSourceSearch('');
       setForm({

@@ -33,6 +33,7 @@ interface UserRow {
   National_ID_number?: string;
   user_status: number | null;
   group_name: string | null;
+  avatar_data_url?: string | null;
 }
 
 type ApiResult = {
@@ -90,6 +91,21 @@ function userToFormData(user: UserFormSource): UserFormData {
     password: '',
     user_status: user.user_status == null ? '' : String(user.user_status)
   };
+}
+
+function normalizeAvatarUrl(value?: string | null) {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+
+  if (text.includes('drive.google.com')) {
+    const idFromQuery = text.match(/[?&]id=([^&]+)/)?.[1];
+    const idFromPath = text.match(/\/d\/([^/]+)/)?.[1];
+    const id = idFromQuery || idFromPath;
+    if (id) return `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w256`;
+  }
+
+  return text;
 }
 
 export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users: UserRow[]; onRefresh: ()=>Promise<void>; }) {
@@ -387,9 +403,17 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
           {filtered.map((u, i) => (
             <div key={u.user_id} className="p-4 space-y-3">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0 ${colors[i%colors.length]}`}>
-                  {getInitials(u.Name_Surname)}
-                </div>
+                {normalizeAvatarUrl(u.avatar_data_url) ? (
+                  <img
+                    src={normalizeAvatarUrl(u.avatar_data_url) || ''}
+                    className="h-10 w-10 rounded-full object-cover ring-2 ring-white shadow-sm shrink-0"
+                    alt={`รูปประจำตัว ${u.Name_Surname}`}
+                  />
+                ) : (
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0 ${colors[i%colors.length]}`}>
+                    {getInitials(u.Name_Surname)}
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold text-slate-800 text-sm truncate">{u.Name_Surname}</p>
                   <p className="text-xs text-slate-400">{u.username} · {u.position}</p>
@@ -425,9 +449,17 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
                 <tr key={u.user_id} className="hover:bg-blue-50/30 transition-colors">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 ${colors[i%colors.length]}`}>
-                        {getInitials(u.Name_Surname)}
-                      </div>
+                      {normalizeAvatarUrl(u.avatar_data_url) ? (
+                        <img
+                          src={normalizeAvatarUrl(u.avatar_data_url) || ''}
+                          className="h-8 w-8 rounded-full object-cover ring-2 ring-white shadow-sm shrink-0"
+                          alt={`รูปประจำตัว ${u.Name_Surname}`}
+                        />
+                      ) : (
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 ${colors[i%colors.length]}`}>
+                          {getInitials(u.Name_Surname)}
+                        </div>
+                      )}
                       <div>
                         <p className="font-semibold text-slate-700">{u.Name_Surname}</p>
                         <p className="text-xs text-slate-400">{u.username}</p>

@@ -19,10 +19,25 @@ interface LeftSideProps {
   handleLogout: () => void;
 }
 
+function normalizeAvatarUrl(value?: string | null) {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+
+  if (text.includes('drive.google.com')) {
+    const idFromQuery = text.match(/[?&]id=([^&]+)/)?.[1];
+    const idFromPath = text.match(/\/d\/([^/]+)/)?.[1];
+    const id = idFromQuery || idFromPath;
+    if (id) return `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w512`;
+  }
+
+  return text;
+}
+
 const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSidebarOpen, handleLogout }) => {
   const [menuItems, setMenuItems] = useState<UserMenuItem[] | undefined>(undefined);
   const [permLoaded, setPermLoaded] = useState(false);
-  const [profileAvatar, setProfileAvatar] = useState<string | null>(userData?.avatar_data_url || null);
+  const [profileAvatar, setProfileAvatar] = useState<string | null>(normalizeAvatarUrl(userData?.avatar_data_url));
 
   // เก็บ path ไว้ใน ref ป้องกัน re-render
   const currentPath = useRef(window.location.pathname);
@@ -62,7 +77,7 @@ const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSideb
       return;
     }
 
-    setProfileAvatar(userData.avatar_data_url || null);
+    setProfileAvatar(normalizeAvatarUrl(userData.avatar_data_url));
     let cancelled = false;
 
     fetch(`${API_BASE}/api/users/profile/${userData.user_id}`)
@@ -72,11 +87,11 @@ const LeftSide: React.FC<LeftSideProps> = ({ userData, isSidebarOpen, setIsSideb
       })
       .then((profile) => {
         if (cancelled) return;
-        setProfileAvatar(profile.avatar_data_url || null);
+        setProfileAvatar(normalizeAvatarUrl(profile.avatar_data_url));
       })
       .catch(() => {
         if (cancelled) return;
-        setProfileAvatar(userData.avatar_data_url || null);
+        setProfileAvatar(normalizeAvatarUrl(userData.avatar_data_url));
       });
 
     return () => { cancelled = true; };

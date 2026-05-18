@@ -9,6 +9,7 @@ app.use(express.json({ limit: '25mb' }));
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const GOOGLE_MONITOR_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwiK32Dwn80oGfbG4yElZQmKW0IwblvPO85yCW_1ex7LfcCzwd0FtgWMfG45aSqUd3H/exec';
+const USAGE_REPORT_RESET_AT = process.env.USAGE_REPORT_RESET_AT || '2026-05-18 09:57:34';
 
 function getDateRange(query: { from?: unknown; to?: unknown }) {
   const { from, to } = query;
@@ -283,8 +284,9 @@ app.post('/api/users/login', async (req, res) => {
     const { username, password } = req.body;
 
     // ค้นหาผู้ใช้ด้วย username
+    await ensureProfileAvatarColumn();
     const [users]: any = await pool.query(
-      'SELECT user_id, username, password, Name_Surnam, position, Division_Province FROM user WHERE username = ?',
+      'SELECT user_id, username, password, Name_Surnam, position, Division_Province, avatar_data_url FROM user WHERE username = ?',
       [username]
     );
 
@@ -324,7 +326,8 @@ app.post('/api/users/login', async (req, res) => {
         user_id: user.user_id,
         Name_Surname: user.Name_Surnam,
         position: user.position,
-        Division_Province: user.Division_Province
+        Division_Province: user.Division_Province,
+        avatar_data_url: user.avatar_data_url || null
       },
       session_id
     });
@@ -545,7 +548,7 @@ app.post('/api/google-monitor-data', async (req, res) => {
       method: 'POST',
       redirect: 'follow',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(row),
+      body: JSON.stringify(req.body),
     });
     const text = await response.text();
     if (!response.ok) throw new Error(text || 'Cannot write Google Sheets data');
@@ -973,9 +976,11 @@ app.delete('/api/admin/menus/:id', async (req, res) => {
 // ดึงรายชื่อ user ทั้งหมดพร้อมกลุ่ม
 app.get('/api/admin/users', async (_req, res) => {
   try {
+    await ensureProfileAvatarColumn();
     const [rows]: any = await pool.query(
       `SELECT u.user_id, u.Name_Surnam AS Name_Surname, u.username, u.email, u.position,
               u.Division_Province, u.type, u.Department, u.National_ID_number, u.user_status,
+              u.avatar_data_url,
               ug.group_name
        FROM user u
        LEFT JOIN user_groups ug ON u.user_status = ug.group_id
@@ -1213,12 +1218,15 @@ app.get('/api/usage/summary', async (req, res) => {
     try {
       if (range) {
         const [r]: any = await pool.query(
-          'SELECT COUNT(DISTINCT user_id) as count FROM user_sessions WHERE DATE(login_time) >= ? AND DATE(login_time) <= ?',
-          [range.from, range.to]
+          'SELECT COUNT(DISTINCT user_id) as count FROM user_sessions WHERE login_time >= ? AND DATE(login_time) >= ? AND DATE(login_time) <= ?',
+          [USAGE_REPORT_RESET_AT, range.from, range.to]
         );
         totalLogins = r;
       } else {
-        const [r]: any = await pool.query('SELECT COUNT(DISTINCT user_id) as count FROM user_sessions');
+        const [r]: any = await pool.query(
+          'SELECT COUNT(DISTINCT user_id) as count FROM user_sessions WHERE login_time >= ?',
+          [USAGE_REPORT_RESET_AT]
+        );
         totalLogins = r;
       }
     } catch (_) { /* table may not exist */ }
@@ -1258,17 +1266,21 @@ app.get('/api/usage/users-table', async (req, res) => {
 
     // สร้าง sub-query สำหรับกรองตามช่วงเวลา
     const sessionFilter = range
-      ? 'AND DATE(login_time) >= ? AND DATE(login_time) <= ?'
-      : '';
+      ? 'AND login_time >= ? AND DATE(login_time) >= ? AND DATE(login_time) <= ?'
+      : 'AND login_time >= ?';
     const activityFilter = range
-      ? 'AND DATE(start_time) >= ? AND DATE(start_time) <= ?'
-      : '';
+      ? 'AND start_time >= ? AND DATE(start_time) >= ? AND DATE(start_time) <= ?'
+      : 'AND start_time >= ?';
     const lastLoginFilter = range
-      ? 'AND DATE(login_time) >= ? AND DATE(login_time) <= ?'
-      : '';
+      ? 'AND login_time >= ? AND DATE(login_time) >= ? AND DATE(login_time) <= ?'
+      : 'AND login_time >= ?';
     const rangeParams = range
-      ? [range.from, range.to, range.from, range.to, range.from, range.to]
-      : [];
+      ? [
+          USAGE_REPORT_RESET_AT, range.from, range.to,
+          USAGE_REPORT_RESET_AT, range.from, range.to,
+          USAGE_REPORT_RESET_AT, range.from, range.to,
+        ]
+      : [USAGE_REPORT_RESET_AT, USAGE_REPORT_RESET_AT, USAGE_REPORT_RESET_AT];
 
     const [rows]: any = await pool.query(`
       SELECT 
@@ -1314,9 +1326,11 @@ app.get('/api/usage/user-history/:userId', async (req, res) => {
     const range = getDateRange(req.query);
 
     const dateFilter = range
-      ? 'AND DATE(start_time) >= ? AND DATE(start_time) <= ?'
-      : '';
-    const params = range ? [userId, range.from, range.to] : [userId];
+      ? 'AND start_time >= ? AND DATE(start_time) >= ? AND DATE(start_time) <= ?'
+      : 'AND start_time >= ?';
+    const params = range
+      ? [userId, USAGE_REPORT_RESET_AT, range.from, range.to]
+      : [userId, USAGE_REPORT_RESET_AT];
 
     const [rows]: any = await pool.query(`
       SELECT 

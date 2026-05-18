@@ -225,7 +225,7 @@ export default function SystemUsageReport() {
       label: 'ข้าราชการ',
       value: reportSummary.totalGovOfficers,
       icon: Shield,
-      hint: 'กลุ่มบุคลากรภาครัฐ',
+      hint: 'กลุ่มข้าราชการ',
       badge: 'Gov',
       card: 'from-orange-50 via-white to-white border-orange-100/80',
       accent: 'bg-orange-500',
