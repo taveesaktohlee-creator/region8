@@ -132,40 +132,57 @@ function normalizeRound_(value) {
 }
 
 function uploadAvatarToDrive_(payload) {
-  const folderId = payload.folderId || DRIVE_AVATAR_FOLDER_ID;
-  const folder = DriveApp.getFolderById(folderId);
-  const mimeType = payload.mimeType || 'image/webp';
-  const fileName = sanitizeDriveFileName_(payload.fileName || 'avatar.webp');
-  const base64 = payload.base64 || '';
+  try {
+    const folderId = payload.folderId || payload.folder_id || DRIVE_AVATAR_FOLDER_ID;
+    const mimeType = payload.mimeType || payload.mime_type || 'image/webp';
+    const fileName = sanitizeDriveFileName_(payload.fileName || payload.file_name || 'avatar.webp');
+    const base64 = payload.base64 || '';
 
-  if (!base64) {
+    if (!base64) {
+      return outputJson_({
+        ok: false,
+        error: 'ไม่พบข้อมูลรูปภาพสำหรับอัปโหลด',
+      });
+    }
+
+    const folder = DriveApp.getFolderById(folderId);
+    const bytes = Utilities.base64Decode(base64);
+    const blob = Utilities.newBlob(bytes, mimeType, fileName);
+    const file = folder.createFile(blob);
+    let sharingWarning = '';
+
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (sharingError) {
+      sharingWarning = 'สร้างไฟล์สำเร็จ แต่ตั้งค่าแชร์แบบ Anyone with link ไม่ได้: ' + sharingError.toString();
+    }
+
+    const fileId = file.getId();
+
+    return outputJson_({
+      ok: true,
+      message: 'อัปโหลดรูปประจำตัวไปยัง Google Drive เรียบร้อยแล้ว',
+      warning: sharingWarning,
+      fileId: fileId,
+      fileName: file.getName(),
+      webViewLink: file.getUrl(),
+      url: 'https://drive.google.com/uc?export=view&id=' + fileId,
+      thumbnailUrl: 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w640',
+    });
+  } catch (error) {
     return outputJson_({
       ok: false,
-      error: 'ไม่พบข้อมูลรูปภาพสำหรับอัปโหลด',
+      error: 'อัปโหลดรูปไป Google Drive ไม่สำเร็จ: ' + error.toString(),
     });
   }
-
-  const bytes = Utilities.base64Decode(base64);
-  const blob = Utilities.newBlob(bytes, mimeType, fileName);
-  const file = folder.createFile(blob);
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-
-  const fileId = file.getId();
-
-  return outputJson_({
-    ok: true,
-    message: 'อัปโหลดรูปประจำตัวไปยัง Google Drive เรียบร้อยแล้ว',
-    fileId: fileId,
-    fileName: file.getName(),
-    webViewLink: file.getUrl(),
-    url: 'https://drive.google.com/uc?export=view&id=' + fileId,
-    thumbnailUrl: 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w640',
-  });
 }
 
 function authorizeDriveAccess() {
-  DriveApp.getFolderById(DRIVE_AVATAR_FOLDER_ID).getName();
-  return 'อนุญาตสิทธิ์ Google Drive เรียบร้อยแล้ว';
+  const folder = DriveApp.getFolderById(DRIVE_AVATAR_FOLDER_ID);
+  const blob = Utilities.newBlob('drive permission test', 'text/plain', 'drive-permission-test.txt');
+  const file = folder.createFile(blob);
+  file.setTrashed(true);
+  return 'อนุญาตสิทธิ์ Google Drive เรียบร้อยแล้ว: ' + folder.getName();
 }
 
 function sanitizeDriveFileName_(value) {

@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { User, Mail, Briefcase, MapPin, Building2, IdCard, ShieldCheck, Edit3, ChevronRight, ArrowLeft, X, Camera, ImagePlus, Trash2, UploadCloud } from 'lucide-react';
 import { API_BASE } from '../lib/apiConfig';
 import Header from '../Header';
@@ -9,6 +9,9 @@ import 'react-toastify/dist/ReactToastify.css';
 
 const MAX_AVATAR_BYTES = 30 * 1024 * 1024;
 const MAX_AVATAR_UPLOAD_BYTES = 1024 * 1024;
+const AVATAR_EDITOR_FRAME_SIZE = 128;
+const AVATAR_MIN_ZOOM = 1;
+const AVATAR_MAX_ZOOM = 3;
 const AVATAR_DIMENSION_STEPS = [640, 512, 448, 384, 320];
 const AVATAR_WEBP_QUALITY_STEPS = [0.86, 0.78, 0.7, 0.62, 0.54, 0.46, 0.38];
 const SUPPORTED_AVATAR_TYPES = [
@@ -91,6 +94,12 @@ function createAvatarCanvas(image: HTMLImageElement, maxDimension: number) {
   return { canvas, width, height };
 }
 
+type AvatarCropState = {
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+};
+
 async function shrinkAvatarImage(file: File) {
   const originalDataUrl = await readFileAsDataUrl(file);
   const objectUrl = URL.createObjectURL(file);
@@ -169,6 +178,102 @@ async function shrinkAvatarImage(file: File) {
   }
 }
 
+function createCroppedAvatarCanvas(
+  image: HTMLImageElement,
+  crop: AvatarCropState,
+  outputSize: number,
+  frameSize = AVATAR_EDITOR_FRAME_SIZE,
+) {
+  const canvas = document.createElement('canvas');
+  canvas.width = outputSize;
+  canvas.height = outputSize;
+
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context) throw new Error('Cannot create canvas');
+
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, outputSize, outputSize);
+
+  const fitScale = Math.min(frameSize / image.naturalWidth, frameSize / image.naturalHeight);
+  const displayWidth = image.naturalWidth * fitScale * crop.zoom;
+  const displayHeight = image.naturalHeight * fitScale * crop.zoom;
+  const outputRatio = outputSize / frameSize;
+
+  const drawWidth = displayWidth * outputRatio;
+  const drawHeight = displayHeight * outputRatio;
+  const drawX = (frameSize / 2 + crop.offsetX - displayWidth / 2) * outputRatio;
+  const drawY = (frameSize / 2 + crop.offsetY - displayHeight / 2) * outputRatio;
+
+  context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+
+  return canvas;
+}
+
+async function createCroppedAvatarImage(
+  sourceDataUrl: string,
+  fileName: string,
+  originalSize: number,
+  crop: AvatarCropState,
+) {
+  const image = await loadImageFromObjectUrl(sourceDataUrl);
+  const baseName = fileName.replace(/\.[^.]+$/, '') || 'avatar';
+  let bestCandidate: {
+    blob: Blob;
+    dataUrl: string;
+    width: number;
+    height: number;
+  } | null = null;
+
+  for (const dimension of AVATAR_DIMENSION_STEPS) {
+    const canvas = createCroppedAvatarCanvas(image, crop, dimension);
+
+    for (const quality of AVATAR_WEBP_QUALITY_STEPS) {
+      const blob = await encodeCanvasToWebp(canvas, quality);
+      if (!blob) continue;
+
+      if (!bestCandidate || blob.size < bestCandidate.blob.size) {
+        bestCandidate = {
+          blob,
+          dataUrl: await readBlobAsDataUrl(blob),
+          width: dimension,
+          height: dimension,
+        };
+      }
+
+      if (blob.size <= MAX_AVATAR_UPLOAD_BYTES) {
+        const dataUrl = bestCandidate.blob === blob ? bestCandidate.dataUrl : await readBlobAsDataUrl(blob);
+        return {
+          dataUrl,
+          base64: dataUrlToBase64(dataUrl),
+          fileName: `${baseName}.webp`,
+          mimeType: 'image/webp',
+          originalSize,
+          outputSize: blob.size,
+          resized: true,
+          width: dimension,
+          height: dimension,
+        };
+      }
+    }
+  }
+
+  if (!bestCandidate) throw new Error('Cannot encode image');
+
+  return {
+    dataUrl: bestCandidate.dataUrl,
+    base64: dataUrlToBase64(bestCandidate.dataUrl),
+    fileName: `${baseName}.webp`,
+    mimeType: 'image/webp',
+    originalSize,
+    outputSize: bestCandidate.blob.size,
+    resized: true,
+    width: bestCandidate.width,
+    height: bestCandidate.height,
+  };
+}
+
 function formatFileSize(bytes: number) {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`;
@@ -187,7 +292,34 @@ export default function Profile() {
   const [avatarFileName, setAvatarFileName] = useState('');
   const [avatarError, setAvatarError] = useState('');
   const [pendingAvatarUpload, setPendingAvatarUpload] = useState<Awaited<ReturnType<typeof shrinkAvatarImage>> | null>(null);
+  const [avatarSourceDataUrl, setAvatarSourceDataUrl] = useState('');
+  const [avatarSourceFileName, setAvatarSourceFileName] = useState('');
+  const [avatarSourceSize, setAvatarSourceSize] = useState(0);
+  const [avatarSourceDimensions, setAvatarSourceDimensions] = useState({ width: 1, height: 1 });
+  const [avatarCrop, setAvatarCrop] = useState<AvatarCropState>({ zoom: 1, offsetX: 0, offsetY: 0 });
+  const [isRenderingAvatar, setIsRenderingAvatar] = useState(false);
+  const avatarDragRef = useRef({
+    active: false,
+    pointerId: 0,
+    startX: 0,
+    startY: 0,
+    offsetX: 0,
+    offsetY: 0,
+  });
   const [isSaving, setIsSaving] = useState(false);
+
+  const resetPendingAvatarState = useCallback((avatarUrl?: string | null) => {
+    setAvatarPreview(avatarUrl || '');
+    setAvatarFileName('');
+    setAvatarError('');
+    setPendingAvatarUpload(null);
+    setAvatarSourceDataUrl('');
+    setAvatarSourceFileName('');
+    setAvatarSourceSize(0);
+    setAvatarSourceDimensions({ width: 1, height: 1 });
+    setAvatarCrop({ zoom: 1, offsetX: 0, offsetY: 0 });
+    setIsRenderingAvatar(false);
+  }, []);
 
   const fetchProfile = useCallback(async (id: number) => {
     try {
@@ -197,14 +329,14 @@ export default function Profile() {
       const data = await res.json();
       setProfileData(data);
       setEditForm(data);
-      setAvatarPreview(data.avatar_data_url || '');
+      resetPendingAvatarState(data.avatar_data_url || '');
     } catch (err) {
       console.error(err);
       toast.error('ไม่สามารถโหลดข้อมูลได้');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [resetPendingAvatarState]);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('user');
@@ -245,21 +377,54 @@ export default function Profile() {
 
   const openEditModal = () => {
     setEditForm(profileData || {});
-    setAvatarPreview(profileData?.avatar_data_url || '');
-    setAvatarFileName('');
-    setAvatarError('');
-    setPendingAvatarUpload(null);
+    resetPendingAvatarState(profileData?.avatar_data_url || '');
     setIsModalOpen(true);
   };
 
   const closeEditModal = () => {
     setEditForm(profileData || {});
-    setAvatarPreview(profileData?.avatar_data_url || '');
-    setAvatarFileName('');
-    setAvatarError('');
-    setPendingAvatarUpload(null);
+    resetPendingAvatarState(profileData?.avatar_data_url || '');
     setIsModalOpen(false);
   };
+
+  const renderCroppedAvatar = useCallback(async (
+    sourceDataUrl = avatarSourceDataUrl,
+    fileName = avatarSourceFileName,
+    sourceSize = avatarSourceSize,
+    crop = avatarCrop,
+  ) => {
+    if (!sourceDataUrl || !fileName) return null;
+
+    setIsRenderingAvatar(true);
+    try {
+      const optimizedAvatar = await createCroppedAvatarImage(sourceDataUrl, fileName, sourceSize, crop);
+      if (optimizedAvatar.outputSize > MAX_AVATAR_UPLOAD_BYTES) {
+        const message = `รูปหลังย่อยังมีขนาด ${formatFileSize(optimizedAvatar.outputSize)} กรุณาปรับขนาดหรือเลือกไฟล์ใหม่`;
+        setAvatarError(message);
+        toast.warning(message);
+        return null;
+      }
+
+      setEditForm((current: any) => ({ ...current, avatar_data_url: optimizedAvatar.dataUrl }));
+      setAvatarPreview(optimizedAvatar.dataUrl);
+      setPendingAvatarUpload(optimizedAvatar);
+      setAvatarFileName(`${optimizedAvatar.fileName} (${formatFileSize(sourceSize)} → ${formatFileSize(optimizedAvatar.outputSize)})`);
+      setAvatarError('');
+      return optimizedAvatar;
+    } finally {
+      setIsRenderingAvatar(false);
+    }
+  }, [avatarCrop, avatarSourceDataUrl, avatarSourceFileName, avatarSourceSize]);
+
+  useEffect(() => {
+    if (!avatarSourceDataUrl || !avatarSourceFileName) return;
+
+    const timer = window.setTimeout(() => {
+      renderCroppedAvatar();
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, [avatarCrop, avatarSourceDataUrl, avatarSourceFileName, renderCroppedAvatar]);
 
   const handleAvatarChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -281,20 +446,18 @@ export default function Profile() {
     }
 
     try {
-      toast.info('กำลังย่อรูปภาพก่อนอัปโหลดไป Google Drive...');
-      const optimizedAvatar = await shrinkAvatarImage(file);
-      if (optimizedAvatar.outputSize > MAX_AVATAR_UPLOAD_BYTES) {
-        const message = `รูปหลังย่อยังมีขนาด ${formatFileSize(optimizedAvatar.outputSize)} กรุณาเลือกไฟล์ที่เบราว์เซอร์สามารถย่อให้ต่ำกว่า ${formatFileSize(MAX_AVATAR_UPLOAD_BYTES)} ได้ เช่น JPG, PNG หรือ WebP`;
-        setAvatarError(message);
-        toast.warning(message);
-        return;
-      }
-      setEditForm((current: any) => ({ ...current, avatar_data_url: optimizedAvatar.dataUrl }));
-      setAvatarPreview(optimizedAvatar.dataUrl);
-      setPendingAvatarUpload(optimizedAvatar);
-      setAvatarFileName(`${optimizedAvatar.fileName} (${formatFileSize(file.size)} → ${formatFileSize(optimizedAvatar.outputSize)})`);
-      setAvatarError('');
-      toast.success('ย่อรูปเรียบร้อยแล้ว กดบันทึกเพื่ออัปโหลดไป Google Drive');
+      toast.info('กำลังเตรียมรูปภาพสำหรับปรับตำแหน่ง...');
+      const sourceDataUrl = await readFileAsDataUrl(file);
+      const image = await loadImageFromObjectUrl(sourceDataUrl);
+      const nextCrop = { zoom: 1, offsetX: 0, offsetY: 0 };
+
+      setAvatarSourceDataUrl(sourceDataUrl);
+      setAvatarSourceFileName(file.name);
+      setAvatarSourceSize(file.size);
+      setAvatarSourceDimensions({ width: image.naturalWidth, height: image.naturalHeight });
+      setAvatarCrop(nextCrop);
+      await renderCroppedAvatar(sourceDataUrl, file.name, file.size, nextCrop);
+      toast.success('เลือกรูปเรียบร้อยแล้ว สามารถเลื่อนและปรับขนาดรูปก่อนกดบันทึก');
     } catch (error) {
       console.error(error);
       const message = 'ไม่สามารถอ่านไฟล์รูปภาพนี้ได้';
@@ -305,28 +468,70 @@ export default function Profile() {
 
   const handleRemoveAvatar = () => {
     setEditForm((current: any) => ({ ...current, avatar_data_url: null }));
-    setAvatarPreview('');
-    setAvatarFileName('');
-    setAvatarError('');
-    setPendingAvatarUpload(null);
+    resetPendingAvatarState('');
     toast.info('ลบรูปประจำตัวแล้ว กดบันทึกเพื่อยืนยัน');
+  };
+
+  const handleAvatarPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!avatarSourceDataUrl) return;
+
+    event.preventDefault();
+    avatarDragRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX: avatarCrop.offsetX,
+      offsetY: avatarCrop.offsetY,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleAvatarPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = avatarDragRef.current;
+    if (!drag.active || drag.pointerId !== event.pointerId) return;
+
+    setAvatarCrop((current) => ({
+      ...current,
+      offsetX: drag.offsetX + event.clientX - drag.startX,
+      offsetY: drag.offsetY + event.clientY - drag.startY,
+    }));
+  };
+
+  const handleAvatarPointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = avatarDragRef.current;
+    if (drag.pointerId === event.pointerId) {
+      avatarDragRef.current.active = false;
+    }
+  };
+
+  const resetAvatarCrop = () => {
+    setAvatarCrop({ zoom: 1, offsetX: 0, offsetY: 0 });
   };
 
   const handleSave = async () => {
     setIsSaving(true);
     try {
       let avatarUrl = editForm.avatar_data_url || null;
+      let avatarToUpload = pendingAvatarUpload;
 
-      if (pendingAvatarUpload) {
+      if (avatarSourceDataUrl) {
+        avatarToUpload = await renderCroppedAvatar();
+        if (!avatarToUpload) {
+          throw new Error('ไม่สามารถเตรียมรูปประจำตัวสำหรับอัปโหลดได้');
+        }
+      }
+
+      if (avatarToUpload) {
         const uploadRes = await fetch(`${API_BASE}/api/users/profile/avatar-drive`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             user_id: userData.user_id,
             display_name: editForm.Name_Surname || profileData?.Name_Surname || userData?.Name_Surname,
-            file_name: pendingAvatarUpload.fileName,
-            mime_type: pendingAvatarUpload.mimeType,
-            base64: pendingAvatarUpload.base64,
+            file_name: avatarToUpload.fileName,
+            mime_type: avatarToUpload.mimeType,
+            base64: avatarToUpload.base64,
           }),
         });
         const uploadResult = await uploadRes.json();
@@ -362,6 +567,9 @@ export default function Profile() {
       setAvatarPreview(payload.avatar_data_url || '');
       setAvatarFileName('');
       setPendingAvatarUpload(null);
+      setAvatarSourceDataUrl('');
+      setAvatarSourceFileName('');
+      setAvatarSourceSize(0);
       setIsModalOpen(false);
     } catch (err) {
       console.error(err);
@@ -373,6 +581,12 @@ export default function Profile() {
 
   const profileAvatarUrl = getAvatarUrl(profileData?.Name_Surname, profileData?.avatar_data_url);
   const editAvatarUrl = getAvatarUrl(editForm?.Name_Surname || profileData?.Name_Surname, avatarPreview);
+  const avatarFitScale = Math.min(
+    AVATAR_EDITOR_FRAME_SIZE / avatarSourceDimensions.width,
+    AVATAR_EDITOR_FRAME_SIZE / avatarSourceDimensions.height,
+  );
+  const avatarDisplayWidth = avatarSourceDimensions.width * avatarFitScale * avatarCrop.zoom;
+  const avatarDisplayHeight = avatarSourceDimensions.height * avatarFitScale * avatarCrop.zoom;
 
   if (isLoading) {
     return (
@@ -486,14 +700,49 @@ export default function Profile() {
             <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="sm:col-span-2 rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-50 to-white p-4">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-                  <img
-                    src={editAvatarUrl}
-                    onError={(event) => {
-                      event.currentTarget.src = getAvatarUrl(editForm?.Name_Surname || profileData?.Name_Surname);
-                    }}
-                    className="h-24 w-24 rounded-full border-4 border-white bg-white object-contain shadow"
-                    alt="Avatar preview"
-                  />
+                  <div className="flex flex-col items-center gap-2">
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onPointerDown={handleAvatarPointerDown}
+                      onPointerMove={handleAvatarPointerMove}
+                      onPointerUp={handleAvatarPointerEnd}
+                      onPointerCancel={handleAvatarPointerEnd}
+                      className={`relative h-32 w-32 overflow-hidden rounded-full border-4 border-white bg-white shadow ring-1 ring-blue-100 ${avatarSourceDataUrl ? 'cursor-grab touch-none active:cursor-grabbing' : ''}`}
+                      aria-label="กรอบปรับตำแหน่งรูปประจำตัว"
+                    >
+                      {avatarSourceDataUrl ? (
+                        <img
+                          src={avatarSourceDataUrl}
+                          draggable={false}
+                          className="pointer-events-none absolute left-1/2 top-1/2 max-w-none select-none"
+                          style={{
+                            width: avatarDisplayWidth,
+                            height: avatarDisplayHeight,
+                            transform: `translate(-50%, -50%) translate(${avatarCrop.offsetX}px, ${avatarCrop.offsetY}px)`,
+                          }}
+                          alt="Avatar crop preview"
+                        />
+                      ) : (
+                        <img
+                          src={editAvatarUrl}
+                          onError={(event) => {
+                            event.currentTarget.src = getAvatarUrl(editForm?.Name_Surname || profileData?.Name_Surname);
+                          }}
+                          className="h-full w-full bg-white object-contain"
+                          alt="Avatar preview"
+                        />
+                      )}
+                      {isRenderingAvatar && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-white/60 text-[10px] font-bold text-blue-600">
+                          กำลังจัดรูป...
+                        </div>
+                      )}
+                    </div>
+                    {avatarSourceDataUrl && (
+                      <span className="text-[11px] font-semibold text-slate-500">ลากรูปเพื่อจัดตำแหน่ง</span>
+                    )}
+                  </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 text-sm font-bold text-slate-800">
                       <ImagePlus size={17} className="text-blue-600" />
@@ -519,6 +768,38 @@ export default function Profile() {
                         </button>
                       )}
                     </div>
+                    {avatarSourceDataUrl && (
+                      <div className="mt-4 rounded-xl border border-blue-100 bg-white/80 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <label htmlFor="avatar-zoom" className="text-xs font-bold text-slate-600">
+                            ขนาดรูป
+                          </label>
+                          <button
+                            type="button"
+                            onClick={resetAvatarCrop}
+                            className="text-xs font-semibold text-blue-600 transition hover:text-blue-700"
+                          >
+                            รีเซ็ต
+                          </button>
+                        </div>
+                        <input
+                          id="avatar-zoom"
+                          type="range"
+                          min={AVATAR_MIN_ZOOM}
+                          max={AVATAR_MAX_ZOOM}
+                          step="0.01"
+                          value={avatarCrop.zoom}
+                          onChange={(event) => {
+                            const zoom = Number(event.target.value);
+                            setAvatarCrop((current) => ({ ...current, zoom }));
+                          }}
+                          className="mt-2 w-full accent-blue-600"
+                        />
+                        <p className="mt-1 text-[11px] font-medium text-slate-400">
+                          เลื่อนแถบเพื่อซูมเข้า-ออก แล้วลากรูปในกรอบวงกลมให้พอดี
+                        </p>
+                      </div>
+                    )}
                     {avatarFileName && <p className="mt-2 text-xs font-semibold text-blue-600">{avatarFileName}</p>}
                     {avatarError && <p className="mt-2 text-xs font-semibold text-red-500">{avatarError}</p>}
                   </div>
