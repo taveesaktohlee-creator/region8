@@ -8,6 +8,8 @@ import ChangePassword from './user/ChangePassword'
 import UserSettings from './user/UserSettings'
 import TrainingHistory from './training/TrainingHistory'
 import TrainingCourses from './training/TrainingCourses'
+import TrainingCourseDetail from './training/TrainingCourseDetail'
+import TrainingAdmin from './training/TrainingAdmin'
 import ProgramMonitoring from './monitor/ProgramMonitoring'
 import MonitorData from './user/monitor_data'
 import SystemUsageReport from './user/SystemUsageReport'
@@ -45,6 +47,7 @@ const PROTECTED_ROUTES: Record<string, { component: React.ReactNode; menuKey: st
   '/change-password':      { component: <ChangePassword />,      menuKey: 'change_password' },
   '/user-settings':        { component: <UserSettings />,         menuKey: 'user_settings' },
   '/monitor-data':         { component: <MonitorData />,          menuKey: 'monitor_data' },
+  '/training-admin':       { component: <TrainingAdmin />,        menuKey: 'training_admin' },
   '/training-history':     { component: <TrainingHistory />,      menuKey: 'training' },
   '/training-courses':     { component: <TrainingCourses />,      menuKey: 'report_course' },
   '/program-monitoring':   { component: <ProgramMonitoring />,    menuKey: 'report_monitor' },
@@ -56,6 +59,15 @@ function AppRouter() {
   // หน้าที่ไม่ต้องตรวจสอบสิทธิ์
   if (path === '/register') return <Register />;
   if (path === '/index') return <Index />;
+
+  if (path.startsWith('/training-courses/')) {
+    const courseId = Number(path.split('/').filter(Boolean)[1]);
+    return (
+      <PermissionGuard menuKey="report_course">
+        <TrainingCourseDetail courseId={courseId} />
+      </PermissionGuard>
+    );
+  }
 
   // หน้าที่ต้องตรวจสอบสิทธิ์
   const protectedRoute = PROTECTED_ROUTES[path];

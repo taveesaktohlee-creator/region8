@@ -25,6 +25,7 @@ const LEGACY_MENU_ITEMS: UserMenuItem[] = [
   { menu_id: 4, menu_key: 'change_password', menu_name: 'เปลี่ยนรหัสผ่าน', menu_type: 'sidebar', menu_icon: 'KeyRound', menu_href: '/change-password', sort_order: 4, is_active: 1 },
   { menu_id: 5, menu_key: 'user_settings', menu_name: 'ตั้งค่าผู้ใช้งาน', menu_type: 'sidebar', menu_icon: 'Settings', menu_href: '/user-settings', sort_order: 5, is_active: 1 },
   { menu_id: 6, menu_key: 'monitor_data', menu_name: 'บันทึกกำกับติดตามกลุ่มเทคฯ', menu_type: 'sidebar', menu_icon: 'ClipboardEdit', menu_href: '/monitor-data', sort_order: 6, is_active: 1 },
+  { menu_id: 7, menu_key: 'training_admin', menu_name: 'จัดการระบบอบรม', menu_type: 'sidebar', menu_icon: 'GraduationCap', menu_href: '/training-admin', sort_order: 7, is_active: 1 },
   { menu_id: 10, menu_key: 'report_monitor', menu_name: 'รายงานการกำกับติดตามฯ', menu_type: 'content', menu_icon: 'Monitor', menu_href: '/program-monitoring', sort_order: 10, is_active: 1 },
   { menu_id: 11, menu_key: 'report_course', menu_name: 'หลักสูตรการอบรม', menu_type: 'content', menu_icon: 'BookOpen', menu_href: '/training-courses', sort_order: 11, is_active: 1 },
   { menu_id: 12, menu_key: 'report_usage', menu_name: 'รายงานการใช้งานระบบ', menu_type: 'content', menu_icon: 'Users', menu_href: '/system-usage-report', sort_order: 12, is_active: 1 },

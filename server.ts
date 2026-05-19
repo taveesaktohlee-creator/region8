@@ -21,6 +21,7 @@ function getDateRange(query: { from?: unknown; to?: unknown }) {
 let usageTablesReady: Promise<void> | null = null;
 let profileAvatarReady: Promise<void> | null = null;
 let monitorRecordsReady: Promise<void> | null = null;
+let trainingTablesReady: Promise<void> | null = null;
 
 const DEFAULT_MENU_ITEMS = [
   ['home', 'หน้าหลัก', 'sidebar', 'Home', '/index', 1],
@@ -29,6 +30,7 @@ const DEFAULT_MENU_ITEMS = [
   ['change_password', 'เปลี่ยนรหัสผ่าน', 'sidebar', 'KeyRound', '/change-password', 4],
   ['user_settings', 'ตั้งค่าผู้ใช้งาน', 'sidebar', 'Settings', '/user-settings', 5],
   ['monitor_data', 'บันทึกกำกับติดตามกลุ่มเทคฯ', 'sidebar', 'ClipboardEdit', '/monitor-data', 6],
+  ['training_admin', 'จัดการระบบอบรม', 'sidebar', 'GraduationCap', '/training-admin', 7],
   ['report_monitor', 'รายงานการกำกับติดตามฯ', 'content', 'Monitor', '/program-monitoring', 10],
   ['report_course', 'หลักสูตรการอบรม', 'content', 'BookOpen', '/training-courses', 11],
   ['report_usage', 'รายงานการใช้งานระบบ', 'content', 'Users', '/system-usage-report', 12],
@@ -84,6 +86,15 @@ async function ensureDefaultMenuItems() {
     LEFT JOIN group_permissions gp ON gp.group_id = g.group_id AND gp.menu_id = m.menu_id
     WHERE gp.perm_id IS NULL
   `);
+
+  await pool.query(`
+    INSERT INTO group_permissions (group_id, menu_id, can_view)
+    SELECT g.group_id, m.menu_id, 1
+    FROM user_groups g
+    JOIN menu_items m ON m.menu_key = 'training_admin'
+    LEFT JOIN group_permissions gp ON gp.group_id = g.group_id AND gp.menu_id = m.menu_id
+    WHERE gp.perm_id IS NULL
+  `);
 }
 
 async function ensureMonitorRecordsTable() {
@@ -107,6 +118,266 @@ async function ensureMonitorRecordsTable() {
   return monitorRecordsReady;
 }
 
+function toInt(value: unknown, fallback = 0) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? Math.round(numberValue) : fallback;
+}
+
+function normalizeCourseType(value: unknown) {
+  const text = String(value || '').trim();
+  if (['online', 'zoom', 'onsite'].includes(text)) return text;
+  return 'online';
+}
+
+function normalizeTrainingStatus(value: unknown) {
+  const text = String(value || '').trim();
+  if (['draft', 'open', 'closed'].includes(text)) return text;
+  return 'open';
+}
+
+async function seedTrainingSampleData() {
+  const [rows]: any = await pool.query('SELECT COUNT(*) AS count FROM training_courses');
+  if ((rows[0]?.count || 0) > 0) return;
+
+  const [courseResult]: any = await pool.query(
+    `INSERT INTO training_courses
+     (title, category, course_type, status, thumbnail_url, instructor, target_group,
+      learning_objectives, learning_topics, content_summary, evaluation_method, description,
+      duration_minutes, pass_score, certificate_enabled)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      'Digital Literacy: ความฉลาดทางดิจิทัล (Digital Intelligence)',
+      'Digital Literacy',
+      'online',
+      'open',
+      'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80',
+      'อาจารย์สมมติ วิทยากรดิจิทัล',
+      'บุคลากรสำนักงานตรวจบัญชีสหกรณ์ที่ 8',
+      'เข้าใจทักษะดิจิทัลที่จำเป็น ใช้งานเทคโนโลยีอย่างปลอดภัย และประยุกต์ใช้กับงานราชการ',
+      'Digital Identity\nDigital Use\nDigital Security\nDigital Literacy\nDigital Communication',
+      'หลักสูตรออนไลน์สำหรับพัฒนาความรู้พื้นฐานด้านดิจิทัลและความปลอดภัยในการใช้งานระบบสารสนเทศ',
+      'ทำแบบทดสอบก่อนเรียน เรียนบทเรียนออนไลน์ ทำแบบทดสอบหลังเรียนให้ได้อย่างน้อย 70% และประเมินหลักสูตร',
+      'หลักสูตรนี้ออกแบบให้ผู้เรียนสามารถเรียนรู้ด้วยตนเองผ่านวิดีโอและเอกสารประกอบจาก Google Drive',
+      90,
+      70,
+      1,
+    ],
+  );
+
+  const courseId = courseResult.insertId;
+  await pool.query(
+    'INSERT INTO training_lessons (course_id, title, lesson_type, youtube_url, content, duration_seconds, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [
+      courseId,
+      'บทนำความฉลาดทางดิจิทัล',
+      'video',
+      'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      'เรียนรู้ภาพรวมทักษะดิจิทัลที่จำเป็นสำหรับบุคลากรภาครัฐ',
+      900,
+      1,
+    ],
+  );
+  await pool.query(
+    'INSERT INTO training_materials (course_id, title, drive_url, sort_order) VALUES (?, ?, ?, ?)',
+    [courseId, 'เอกสารประกอบหลักสูตร Digital Literacy', 'https://drive.google.com/drive/folders/' + GOOGLE_DRIVE_AVATAR_FOLDER_ID, 1],
+  );
+
+  for (const quizType of ['pre', 'post']) {
+    const [quizResult]: any = await pool.query(
+      'INSERT INTO training_quizzes (course_id, quiz_type, title, pass_score) VALUES (?, ?, ?, ?)',
+      [courseId, quizType, quizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน', 70],
+    );
+    const [questionResult]: any = await pool.query(
+      'INSERT INTO training_questions (quiz_id, question_text, sort_order) VALUES (?, ?, ?)',
+      [quizResult.insertId, 'ข้อใดเป็นพฤติกรรมที่ช่วยเพิ่มความปลอดภัยในการใช้งานระบบสารสนเทศ', 1],
+    );
+    await pool.query(
+      'INSERT INTO training_choices (question_id, choice_text, is_correct, sort_order) VALUES ?',
+      [[
+        [questionResult.insertId, 'ใช้รหัสผ่านเดียวกันทุกระบบ', 0, 1],
+        [questionResult.insertId, 'เปิดเผยรหัสผ่านให้เพื่อนร่วมงาน', 0, 2],
+        [questionResult.insertId, 'ตั้งรหัสผ่านรัดกุมและไม่เปิดเผยให้ผู้อื่น', 1, 3],
+        [questionResult.insertId, 'บันทึกรหัสผ่านไว้ในกระดาษบนโต๊ะ', 0, 4],
+      ]],
+    );
+  }
+}
+
+async function ensureTrainingTables() {
+  if (!trainingTablesReady) {
+    trainingTablesReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_courses (
+          course_id INT AUTO_INCREMENT PRIMARY KEY,
+          title VARCHAR(255) NOT NULL,
+          category VARCHAR(120) DEFAULT '',
+          course_type ENUM('online','zoom','onsite') NOT NULL DEFAULT 'online',
+          status ENUM('draft','open','closed') NOT NULL DEFAULT 'open',
+          thumbnail_url TEXT NULL,
+          instructor VARCHAR(255) DEFAULT '',
+          target_group TEXT NULL,
+          learning_objectives TEXT NULL,
+          learning_topics TEXT NULL,
+          content_summary TEXT NULL,
+          evaluation_method TEXT NULL,
+          description TEXT NULL,
+          duration_minutes INT DEFAULT 0,
+          zoom_url TEXT NULL,
+          location VARCHAR(255) DEFAULT '',
+          pass_score INT DEFAULT 70,
+          certificate_enabled TINYINT(1) DEFAULT 1,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_training_status (status),
+          INDEX idx_training_type (course_type)
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_lessons (
+          lesson_id INT AUTO_INCREMENT PRIMARY KEY,
+          course_id INT NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          lesson_type ENUM('video','document','text') DEFAULT 'video',
+          youtube_url TEXT NULL,
+          content TEXT NULL,
+          duration_seconds INT DEFAULT 0,
+          sort_order INT DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (course_id) REFERENCES training_courses(course_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_materials (
+          material_id INT AUTO_INCREMENT PRIMARY KEY,
+          course_id INT NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          drive_url TEXT NOT NULL,
+          drive_file_id VARCHAR(255) DEFAULT '',
+          sort_order INT DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (course_id) REFERENCES training_courses(course_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_quizzes (
+          quiz_id INT AUTO_INCREMENT PRIMARY KEY,
+          course_id INT NOT NULL,
+          quiz_type ENUM('pre','post') NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          pass_score INT DEFAULT 70,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY uq_training_quiz_type (course_id, quiz_type),
+          FOREIGN KEY (course_id) REFERENCES training_courses(course_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_questions (
+          question_id INT AUTO_INCREMENT PRIMARY KEY,
+          quiz_id INT NOT NULL,
+          question_text TEXT NOT NULL,
+          sort_order INT DEFAULT 0,
+          FOREIGN KEY (quiz_id) REFERENCES training_quizzes(quiz_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_choices (
+          choice_id INT AUTO_INCREMENT PRIMARY KEY,
+          question_id INT NOT NULL,
+          choice_text TEXT NOT NULL,
+          is_correct TINYINT(1) DEFAULT 0,
+          sort_order INT DEFAULT 0,
+          FOREIGN KEY (question_id) REFERENCES training_questions(question_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_enrollments (
+          enrollment_id INT AUTO_INCREMENT PRIMARY KEY,
+          course_id INT NOT NULL,
+          user_id INT NOT NULL,
+          status ENUM('registered','in_progress','completed') DEFAULT 'registered',
+          pre_score DECIMAL(5,2) NULL,
+          pre_total INT DEFAULT 0,
+          post_score DECIMAL(5,2) NULL,
+          post_total INT DEFAULT 0,
+          attended_seconds INT DEFAULT 0,
+          attendance_confirmed TINYINT(1) DEFAULT 0,
+          evaluated TINYINT(1) DEFAULT 0,
+          certificate_code VARCHAR(80) DEFAULT '',
+          registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_started_at DATETIME NULL,
+          completed_at DATETIME NULL,
+          UNIQUE KEY uq_training_user_course (course_id, user_id),
+          INDEX idx_training_enroll_user (user_id),
+          FOREIGN KEY (course_id) REFERENCES training_courses(course_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_attendance_logs (
+          log_id INT AUTO_INCREMENT PRIMARY KEY,
+          enrollment_id INT NOT NULL,
+          start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+          end_time DATETIME NULL,
+          active_seconds INT DEFAULT 0,
+          FOREIGN KEY (enrollment_id) REFERENCES training_enrollments(enrollment_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_quiz_attempts (
+          attempt_id INT AUTO_INCREMENT PRIMARY KEY,
+          enrollment_id INT NOT NULL,
+          quiz_id INT NOT NULL,
+          quiz_type ENUM('pre','post') NOT NULL,
+          score DECIMAL(5,2) DEFAULT 0,
+          total_questions INT DEFAULT 0,
+          answers LONGTEXT NULL,
+          submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_training_attempt (enrollment_id, quiz_type),
+          FOREIGN KEY (enrollment_id) REFERENCES training_enrollments(enrollment_id) ON DELETE CASCADE,
+          FOREIGN KEY (quiz_id) REFERENCES training_quizzes(quiz_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_evaluations (
+          evaluation_id INT AUTO_INCREMENT PRIMARY KEY,
+          enrollment_id INT NOT NULL UNIQUE,
+          rating_content INT DEFAULT 0,
+          rating_instructor INT DEFAULT 0,
+          rating_overall INT DEFAULT 0,
+          comment TEXT NULL,
+          submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (enrollment_id) REFERENCES training_enrollments(enrollment_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await seedTrainingSampleData();
+    })().catch((error) => {
+      trainingTablesReady = null;
+      throw error;
+    });
+  }
+
+  return trainingTablesReady;
+}
+
+function getYouTubeEmbedUrl(url?: string | null) {
+  if (!url) return '';
+  const raw = String(url).trim();
+  const watchMatch = raw.match(/[?&]v=([^&]+)/);
+  const shortMatch = raw.match(/youtu\.be\/([^?&/]+)/);
+  const embedMatch = raw.match(/youtube\.com\/embed\/([^?&/]+)/);
+  const id = watchMatch?.[1] || shortMatch?.[1] || embedMatch?.[1];
+  return id ? `https://www.youtube.com/embed/${id}` : raw;
+}
+
 function isValidAvatarDataUrl(value: unknown) {
   if (value === null || value === undefined || value === '') return true;
   if (typeof value !== 'string') return false;
@@ -119,11 +390,72 @@ function sanitizeAvatarFileName(value: unknown, fallbackName = 'avatar') {
   return raw.replace(/[\\/:*?"<>|#%{}~&]/g, '-').replace(/\s+/g, '-').slice(0, 120);
 }
 
+function extractGoogleDriveFileId(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+
+  const raw = value.trim();
+
+  try {
+    const url = new URL(raw);
+    const idFromQuery = url.searchParams.get('id');
+    if (idFromQuery) return idFromQuery;
+
+    const fileMatch = url.pathname.match(/\/file\/d\/([^/]+)/);
+    if (fileMatch?.[1]) return fileMatch[1];
+
+    const foldersMatch = url.pathname.match(/\/folders\/([^/]+)/);
+    if (foldersMatch?.[1]) return foldersMatch[1];
+  } catch {
+    // Plain Drive IDs can still be passed from older saved values.
+  }
+
+  const ucMatch = raw.match(/[?&]id=([^&]+)/);
+  if (ucMatch?.[1]) return decodeURIComponent(ucMatch[1]);
+
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(raw)) return raw;
+
+  return '';
+}
+
 function getAvatarUploadErrorMessage(message: string) {
   if (/DriveApp|getFolderById|Required permissions|Authorization|permission/i.test(message)) {
     return 'Google Apps Script ยังไม่ได้รับสิทธิ์ Google Drive สำหรับอัปโหลดรูป โปรดอัปเดต appsscript.json จากโฟลเดอร์ google-apps-script แล้ว Deploy เป็น New version โดยตั้ง Execute as: Me และ Who has access: Anyone จากนั้นกดอนุญาตสิทธิ์ Drive';
   }
   return message;
+}
+
+async function deleteAvatarFromGoogleDrive(avatarUrlOrFileId: unknown) {
+  const fileId = extractGoogleDriveFileId(avatarUrlOrFileId);
+  if (!fileId) return { skipped: true, reason: 'ไม่พบ Google Drive fileId' };
+
+  const response = await fetch(GOOGLE_AVATAR_UPLOAD_SCRIPT_URL, {
+    method: 'POST',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      action: 'deleteAvatar',
+      fileId,
+    }),
+  });
+
+  const text = await response.text();
+  if (!response.ok) throw new Error(text || 'Cannot delete avatar from Google Drive');
+  if (/script function not found|<!doctype|<html/i.test(text)) {
+    throw new Error('Google Apps Script ยังไม่รองรับการลบรูปจาก Google Drive');
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Google Apps Script ส่งผลลัพธ์การลบรูปกลับมาไม่ถูกต้อง');
+  }
+
+  if (parsed?.ok === false) {
+    throw new Error(getAvatarUploadErrorMessage(parsed.error || 'ลบรูปจาก Google Drive ไม่สำเร็จ'));
+  }
+
+  return parsed;
 }
 
 async function ensureUsageTables() {
@@ -427,6 +759,27 @@ app.post('/api/users/profile/avatar-drive', async (req, res) => {
   }
 });
 
+// ลบรูปประจำตัวเดิมออกจาก Google Drive
+app.post('/api/users/profile/avatar-drive/delete', async (req, res) => {
+  try {
+    const { file_id, fileId, avatar_url, avatarUrl } = req.body || {};
+    const target = file_id || fileId || avatar_url || avatarUrl;
+    const result = await deleteAvatarFromGoogleDrive(target);
+    res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      ok: false,
+      error: error instanceof Error
+        ? error.message
+        : 'ไม่สามารถลบรูปประจำตัวเดิมจาก Google Drive ได้',
+    });
+  }
+});
+
 // อัปเดตข้อมูลโปรไฟล์ผู้ใช้
 app.put('/api/users/profile/:id', async (req, res) => {
   try {
@@ -582,6 +935,547 @@ app.post('/api/google-monitor-data', async (req, res) => {
         ? error.message
         : 'Google Apps Script ยังไม่มี doPost(e) สำหรับบันทึกข้อมูล กรุณาอัปเดตและ Deploy Apps Script ใหม่',
     });
+  }
+});
+
+// ====== TRAINING / E-LEARNING ======
+
+app.post('/api/admin/setup-training-tables', async (_req, res) => {
+  try {
+    await ensureTrainingTables();
+    await ensureDefaultMenuItems();
+    res.json({ message: 'ตารางระบบอบรมถูกสร้างเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการสร้างตารางระบบอบรม' });
+  }
+});
+
+app.get('/api/training/courses', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const userId = toInt(req.query.user_id, 0);
+    const params: any[] = [];
+    let enrollmentSelect = 'NULL AS enrollment_id, NULL AS enrollment_status, 0 AS attended_seconds, NULL AS pre_score, NULL AS post_score, 0 AS evaluated';
+    let enrollmentJoin = '';
+
+    if (userId > 0) {
+      enrollmentSelect = 'e.enrollment_id, e.status AS enrollment_status, e.attended_seconds, e.pre_score, e.post_score, e.evaluated';
+      enrollmentJoin = 'LEFT JOIN training_enrollments e ON e.course_id = c.course_id AND e.user_id = ?';
+      params.push(userId);
+    }
+
+    const [rows]: any = await pool.query(`
+      SELECT c.*,
+             ${enrollmentSelect},
+             (SELECT COUNT(*) FROM training_enrollments WHERE course_id = c.course_id) AS enrolled_count,
+             (SELECT COUNT(*) FROM training_lessons WHERE course_id = c.course_id) AS lesson_count,
+             (SELECT COUNT(*) FROM training_materials WHERE course_id = c.course_id) AS material_count
+      FROM training_courses c
+      ${enrollmentJoin}
+      WHERE c.status <> 'draft'
+      ORDER BY c.updated_at DESC, c.course_id DESC
+    `, params);
+
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงหลักสูตรได้' });
+  }
+});
+
+app.get('/api/training/courses/:id', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const userId = toInt(req.query.user_id, 0);
+
+    const [courses]: any = await pool.query('SELECT * FROM training_courses WHERE course_id = ?', [courseId]);
+    if (courses.length === 0) return res.status(404).json({ error: 'ไม่พบหลักสูตร' });
+
+    const [lessons]: any = await pool.query(
+      'SELECT *, ? AS embed_url FROM training_lessons WHERE course_id = ? ORDER BY sort_order, lesson_id',
+      ['', courseId],
+    );
+    const [materials]: any = await pool.query(
+      'SELECT * FROM training_materials WHERE course_id = ? ORDER BY sort_order, material_id',
+      [courseId],
+    );
+    const [quizzes]: any = await pool.query(
+      'SELECT quiz_id, course_id, quiz_type, title, pass_score FROM training_quizzes WHERE course_id = ? ORDER BY FIELD(quiz_type, "pre", "post")',
+      [courseId],
+    );
+
+    const enrollmentRows = userId > 0
+      ? await pool.query('SELECT * FROM training_enrollments WHERE course_id = ? AND user_id = ? LIMIT 1', [courseId, userId])
+      : [[]];
+    const enrollment = (enrollmentRows[0] as any[])[0] || null;
+
+    res.json({
+      course: courses[0],
+      lessons: lessons.map((lesson: any) => ({ ...lesson, embed_url: getYouTubeEmbedUrl(lesson.youtube_url) })),
+      materials,
+      quizzes,
+      enrollment,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายละเอียดหลักสูตรได้' });
+  }
+});
+
+app.post('/api/training/courses/:id/enroll', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const userId = toInt(req.body.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+
+    await pool.query(
+      `INSERT INTO training_enrollments (course_id, user_id, status)
+       VALUES (?, ?, 'registered')
+       ON DUPLICATE KEY UPDATE enrollment_id = LAST_INSERT_ID(enrollment_id)`,
+      [courseId, userId],
+    );
+    const [rows]: any = await pool.query('SELECT * FROM training_enrollments WHERE course_id = ? AND user_id = ? LIMIT 1', [courseId, userId]);
+    res.json({ message: 'ลงทะเบียนหลักสูตรเรียบร้อยแล้ว', enrollment: rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ลงทะเบียนหลักสูตรไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/training/enrollments/:id/start', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const enrollmentId = toInt(req.params.id);
+    await pool.query(
+      `UPDATE training_enrollments
+       SET status = IF(status = 'completed', status, 'in_progress'), last_started_at = NOW()
+       WHERE enrollment_id = ?`,
+      [enrollmentId],
+    );
+    const [result]: any = await pool.query(
+      'INSERT INTO training_attendance_logs (enrollment_id, start_time) VALUES (?, NOW())',
+      [enrollmentId],
+    );
+    res.json({ message: 'เริ่มนับเวลาเข้าอบรมแล้ว', log_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เริ่มนับเวลาไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/training/enrollments/:id/time', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const enrollmentId = toInt(req.params.id);
+    const seconds = Math.max(0, Math.min(toInt(req.body.seconds), 3600));
+    if (seconds <= 0) return res.json({ message: 'ไม่มีเวลาที่ต้องบันทึก' });
+
+    await pool.query(
+      'UPDATE training_enrollments SET attended_seconds = attended_seconds + ? WHERE enrollment_id = ?',
+      [seconds, enrollmentId],
+    );
+    if (req.body.log_id) {
+      await pool.query(
+        'UPDATE training_attendance_logs SET active_seconds = active_seconds + ?, end_time = NOW() WHERE log_id = ? AND enrollment_id = ?',
+        [seconds, req.body.log_id, enrollmentId],
+      );
+    } else {
+      await pool.query(
+        'INSERT INTO training_attendance_logs (enrollment_id, start_time, end_time, active_seconds) VALUES (?, NOW(), NOW(), ?)',
+        [enrollmentId, seconds],
+      );
+    }
+    res.json({ message: 'บันทึกเวลาเข้าอบรมเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'บันทึกเวลาเข้าอบรมไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/training/quizzes/:id', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const quizId = toInt(req.params.id);
+    const [quizzes]: any = await pool.query('SELECT quiz_id, course_id, quiz_type, title, pass_score FROM training_quizzes WHERE quiz_id = ?', [quizId]);
+    if (quizzes.length === 0) return res.status(404).json({ error: 'ไม่พบแบบทดสอบ' });
+
+    const [questions]: any = await pool.query(
+      'SELECT question_id, question_text, sort_order FROM training_questions WHERE quiz_id = ? ORDER BY sort_order, question_id',
+      [quizId],
+    );
+    const [choices]: any = await pool.query(
+      `SELECT c.choice_id, c.question_id, c.choice_text, c.sort_order
+       FROM training_choices c
+       INNER JOIN training_questions q ON q.question_id = c.question_id
+       WHERE q.quiz_id = ?
+       ORDER BY q.sort_order, c.sort_order, c.choice_id`,
+      [quizId],
+    );
+
+    res.json({
+      quiz: quizzes[0],
+      questions: questions.map((question: any) => ({
+        ...question,
+        choices: choices.filter((choice: any) => choice.question_id === question.question_id),
+      })),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงแบบทดสอบได้' });
+  }
+});
+
+app.post('/api/training/quizzes/:id/submit', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const quizId = toInt(req.params.id);
+    const userId = toInt(req.body.user_id);
+    const answers = req.body.answers && typeof req.body.answers === 'object' ? req.body.answers : {};
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+
+    const [quizzes]: any = await pool.query('SELECT * FROM training_quizzes WHERE quiz_id = ?', [quizId]);
+    if (quizzes.length === 0) return res.status(404).json({ error: 'ไม่พบแบบทดสอบ' });
+    const quiz = quizzes[0];
+
+    const [enrollments]: any = await pool.query(
+      'SELECT * FROM training_enrollments WHERE course_id = ? AND user_id = ?',
+      [quiz.course_id, userId],
+    );
+    if (enrollments.length === 0) return res.status(400).json({ error: 'กรุณาลงทะเบียนหลักสูตรก่อนทำแบบทดสอบ' });
+
+    const [questions]: any = await pool.query('SELECT question_id FROM training_questions WHERE quiz_id = ?', [quizId]);
+    if (questions.length === 0) return res.status(400).json({ error: 'แบบทดสอบนี้ยังไม่มีคำถาม' });
+
+    const questionIds = questions.map((question: any) => question.question_id);
+    const [correctChoices]: any = await pool.query(
+      'SELECT question_id, choice_id FROM training_choices WHERE is_correct = 1 AND question_id IN (?)',
+      [questionIds],
+    );
+    const correctByQuestion = new Map(correctChoices.map((choice: any) => [String(choice.question_id), Number(choice.choice_id)]));
+    let correctCount = 0;
+    for (const questionId of questionIds) {
+      if (Number(answers[String(questionId)]) === correctByQuestion.get(String(questionId))) correctCount += 1;
+    }
+    const total = questionIds.length;
+    const score = Number(((correctCount / total) * 100).toFixed(2));
+    const enrollment = enrollments[0];
+
+    await pool.query(
+      `INSERT INTO training_quiz_attempts (enrollment_id, quiz_id, quiz_type, score, total_questions, answers)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [enrollment.enrollment_id, quizId, quiz.quiz_type, score, total, JSON.stringify(answers)],
+    );
+
+    if (quiz.quiz_type === 'pre') {
+      await pool.query(
+        'UPDATE training_enrollments SET pre_score = ?, pre_total = ? WHERE enrollment_id = ?',
+        [score, total, enrollment.enrollment_id],
+      );
+    } else {
+      await pool.query(
+        'UPDATE training_enrollments SET post_score = ?, post_total = ? WHERE enrollment_id = ?',
+        [score, total, enrollment.enrollment_id],
+      );
+    }
+
+    const [courseRows]: any = await pool.query('SELECT course_type, pass_score FROM training_courses WHERE course_id = ?', [quiz.course_id]);
+    const course = courseRows[0];
+    if (
+      quiz.quiz_type === 'post' &&
+      score >= Number(course?.pass_score || quiz.pass_score || 70) &&
+      (course?.course_type === 'online' || enrollment.attendance_confirmed)
+    ) {
+      const certificateCode = `TR-${quiz.course_id}-${enrollment.user_id}-${Date.now().toString(36).toUpperCase()}`;
+      await pool.query(
+        `UPDATE training_enrollments
+         SET status = 'completed', completed_at = COALESCE(completed_at, NOW()), certificate_code = IF(certificate_code = '', ?, certificate_code)
+         WHERE enrollment_id = ?`,
+        [certificateCode, enrollment.enrollment_id],
+      );
+    }
+
+    res.json({
+      message: quiz.quiz_type === 'post' && score >= Number(course?.pass_score || quiz.pass_score || 70)
+        ? 'ส่งแบบทดสอบเรียบร้อยแล้ว คะแนนผ่านเกณฑ์'
+        : 'ส่งแบบทดสอบเรียบร้อยแล้ว',
+      score,
+      total,
+      correct: correctCount,
+      passed: score >= Number(course?.pass_score || quiz.pass_score || 70),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ส่งแบบทดสอบไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/training/enrollments/:id/evaluation', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const enrollmentId = toInt(req.params.id);
+    const ratingContent = Math.max(1, Math.min(toInt(req.body.rating_content, 5), 5));
+    const ratingInstructor = Math.max(1, Math.min(toInt(req.body.rating_instructor, 5), 5));
+    const ratingOverall = Math.max(1, Math.min(toInt(req.body.rating_overall, 5), 5));
+    const comment = String(req.body.comment || '').trim();
+
+    await pool.query(
+      `INSERT INTO training_evaluations (enrollment_id, rating_content, rating_instructor, rating_overall, comment)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         rating_content = VALUES(rating_content),
+         rating_instructor = VALUES(rating_instructor),
+         rating_overall = VALUES(rating_overall),
+         comment = VALUES(comment),
+         submitted_at = CURRENT_TIMESTAMP`,
+      [enrollmentId, ratingContent, ratingInstructor, ratingOverall, comment],
+    );
+    await pool.query('UPDATE training_enrollments SET evaluated = 1 WHERE enrollment_id = ?', [enrollmentId]);
+    res.json({ message: 'บันทึกแบบประเมินหลักสูตรเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'บันทึกแบบประเมินไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/training/users/:userId/history', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const userId = toInt(req.params.userId);
+    const [rows]: any = await pool.query(`
+      SELECT e.*, c.title, c.category, c.course_type, c.thumbnail_url, c.instructor, c.pass_score,
+             c.duration_minutes, c.certificate_enabled
+      FROM training_enrollments e
+      INNER JOIN training_courses c ON c.course_id = e.course_id
+      WHERE e.user_id = ?
+      ORDER BY e.registered_at DESC
+    `, [userId]);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงประวัติการอบรมได้' });
+  }
+});
+
+app.get('/api/admin/training/courses', async (_req, res) => {
+  try {
+    await ensureTrainingTables();
+    const [rows]: any = await pool.query(`
+      SELECT c.*,
+             (SELECT COUNT(*) FROM training_enrollments WHERE course_id = c.course_id) AS enrolled_count,
+             (SELECT COUNT(*) FROM training_lessons WHERE course_id = c.course_id) AS lesson_count,
+             (SELECT COUNT(*) FROM training_materials WHERE course_id = c.course_id) AS material_count
+      FROM training_courses c
+      ORDER BY c.updated_at DESC, c.course_id DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงข้อมูลหลักสูตรได้' });
+  }
+});
+
+app.post('/api/admin/training/courses', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const body = req.body || {};
+    if (!String(body.title || '').trim()) return res.status(400).json({ error: 'กรุณาระบุชื่อหลักสูตร' });
+
+    const [result]: any = await pool.query(
+      `INSERT INTO training_courses
+       (title, category, course_type, status, thumbnail_url, instructor, target_group,
+        learning_objectives, learning_topics, content_summary, evaluation_method, description,
+        duration_minutes, zoom_url, location, pass_score, certificate_enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        String(body.title || '').trim(),
+        String(body.category || '').trim(),
+        normalizeCourseType(body.course_type),
+        normalizeTrainingStatus(body.status),
+        String(body.thumbnail_url || '').trim(),
+        String(body.instructor || '').trim(),
+        String(body.target_group || '').trim(),
+        String(body.learning_objectives || '').trim(),
+        String(body.learning_topics || '').trim(),
+        String(body.content_summary || '').trim(),
+        String(body.evaluation_method || '').trim(),
+        String(body.description || '').trim(),
+        toInt(body.duration_minutes),
+        String(body.zoom_url || '').trim(),
+        String(body.location || '').trim(),
+        toInt(body.pass_score, 70),
+        body.certificate_enabled === false ? 0 : 1,
+      ],
+    );
+    res.json({ message: 'เพิ่มหลักสูตรเรียบร้อยแล้ว', course_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เพิ่มหลักสูตรไม่สำเร็จ' });
+  }
+});
+
+app.put('/api/admin/training/courses/:id', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const body = req.body || {};
+    await pool.query(
+      `UPDATE training_courses SET
+       title=?, category=?, course_type=?, status=?, thumbnail_url=?, instructor=?, target_group=?,
+       learning_objectives=?, learning_topics=?, content_summary=?, evaluation_method=?, description=?,
+       duration_minutes=?, zoom_url=?, location=?, pass_score=?, certificate_enabled=?
+       WHERE course_id=?`,
+      [
+        String(body.title || '').trim(),
+        String(body.category || '').trim(),
+        normalizeCourseType(body.course_type),
+        normalizeTrainingStatus(body.status),
+        String(body.thumbnail_url || '').trim(),
+        String(body.instructor || '').trim(),
+        String(body.target_group || '').trim(),
+        String(body.learning_objectives || '').trim(),
+        String(body.learning_topics || '').trim(),
+        String(body.content_summary || '').trim(),
+        String(body.evaluation_method || '').trim(),
+        String(body.description || '').trim(),
+        toInt(body.duration_minutes),
+        String(body.zoom_url || '').trim(),
+        String(body.location || '').trim(),
+        toInt(body.pass_score, 70),
+        body.certificate_enabled === false ? 0 : 1,
+        courseId,
+      ],
+    );
+    res.json({ message: 'แก้ไขหลักสูตรเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'แก้ไขหลักสูตรไม่สำเร็จ' });
+  }
+});
+
+app.delete('/api/admin/training/courses/:id', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    await pool.query('DELETE FROM training_courses WHERE course_id = ?', [req.params.id]);
+    res.json({ message: 'ลบหลักสูตรเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ลบหลักสูตรไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/admin/training/courses/:id/lessons', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const [result]: any = await pool.query(
+      'INSERT INTO training_lessons (course_id, title, lesson_type, youtube_url, content, duration_seconds, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        courseId,
+        String(req.body.title || 'บทเรียนใหม่').trim(),
+        ['video', 'document', 'text'].includes(req.body.lesson_type) ? req.body.lesson_type : 'video',
+        String(req.body.youtube_url || '').trim(),
+        String(req.body.content || '').trim(),
+        toInt(req.body.duration_seconds),
+        toInt(req.body.sort_order),
+      ],
+    );
+    res.json({ message: 'เพิ่มบทเรียนเรียบร้อยแล้ว', lesson_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เพิ่มบทเรียนไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/admin/training/courses/:id/materials', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const driveUrl = String(req.body.drive_url || '').trim();
+    if (!driveUrl) return res.status(400).json({ error: 'กรุณาระบุลิงก์ Google Drive' });
+    const [result]: any = await pool.query(
+      'INSERT INTO training_materials (course_id, title, drive_url, drive_file_id, sort_order) VALUES (?, ?, ?, ?, ?)',
+      [
+        courseId,
+        String(req.body.title || 'เอกสารประกอบ').trim(),
+        driveUrl,
+        extractGoogleDriveFileId(driveUrl),
+        toInt(req.body.sort_order),
+      ],
+    );
+    res.json({ message: 'เพิ่มเอกสารเรียบร้อยแล้ว', material_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เพิ่มเอกสารไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/admin/training/courses/:id/questions', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const quizType = req.body.quiz_type === 'pre' ? 'pre' : 'post';
+    const questionText = String(req.body.question_text || '').trim();
+    const choices = Array.isArray(req.body.choices) ? req.body.choices : [];
+    const correctIndex = toInt(req.body.correct_index);
+    if (!questionText || choices.length < 2) return res.status(400).json({ error: 'กรุณาระบุคำถามและตัวเลือกอย่างน้อย 2 ตัวเลือก' });
+
+    await pool.query(
+      `INSERT INTO training_quizzes (course_id, quiz_type, title, pass_score)
+       VALUES (?, ?, ?, 70)
+       ON DUPLICATE KEY UPDATE quiz_id = LAST_INSERT_ID(quiz_id)`,
+      [courseId, quizType, quizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน'],
+    );
+    const [quizRows]: any = await pool.query('SELECT quiz_id FROM training_quizzes WHERE quiz_id = LAST_INSERT_ID()');
+    const quizId = quizRows[0].quiz_id;
+    const [questionResult]: any = await pool.query(
+      'INSERT INTO training_questions (quiz_id, question_text, sort_order) VALUES (?, ?, ?)',
+      [quizId, questionText, toInt(req.body.sort_order)],
+    );
+    await pool.query(
+      'INSERT INTO training_choices (question_id, choice_text, is_correct, sort_order) VALUES ?',
+      [choices.map((choice: string, index: number) => [questionResult.insertId, String(choice || '').trim(), index === correctIndex ? 1 : 0, index + 1])],
+    );
+    res.json({ message: 'เพิ่มข้อสอบเรียบร้อยแล้ว', question_id: questionResult.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เพิ่มข้อสอบไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/admin/training/report', async (_req, res) => {
+  try {
+    await ensureTrainingTables();
+    const [rows]: any = await pool.query(`
+      SELECT e.*, c.title, c.course_type, c.category, c.pass_score,
+             u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department
+      FROM training_enrollments e
+      INNER JOIN training_courses c ON c.course_id = e.course_id
+      INNER JOIN user u ON u.user_id = e.user_id
+      ORDER BY e.registered_at DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายงานอบรมได้' });
+  }
+});
+
+app.put('/api/admin/training/enrollments/:id/confirm', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const enrollmentId = toInt(req.params.id);
+    const confirmed = req.body.confirmed === false ? 0 : 1;
+    await pool.query(
+      'UPDATE training_enrollments SET attendance_confirmed = ? WHERE enrollment_id = ?',
+      [confirmed, enrollmentId],
+    );
+    res.json({ message: confirmed ? 'ยืนยันการเข้าอบรมเรียบร้อยแล้ว' : 'ยกเลิกการยืนยันเข้าอบรมแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'อัปเดตสถานะเข้าอบรมไม่สำเร็จ' });
   }
 });
 
@@ -750,6 +1644,7 @@ app.post('/api/admin/setup-tables', async (_req, res) => {
         ('training',        'ประวัติการอบรม',               'sidebar',  'ListTodo',    '/training-history', 3),
         ('change_password', 'เปลี่ยนรหัสผ่าน',             'sidebar',  'KeyRound',    '/change-password', 4),
         ('user_settings',   'ตั้งค่าผู้ใช้งาน',            'sidebar',  'Settings',    '/user-settings',   5),
+        ('training_admin',  'จัดการระบบอบรม',             'sidebar',  'GraduationCap','/training-admin',  7),
         ('report_monitor',  'รายงานการกำกับติดตามฯ',        'content',  'Monitor',     '/program-monitoring', 10),
         ('report_course',   'หลักสูตรการอบรม',              'content',  'BookOpen',    '/training-courses', 11),
         ('report_usage',    'รายงานการใช้งานระบบ',          'content',  'Users',       '/system-usage-report', 12),

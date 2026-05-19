@@ -76,107 +76,11 @@ function encodeCanvasToWebp(canvas: HTMLCanvasElement, quality: number) {
   });
 }
 
-function createAvatarCanvas(image: HTMLImageElement, maxDimension: number) {
-  const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
-  const width = Math.max(1, Math.round(image.naturalWidth * scale));
-  const height = Math.max(1, Math.round(image.naturalHeight * scale));
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-
-  const context = canvas.getContext('2d', { alpha: true });
-  if (!context) throw new Error('Cannot create canvas');
-
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-  context.drawImage(image, 0, 0, width, height);
-
-  return { canvas, width, height };
-}
-
 type AvatarCropState = {
   zoom: number;
   offsetX: number;
   offsetY: number;
 };
-
-async function shrinkAvatarImage(file: File) {
-  const originalDataUrl = await readFileAsDataUrl(file);
-  const objectUrl = URL.createObjectURL(file);
-
-  try {
-    const image = await loadImageFromObjectUrl(objectUrl);
-    const baseName = file.name.replace(/\.[^.]+$/, '') || 'avatar';
-    let bestCandidate: {
-      blob: Blob;
-      dataUrl: string;
-      width: number;
-      height: number;
-    } | null = null;
-
-    for (const dimension of AVATAR_DIMENSION_STEPS) {
-      const { canvas, width, height } = createAvatarCanvas(image, dimension);
-
-      for (const quality of AVATAR_WEBP_QUALITY_STEPS) {
-        const blob = await encodeCanvasToWebp(canvas, quality);
-        if (!blob) continue;
-
-        if (!bestCandidate || blob.size < bestCandidate.blob.size) {
-          bestCandidate = {
-            blob,
-            dataUrl: await readBlobAsDataUrl(blob),
-            width,
-            height,
-          };
-        }
-
-        if (blob.size <= MAX_AVATAR_UPLOAD_BYTES) {
-          const dataUrl = bestCandidate.blob === blob ? bestCandidate.dataUrl : await readBlobAsDataUrl(blob);
-          return {
-            dataUrl,
-            base64: dataUrlToBase64(dataUrl),
-            fileName: `${baseName}.webp`,
-            mimeType: 'image/webp',
-            originalSize: file.size,
-            outputSize: blob.size,
-            resized: true,
-            width,
-            height,
-          };
-        }
-      }
-    }
-
-    if (!bestCandidate) throw new Error('Cannot encode image');
-
-    return {
-      dataUrl: bestCandidate.dataUrl,
-      base64: dataUrlToBase64(bestCandidate.dataUrl),
-      fileName: `${baseName}.webp`,
-      mimeType: 'image/webp',
-      originalSize: file.size,
-      outputSize: bestCandidate.blob.size,
-      resized: true,
-      width: bestCandidate.width,
-      height: bestCandidate.height,
-    };
-  } catch (error) {
-    console.warn('Avatar compression fallback:', error);
-    return {
-      dataUrl: originalDataUrl,
-      base64: dataUrlToBase64(originalDataUrl),
-      fileName: file.name,
-      mimeType: file.type || 'application/octet-stream',
-      originalSize: file.size,
-      outputSize: file.size,
-      resized: false,
-      width: 0,
-      height: 0,
-    };
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
-}
 
 function createCroppedAvatarCanvas(
   image: HTMLImageElement,
@@ -291,7 +195,7 @@ export default function Profile() {
   const [avatarPreview, setAvatarPreview] = useState('');
   const [avatarFileName, setAvatarFileName] = useState('');
   const [avatarError, setAvatarError] = useState('');
-  const [pendingAvatarUpload, setPendingAvatarUpload] = useState<Awaited<ReturnType<typeof shrinkAvatarImage>> | null>(null);
+  const [pendingAvatarUpload, setPendingAvatarUpload] = useState<Awaited<ReturnType<typeof createCroppedAvatarImage>> | null>(null);
   const [avatarSourceDataUrl, setAvatarSourceDataUrl] = useState('');
   const [avatarSourceFileName, setAvatarSourceFileName] = useState('');
   const [avatarSourceSize, setAvatarSourceSize] = useState(0);
@@ -509,9 +413,30 @@ export default function Profile() {
     setAvatarCrop({ zoom: 1, offsetX: 0, offsetY: 0 });
   };
 
+  const deletePreviousAvatarIfChanged = async (previousAvatarUrl?: string | null, nextAvatarUrl?: string | null) => {
+    if (!previousAvatarUrl || previousAvatarUrl === nextAvatarUrl) return;
+
+    try {
+      const deleteRes = await fetch(`${API_BASE}/api/users/profile/avatar-drive/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ avatar_url: previousAvatarUrl }),
+      });
+      const deleteResult = await deleteRes.json().catch(() => ({}));
+
+      if (!deleteRes.ok || deleteResult?.ok === false) {
+        throw new Error(deleteResult.error || 'ไม่สามารถลบรูปเดิมจาก Google Drive ได้');
+      }
+    } catch (error) {
+      console.warn('Delete previous avatar failed:', error);
+      toast.warning(error instanceof Error ? error.message : 'บันทึกสำเร็จ แต่ลบรูปเดิมจาก Google Drive ไม่สำเร็จ');
+    }
+  };
+
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      const previousAvatarUrl = profileData?.avatar_data_url || null;
       let avatarUrl = editForm.avatar_data_url || null;
       let avatarToUpload = pendingAvatarUpload;
 
@@ -553,6 +478,9 @@ export default function Profile() {
       });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || 'Update failed');
+
+      await deletePreviousAvatarIfChanged(previousAvatarUrl, payload.avatar_data_url || null);
+
       toast.success(result.message);
       setProfileData(payload);
       const updatedUser = {

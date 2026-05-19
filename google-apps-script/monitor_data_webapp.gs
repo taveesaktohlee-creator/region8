@@ -44,6 +44,10 @@ function doPost(e) {
       return uploadAvatarToDrive_(rowData);
     }
 
+    if (rowData.action === 'deleteAvatar') {
+      return deleteAvatarFromDrive_(rowData);
+    }
+
     if (!rowData || Object.keys(rowData).length === 0) {
       return outputJson_({
         ok: false,
@@ -177,6 +181,35 @@ function uploadAvatarToDrive_(payload) {
   }
 }
 
+function deleteAvatarFromDrive_(payload) {
+  try {
+    const fileId = extractDriveFileId_(payload.fileId || payload.file_id || payload.avatarUrl || payload.avatar_url || '');
+
+    if (!fileId) {
+      return outputJson_({
+        ok: true,
+        skipped: true,
+        message: 'ไม่พบรหัสไฟล์ Google Drive สำหรับลบ',
+      });
+    }
+
+    const file = DriveApp.getFileById(fileId);
+    file.setTrashed(true);
+
+    return outputJson_({
+      ok: true,
+      deleted: true,
+      fileId: fileId,
+      message: 'ลบรูปประจำตัวเดิมจาก Google Drive เรียบร้อยแล้ว',
+    });
+  } catch (error) {
+    return outputJson_({
+      ok: false,
+      error: 'ลบรูปจาก Google Drive ไม่สำเร็จ: ' + error.toString(),
+    });
+  }
+}
+
 function authorizeDriveAccess() {
   const folder = DriveApp.getFolderById(DRIVE_AVATAR_FOLDER_ID);
   const blob = Utilities.newBlob('drive permission test', 'text/plain', 'drive-permission-test.txt');
@@ -190,4 +223,25 @@ function sanitizeDriveFileName_(value) {
     .replace(/[\\/:*?"<>|#%{}~&]/g, '-')
     .replace(/\s+/g, '-')
     .slice(0, 140);
+}
+
+function extractDriveFileId_(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const idQueryMatch = raw.match(/[?&]id=([^&]+)/);
+  if (idQueryMatch && idQueryMatch[1]) {
+    return decodeURIComponent(idQueryMatch[1]);
+  }
+
+  const filePathMatch = raw.match(/\/file\/d\/([^/]+)/);
+  if (filePathMatch && filePathMatch[1]) {
+    return filePathMatch[1];
+  }
+
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(raw)) {
+    return raw;
+  }
+
+  return '';
 }
