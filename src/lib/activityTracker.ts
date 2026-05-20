@@ -2,7 +2,7 @@
  * Activity Tracker - ติดตามการใช้งานระบบ
  * - สร้าง session เมื่อ login
  * - บันทึกการเข้าเมนูต่างๆ พร้อม active time (เฉพาะเมื่อหน้าจอ visible)
- * - Heartbeat ทุก 30 วินาที เพื่ออัปเดตสถานะออนไลน์
+ * - Heartbeat ทุก 2 นาที เพื่ออัปเดตสถานะออนไลน์เมื่อหน้าเว็บ active จริง
  * - ปิด session เมื่อ logout
  */
 
@@ -71,6 +71,7 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 export async function sendHeartbeat() {
   const sid = getSessionId();
   if (!sid) return false;
+  if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
   try {
     const res = await fetch(`${API_BASE}/api/usage/heartbeat`, {
       method: 'POST',
@@ -86,7 +87,7 @@ export async function sendHeartbeat() {
 export function startHeartbeat() {
   stopHeartbeat();
   void sendHeartbeat(); // send immediately
-  heartbeatTimer = setInterval(() => { void sendHeartbeat(); }, 30_000); // every 30s
+  heartbeatTimer = setInterval(() => { void sendHeartbeat(); }, 120_000); // every 2 minutes
 }
 
 export function stopHeartbeat() {

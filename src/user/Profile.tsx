@@ -6,6 +6,7 @@ import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
+import { DIVISION_PROVINCE_OPTIONS, PERSONNEL_TYPE_OPTIONS, POSITION_OPTIONS } from './userProfileOptions';
 
 const MAX_AVATAR_BYTES = 30 * 1024 * 1024;
 const MAX_AVATAR_UPLOAD_BYTES = 1024 * 1024;
@@ -736,20 +737,33 @@ export default function Profile() {
               {[
                 { key: 'Name_Surname', label: 'ชื่อ-นามสกุล' },
                 { key: 'National_ID_number', label: 'เลขประจำตัวประชาชน' },
-                { key: 'position', label: 'ตำแหน่ง' },
-                { key: 'email', label: 'อีเมล', type: 'email' },
-                { key: 'Division_Province', label: 'ส่วนงาน / จังหวัด' },
+                { key: 'position', label: 'ตำแหน่ง', options: POSITION_OPTIONS },
+                { key: 'email', label: 'อีเมล', inputType: 'email' },
+                { key: 'Division_Province', label: 'ส่วนงาน / จังหวัด', options: DIVISION_PROVINCE_OPTIONS },
                 { key: 'Department', label: 'หน่วยงาน' },
-                { key: 'type', label: 'ประเภทพนักงาน' },
+                { key: 'type', label: 'ประเภทพนักงาน', options: PERSONNEL_TYPE_OPTIONS },
               ].map((field) => (
                 <div key={field.key} className="flex flex-col gap-1">
                   <label className="text-xs font-bold text-slate-500">{field.label}</label>
-                  <input
-                    type={field.type || 'text'}
-                    value={editForm[field.key] || ''}
-                    onChange={(e) => setEditForm({ ...editForm, [field.key]: e.target.value })}
-                    className="border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400 transition"
-                  />
+                  {field.options ? (
+                    <select
+                      value={editForm[field.key] || ''}
+                      onChange={(e) => setEditForm({ ...editForm, [field.key]: e.target.value })}
+                      className="border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400 transition"
+                    >
+                      <option value="">-- เลือก{field.label} --</option>
+                      {field.options.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={field.inputType || 'text'}
+                      value={editForm[field.key] || ''}
+                      onChange={(e) => setEditForm({ ...editForm, [field.key]: e.target.value })}
+                      className="border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400 transition"
+                    />
+                  )}
                 </div>
               ))}
               <div className="flex flex-col gap-1">

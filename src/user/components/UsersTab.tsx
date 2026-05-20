@@ -4,6 +4,7 @@ import { toast } from 'react-toastify';
 import type { Group } from './GroupsTab';
 import { API_BASE } from '../../lib/apiConfig';
 import { clearMenuAccessCache } from '../../lib/menuAccess';
+import { DIVISION_PROVINCE_OPTIONS, PERSONNEL_TYPE_OPTIONS, POSITION_OPTIONS } from '../userProfileOptions';
 
 const API = `${API_BASE}/api/admin`;
 const USERS_API = `${API_BASE}/api/users`;
@@ -575,10 +576,15 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
 
                     <div>
                       <label className="block text-sm font-semibold text-slate-700 mb-1.5">ตำแหน่ง</label>
-                      <input 
+                      <select
                         name="position" value={formData.position} onChange={handleFormChange}
                         className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                      />
+                      >
+                        <option value="">-- เลือกตำแหน่ง --</option>
+                        {POSITION_OPTIONS.map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
                     </div>
 
                     <div>
@@ -588,19 +594,23 @@ export function UsersTab({ groups, users, onRefresh }: { groups: Group[]; users:
                         className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
                       >
                         <option value="">-- เลือกประเภท --</option>
-                        <option value="ข้าราชการ">ข้าราชการ</option>
-                        <option value="พนักงานราชการ">พนักงานราชการ</option>
-                        <option value="ลูกจ้างประจำ">ลูกจ้างประจำ</option>
-                        <option value="ลูกจ้างชั่วคราว">ลูกจ้างชั่วคราว</option>
+                        {PERSONNEL_TYPE_OPTIONS.map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
                       </select>
                     </div>
 
                     <div>
-                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">หน่วยงาน/จังหวัด</label>
-                      <input 
+                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">ส่วนงาน / จังหวัด</label>
+                      <select
                         name="Division_Province" value={formData.Division_Province} onChange={handleFormChange}
                         className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                      />
+                      >
+                        <option value="">-- เลือกส่วนงาน / จังหวัด --</option>
+                        {DIVISION_PROVINCE_OPTIONS.map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
                     </div>
                     
                     <div>
