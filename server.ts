@@ -632,6 +632,19 @@ async function ensureUsageTables() {
   return usageTablesReady;
 }
 
+async function closeStaleUsageSessions() {
+  await pool.query(
+    `UPDATE user_sessions
+     SET is_online = 0, logout_time = COALESCE(logout_time, last_seen_at, login_time, NOW())
+     WHERE is_online = 1
+       AND (
+         logout_time IS NOT NULL
+         OR COALESCE(last_seen_at, login_time) < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+         OR COALESCE(last_seen_at, login_time) > DATE_ADD(NOW(), INTERVAL 30 SECOND)
+       )`
+  );
+}
+
 // หน้าแรกสำหรับตรวจสอบสถานะ Server
 app.get('/', (req, res) => {
   res.send('Region 8 API Server is running!');
@@ -2741,10 +2754,13 @@ app.post('/api/usage/heartbeat', async (req, res) => {
     const { session_id } = req.body;
     await ensureUsageTables();
     if (session_id) {
-      await pool.query(
+      const [result]: any = await pool.query(
         'UPDATE user_sessions SET is_online = 1, logout_time = NULL, last_seen_at = NOW() WHERE session_id = ?',
         [session_id]
       );
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ ok: false, error: 'Session not found' });
+      }
     }
     res.json({ ok: true });
   } catch (error) {
@@ -2756,6 +2772,7 @@ app.post('/api/usage/heartbeat', async (req, res) => {
 app.get('/api/usage/summary', async (req, res) => {
   try {
     await ensureUsageTables();
+    await closeStaleUsageSessions();
     const range = getDateRange(req.query);
 
     // จำนวนผู้ลงทะเบียนทั้งหมด (ไม่กรองตามช่วงเวลา)
@@ -2802,15 +2819,7 @@ app.get('/api/usage/users-table', async (req, res) => {
     await ensureUsageTables();
     const range = getDateRange(req.query);
 
-    // ปิด session ที่ไม่มี heartbeat มานานกว่า 2 นาที
-    try {
-      await pool.query(
-        `UPDATE user_sessions
-         SET is_online = 0, logout_time = COALESCE(logout_time, last_seen_at, NOW())
-         WHERE is_online = 1
-           AND COALESCE(last_seen_at, logout_time, login_time) < DATE_SUB(NOW(), INTERVAL 2 MINUTE)`
-      );
-    } catch (_) { /* ignore */ }
+    try { await closeStaleUsageSessions(); } catch (_) { /* ignore */ }
 
     // สร้าง sub-query สำหรับกรองตามช่วงเวลา
     const sessionFilter = range
@@ -2833,19 +2842,21 @@ app.get('/api/usage/users-table', async (req, res) => {
     const [rows]: any = await pool.query(`
       SELECT 
         u.user_id, u.Name_Surnam AS Name_Surname, u.username, u.position, u.type,
-        u.Division_Province, u.registration_date,
-        COALESCE(MAX(s_online.is_online), 0) AS is_online,
-        MAX(s_online.last_seen_at) AS last_seen_at,
-        (SELECT MAX(login_time) FROM user_sessions WHERE user_id = u.user_id ${lastLoginFilter}) AS last_login,
+        u.Division_Province,
+        DATE_FORMAT(u.registration_date, '%Y-%m-%d %H:%i:%s') AS registration_date,
+        CASE WHEN MAX(s_online.session_id) IS NULL THEN 0 ELSE 1 END AS is_online,
+        DATE_FORMAT(MAX(s_online.last_seen_at), '%Y-%m-%d %H:%i:%s') AS last_seen_at,
+        (SELECT DATE_FORMAT(MAX(login_time), '%Y-%m-%d %H:%i:%s') FROM user_sessions WHERE user_id = u.user_id ${lastLoginFilter}) AS last_login,
         (SELECT COUNT(*) FROM user_sessions WHERE user_id = u.user_id ${sessionFilter}) AS total_logins,
         (SELECT COALESCE(SUM(active_seconds), 0) FROM user_activity_log WHERE user_id = u.user_id ${activityFilter}) AS total_active_seconds
       FROM user u
       LEFT JOIN user_sessions s_online
         ON u.user_id = s_online.user_id
        AND s_online.is_online = 1
-       AND COALESCE(s_online.last_seen_at, s_online.logout_time, s_online.login_time) >= DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+       AND s_online.logout_time IS NULL
+       AND COALESCE(s_online.last_seen_at, s_online.login_time) BETWEEN DATE_SUB(NOW(), INTERVAL 2 MINUTE) AND DATE_ADD(NOW(), INTERVAL 30 SECOND)
       GROUP BY u.user_id
-      ORDER BY COALESCE(MAX(s_online.is_online), 0) DESC, u.Name_Surnam
+      ORDER BY CASE WHEN MAX(s_online.session_id) IS NULL THEN 0 ELSE 1 END DESC, u.Name_Surnam
     `, rangeParams);
     res.json(rows);
   } catch (error) {
@@ -2886,8 +2897,8 @@ app.get('/api/usage/user-history/:userId', async (req, res) => {
         menu_key, menu_name,
         SUM(active_seconds) AS total_seconds,
         COUNT(*) AS visit_count,
-        MIN(start_time) AS first_visit,
-        MAX(COALESCE(end_time, start_time)) AS last_visit
+        DATE_FORMAT(MIN(start_time), '%Y-%m-%d %H:%i:%s') AS first_visit,
+        DATE_FORMAT(MAX(COALESCE(end_time, start_time)), '%Y-%m-%d %H:%i:%s') AS last_visit
       FROM user_activity_log
       WHERE user_id = ? ${dateFilter}
       GROUP BY created_date, menu_key, menu_name

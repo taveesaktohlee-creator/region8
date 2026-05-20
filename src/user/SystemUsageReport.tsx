@@ -22,7 +22,23 @@ function fmtTime(sec: number) {
   return m > 0 ? `${m} นาที` : `${s} วินาที`;
 }
 
-function fmtDateTimeTH(d: string | null) { if (!d) return '-'; try { return new Date(d).toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return d; } }
+function parseLocalDateTime(value: string) {
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!match) return new Date(value);
+  const [, year, month, day, hour = '0', minute = '0', second = '0'] = match;
+  return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
+}
+
+function fmtDateTimeTH(d: string | null) {
+  if (!d) return '-';
+  try {
+    const date = parseLocalDateTime(d);
+    if (Number.isNaN(date.getTime())) return d;
+    return date.toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return d;
+  }
+}
 
 
 
