@@ -151,6 +151,12 @@ function normalizeTrainingStatus(value: unknown) {
   return 'open';
 }
 
+function normalizeEvaluationQuestionType(value: unknown) {
+  const text = String(value || '').trim();
+  if (['rating', 'single_choice', 'multiple_choice', 'text'].includes(text)) return text;
+  return 'rating';
+}
+
 function normalizeKnowledgeStatus(value: unknown) {
   const text = String(value || '').trim();
   if (['draft', 'published', 'archived'].includes(text)) return text;
@@ -430,6 +436,56 @@ async function ensureTrainingTables() {
           comment TEXT NULL,
           submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (enrollment_id) REFERENCES training_enrollments(enrollment_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_evaluation_questions (
+          question_id INT AUTO_INCREMENT PRIMARY KEY,
+          course_id INT NOT NULL,
+          question_text TEXT NOT NULL,
+          question_type ENUM('rating','single_choice','multiple_choice','text') NOT NULL DEFAULT 'rating',
+          is_required TINYINT(1) DEFAULT 1,
+          sort_order INT DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (course_id) REFERENCES training_courses(course_id) ON DELETE CASCADE,
+          INDEX idx_training_eval_question_course (course_id)
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_evaluation_options (
+          option_id INT AUTO_INCREMENT PRIMARY KEY,
+          question_id INT NOT NULL,
+          option_text TEXT NOT NULL,
+          sort_order INT DEFAULT 0,
+          FOREIGN KEY (question_id) REFERENCES training_evaluation_questions(question_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_evaluation_responses (
+          response_id INT AUTO_INCREMENT PRIMARY KEY,
+          enrollment_id INT NOT NULL UNIQUE,
+          course_id INT NOT NULL,
+          user_id INT NOT NULL,
+          submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (enrollment_id) REFERENCES training_enrollments(enrollment_id) ON DELETE CASCADE,
+          FOREIGN KEY (course_id) REFERENCES training_courses(course_id) ON DELETE CASCADE,
+          INDEX idx_training_eval_response_course (course_id),
+          INDEX idx_training_eval_response_user (user_id)
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS training_evaluation_answers (
+          answer_id INT AUTO_INCREMENT PRIMARY KEY,
+          response_id INT NOT NULL,
+          question_id INT NOT NULL,
+          answer_value LONGTEXT NULL,
+          FOREIGN KEY (response_id) REFERENCES training_evaluation_responses(response_id) ON DELETE CASCADE,
+          FOREIGN KEY (question_id) REFERENCES training_evaluation_questions(question_id) ON DELETE CASCADE,
+          UNIQUE KEY uq_training_eval_answer (response_id, question_id)
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
       `);
 
@@ -1800,25 +1856,119 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
   }
 });
 
+app.get('/api/training/courses/:id/evaluation-form', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const [questions]: any = await pool.query(
+      `SELECT question_id, course_id, question_text, question_type, is_required, sort_order
+       FROM training_evaluation_questions
+       WHERE course_id = ?
+       ORDER BY sort_order, question_id`,
+      [courseId],
+    );
+    const questionIds = questions.map((question: any) => question.question_id);
+    const [options]: any = questionIds.length > 0
+      ? await pool.query(
+          `SELECT option_id, question_id, option_text, sort_order
+           FROM training_evaluation_options
+           WHERE question_id IN (?)
+           ORDER BY question_id, sort_order, option_id`,
+          [questionIds],
+        )
+      : [[]];
+
+    res.json(questions.map((question: any) => ({
+      ...question,
+      options: options.filter((option: any) => option.question_id === question.question_id),
+    })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงแบบประเมินได้' });
+  }
+});
+
 app.post('/api/training/enrollments/:id/evaluation', async (req, res) => {
   try {
     await ensureTrainingTables();
     const enrollmentId = toInt(req.params.id);
-    const ratingContent = Math.max(1, Math.min(toInt(req.body.rating_content, 5), 5));
-    const ratingInstructor = Math.max(1, Math.min(toInt(req.body.rating_instructor, 5), 5));
-    const ratingOverall = Math.max(1, Math.min(toInt(req.body.rating_overall, 5), 5));
-    const comment = String(req.body.comment || '').trim();
+    const answers = req.body.answers && typeof req.body.answers === 'object' ? req.body.answers : {};
+
+    const [enrollments]: any = await pool.query('SELECT * FROM training_enrollments WHERE enrollment_id = ? LIMIT 1', [enrollmentId]);
+    if (enrollments.length === 0) return res.status(404).json({ error: 'ไม่พบข้อมูลการลงทะเบียน' });
+    const enrollment = enrollments[0];
+    if (enrollment.status !== 'completed') {
+      return res.status(400).json({ error: 'สามารถส่งแบบประเมินได้หลังจบการอบรมเท่านั้น' });
+    }
+
+    const [questions]: any = await pool.query(
+      `SELECT question_id, question_text, question_type, is_required
+       FROM training_evaluation_questions
+       WHERE course_id = ?
+       ORDER BY sort_order, question_id`,
+      [enrollment.course_id],
+    );
+    if (questions.length === 0) return res.status(400).json({ error: 'หลักสูตรนี้ยังไม่ได้ตั้งค่าแบบประเมิน' });
+
+    const questionIds = questions.map((question: any) => question.question_id);
+    const [options]: any = await pool.query(
+      'SELECT option_id, question_id, option_text FROM training_evaluation_options WHERE question_id IN (?)',
+      [questionIds],
+    );
+    const optionsByQuestion = new Map<string, any[]>();
+    for (const option of options) {
+      const key = String(option.question_id);
+      optionsByQuestion.set(key, [...(optionsByQuestion.get(key) || []), option]);
+    }
+
+    const normalizedAnswers: Array<[number, string]> = [];
+    for (const question of questions) {
+      const key = String(question.question_id);
+      const value = answers[key];
+      const isRequired = Number(question.is_required) === 1;
+      const questionOptions = optionsByQuestion.get(key) || [];
+
+      if ((value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) && isRequired) {
+        return res.status(400).json({ error: `กรุณาตอบ: ${question.question_text}` });
+      }
+
+      if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) {
+        normalizedAnswers.push([question.question_id, '']);
+        continue;
+      }
+
+      if (question.question_type === 'rating') {
+        const rating = Math.max(1, Math.min(toInt(value, 0), 5));
+        if (!rating && isRequired) return res.status(400).json({ error: `กรุณาให้คะแนน: ${question.question_text}` });
+        normalizedAnswers.push([question.question_id, String(rating)]);
+      } else if (question.question_type === 'single_choice') {
+        const selected = questionOptions.find((option) => Number(option.option_id) === Number(value));
+        if (!selected) return res.status(400).json({ error: `ตัวเลือกไม่ถูกต้อง: ${question.question_text}` });
+        normalizedAnswers.push([question.question_id, selected.option_text]);
+      } else if (question.question_type === 'multiple_choice') {
+        const selectedIds = Array.isArray(value) ? value.map(Number) : [Number(value)];
+        const selectedTexts = selectedIds
+          .map((id) => questionOptions.find((option) => Number(option.option_id) === id)?.option_text)
+          .filter(Boolean);
+        if (selectedTexts.length === 0 && isRequired) return res.status(400).json({ error: `กรุณาเลือกคำตอบ: ${question.question_text}` });
+        normalizedAnswers.push([question.question_id, JSON.stringify(selectedTexts)]);
+      } else {
+        normalizedAnswers.push([question.question_id, String(value || '').trim().slice(0, 4000)]);
+      }
+    }
 
     await pool.query(
-      `INSERT INTO training_evaluations (enrollment_id, rating_content, rating_instructor, rating_overall, comment)
-       VALUES (?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         rating_content = VALUES(rating_content),
-         rating_instructor = VALUES(rating_instructor),
-         rating_overall = VALUES(rating_overall),
-         comment = VALUES(comment),
-         submitted_at = CURRENT_TIMESTAMP`,
-      [enrollmentId, ratingContent, ratingInstructor, ratingOverall, comment],
+      `INSERT INTO training_evaluation_responses (enrollment_id, course_id, user_id)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE submitted_at = CURRENT_TIMESTAMP`,
+      [enrollmentId, enrollment.course_id, enrollment.user_id],
+    );
+    const [responseRows]: any = await pool.query('SELECT response_id FROM training_evaluation_responses WHERE enrollment_id = ? LIMIT 1', [enrollmentId]);
+    const responseId = responseRows[0].response_id;
+    await pool.query('DELETE FROM training_evaluation_answers WHERE response_id = ?', [responseId]);
+    await pool.query(
+      'INSERT INTO training_evaluation_answers (response_id, question_id, answer_value) VALUES ?',
+      [normalizedAnswers.map(([questionId, answerValue]) => [responseId, questionId, answerValue])],
     );
     await pool.query('UPDATE training_enrollments SET evaluated = 1 WHERE enrollment_id = ?', [enrollmentId]);
     res.json({ message: 'บันทึกแบบประเมินหลักสูตรเรียบร้อยแล้ว' });
@@ -2097,6 +2247,159 @@ app.post('/api/admin/training/courses/:id/questions', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'เพิ่มข้อสอบไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/admin/training/courses/:id/evaluation-questions', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const [questions]: any = await pool.query(
+      `SELECT question_id, course_id, question_text, question_type, is_required, sort_order
+       FROM training_evaluation_questions
+       WHERE course_id = ?
+       ORDER BY sort_order, question_id`,
+      [courseId],
+    );
+    const questionIds = questions.map((question: any) => question.question_id);
+    const [options]: any = questionIds.length > 0
+      ? await pool.query(
+          `SELECT option_id, question_id, option_text, sort_order
+           FROM training_evaluation_options
+           WHERE question_id IN (?)
+           ORDER BY question_id, sort_order, option_id`,
+          [questionIds],
+        )
+      : [[]];
+
+    res.json(questions.map((question: any) => ({
+      ...question,
+      options: options.filter((option: any) => option.question_id === question.question_id),
+    })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงหัวข้อประเมินได้' });
+  }
+});
+
+app.post('/api/admin/training/courses/:id/evaluation-questions', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const questionText = String(req.body.question_text || '').trim();
+    const questionType = normalizeEvaluationQuestionType(req.body.question_type);
+    const options = Array.isArray(req.body.options) ? req.body.options.map((option: unknown) => String(option || '').trim()).filter(Boolean) : [];
+    if (!questionText) return res.status(400).json({ error: 'กรุณาระบุหัวข้อการประเมิน' });
+    if (['single_choice', 'multiple_choice'].includes(questionType) && options.length < 2) {
+      return res.status(400).json({ error: 'คำถามแบบตัวเลือกต้องมีตัวเลือกอย่างน้อย 2 รายการ' });
+    }
+
+    const [result]: any = await pool.query(
+      `INSERT INTO training_evaluation_questions
+       (course_id, question_text, question_type, is_required, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+      [courseId, questionText, questionType, req.body.is_required === false ? 0 : 1, toInt(req.body.sort_order)],
+    );
+    if (options.length > 0) {
+      await pool.query(
+        'INSERT INTO training_evaluation_options (question_id, option_text, sort_order) VALUES ?',
+        [options.map((option: string, index: number) => [result.insertId, option, index + 1])],
+      );
+    }
+    res.json({ message: 'เพิ่มหัวข้อการประเมินเรียบร้อยแล้ว', question_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เพิ่มหัวข้อการประเมินไม่สำเร็จ' });
+  }
+});
+
+app.delete('/api/admin/training/evaluation-questions/:questionId', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    await pool.query('DELETE FROM training_evaluation_questions WHERE question_id = ?', [req.params.questionId]);
+    res.json({ message: 'ลบหัวข้อการประเมินเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ลบหัวข้อการประเมินไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/admin/training/courses/:id/evaluation-report', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const [questions]: any = await pool.query(
+      `SELECT question_id, course_id, question_text, question_type, is_required, sort_order
+       FROM training_evaluation_questions
+       WHERE course_id = ?
+       ORDER BY sort_order, question_id`,
+      [courseId],
+    );
+    const [responses]: any = await pool.query(
+      `SELECT r.response_id, r.enrollment_id, r.user_id,
+              DATE_FORMAT(r.submitted_at, '%Y-%m-%d %H:%i:%s') AS submitted_at,
+              u.Name_Surnam AS Name_Surname, u.position, u.Division_Province
+       FROM training_evaluation_responses r
+       INNER JOIN user u ON u.user_id = r.user_id
+       WHERE r.course_id = ?
+       ORDER BY r.submitted_at DESC`,
+      [courseId],
+    );
+    const responseIds = responses.map((response: any) => response.response_id);
+    const [answers]: any = responseIds.length > 0
+      ? await pool.query(
+          `SELECT a.response_id, a.question_id, a.answer_value
+           FROM training_evaluation_answers a
+           WHERE a.response_id IN (?)`,
+          [responseIds],
+        )
+      : [[]];
+
+    const summaries = questions.map((question: any) => {
+      const questionAnswers = answers.filter((answer: any) => answer.question_id === question.question_id);
+      if (question.question_type === 'rating') {
+        const ratings = questionAnswers.map((answer: any) => Number(answer.answer_value)).filter((value: number) => Number.isFinite(value) && value > 0);
+        return {
+          ...question,
+          total_answers: ratings.length,
+          average_rating: ratings.length > 0 ? Number((ratings.reduce((sum: number, value: number) => sum + value, 0) / ratings.length).toFixed(2)) : null,
+        };
+      }
+
+      if (question.question_type === 'single_choice' || question.question_type === 'multiple_choice') {
+        const counts: Record<string, number> = {};
+        questionAnswers.forEach((answer: any) => {
+          let values: string[] = [];
+          if (question.question_type === 'multiple_choice') {
+            try { values = JSON.parse(answer.answer_value || '[]'); } catch { values = []; }
+          } else if (answer.answer_value) {
+            values = [String(answer.answer_value)];
+          }
+          values.forEach((value) => { counts[value] = (counts[value] || 0) + 1; });
+        });
+        return { ...question, total_answers: questionAnswers.length, option_counts: counts };
+      }
+
+      return {
+        ...question,
+        total_answers: questionAnswers.filter((answer: any) => String(answer.answer_value || '').trim()).length,
+        text_answers: questionAnswers.map((answer: any) => String(answer.answer_value || '').trim()).filter(Boolean).slice(0, 30),
+      };
+    });
+
+    res.json({
+      response_count: responses.length,
+      questions: summaries,
+      responses: responses.map((response: any) => ({
+        ...response,
+        answers: answers
+          .filter((answer: any) => answer.response_id === response.response_id)
+          .map((answer: any) => ({ question_id: answer.question_id, answer_value: answer.answer_value })),
+      })),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายงานการประเมินได้' });
   }
 });
 

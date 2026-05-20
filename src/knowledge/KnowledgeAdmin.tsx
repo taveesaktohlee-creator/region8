@@ -57,7 +57,7 @@ export default function KnowledgeAdmin() {
   const [report, setReport] = useState<KnowledgeReportRow[]>([]);
   const [form, setForm] = useState<KnowledgeItem>({ ...emptyKnowledgeItem });
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<AdminTab>('items');
+  const [activeTab, setActiveTab] = useState<AdminTab>('report');
   const [search, setSearch] = useState('');
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
@@ -251,8 +251,8 @@ export default function KnowledgeAdmin() {
               <p className="text-sm font-semibold text-slate-500">เพิ่มเรื่อง อัปโหลดรูปปก/PDF และดูรายงานการเปิดอ่าน</p>
             </div>
             <div className="grid gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-2">
-              <TabButton active={activeTab === 'items'} onClick={() => setActiveTab('items')} icon={<LibraryBig size={16} />} label="จัดการเรื่อง" />
               <TabButton active={activeTab === 'report'} onClick={() => setActiveTab('report')} icon={<BarChart3 size={16} />} label="รายงานการอ่าน" />
+              <TabButton active={activeTab === 'items'} onClick={() => setActiveTab('items')} icon={<LibraryBig size={16} />} label="จัดการเรื่อง" />
             </div>
           </div>
 

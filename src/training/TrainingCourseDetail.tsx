@@ -40,6 +40,13 @@ type Enrollment = {
 
 type Quiz = { quiz_id: number; quiz_type: 'pre' | 'post'; title: string; pass_score: number; time_limit_minutes?: number };
 type Question = { question_id: number; question_text: string; choices: { choice_id: number; choice_text: string }[] };
+type EvaluationQuestion = {
+  question_id: number;
+  question_text: string;
+  question_type: 'rating' | 'single_choice' | 'multiple_choice' | 'text';
+  is_required: number;
+  options: { option_id: number; option_text: string }[];
+};
 
 const courseTypeLabels: Record<Course['course_type'], string> = {
   online: 'อบรมผ่านสื่ออิเล็กทรอนิกส์ (Online Training)',
@@ -91,6 +98,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
   const [lessons, setLessons] = useState<any[]>([]);
   const [materials, setMaterials] = useState<any[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  const [evaluationQuestions, setEvaluationQuestions] = useState<EvaluationQuestion[]>([]);
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [activeLogId, setActiveLogId] = useState<number | null>(null);
@@ -108,6 +116,8 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
       setMaterials(data.materials || []);
       setQuizzes(data.quizzes || []);
       setEnrollment(data.enrollment || null);
+      const evalRes = await fetch(`${API_BASE}/api/training/courses/${courseId}/evaluation-form`);
+      setEvaluationQuestions(evalRes.ok ? await evalRes.json() : []);
     } catch (error) {
       console.error(error);
       toast.error('ไม่สามารถโหลดรายละเอียดหลักสูตรได้');
@@ -304,7 +314,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
 
               <QuizPanel quiz={preQuiz} title="แบบทดสอบก่อนเรียน" userId={userData?.user_id} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
               <QuizPanel quiz={postQuiz} title="แบบทดสอบหลังเรียน" userId={userData?.user_id} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
-              <EvaluationPanel enrollment={enrollment} onSubmitted={() => loadDetail(userData?.user_id)} />
+              <EvaluationPanel enrollment={enrollment} questions={evaluationQuestions} onSubmitted={() => loadDetail(userData?.user_id)} />
             </div>
 
             <aside className="flex flex-col gap-5">
@@ -464,23 +474,30 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
   );
 }
 
-function EvaluationPanel({ enrollment, onSubmitted }: { enrollment: Enrollment | null; onSubmitted: () => void }) {
-  const [ratingOverall, setRatingOverall] = useState(5);
-  const [ratingContent, setRatingContent] = useState(5);
-  const [ratingInstructor, setRatingInstructor] = useState(5);
-  const [comment, setComment] = useState('');
+function EvaluationPanel({ enrollment, questions, onSubmitted }: { enrollment: Enrollment | null; questions: EvaluationQuestion[]; onSubmitted: () => void }) {
+  const [answers, setAnswers] = useState<Record<string, string | number | number[]>>({});
+
+  useEffect(() => {
+    setAnswers({});
+  }, [enrollment?.enrollment_id, questions]);
+
+  const updateMultiChoice = (questionId: number, optionId: number, checked: boolean) => {
+    setAnswers((current) => {
+      const key = String(questionId);
+      const values = Array.isArray(current[key]) ? current[key] as number[] : [];
+      return {
+        ...current,
+        [key]: checked ? [...values, optionId] : values.filter((value) => value !== optionId),
+      };
+    });
+  };
 
   const submitEvaluation = async () => {
     if (!enrollment?.enrollment_id) return;
     const res = await fetch(`${API_BASE}/api/training/enrollments/${enrollment.enrollment_id}/evaluation`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        rating_content: ratingContent,
-        rating_instructor: ratingInstructor,
-        rating_overall: ratingOverall,
-        comment,
-      }),
+      body: JSON.stringify({ answers }),
     });
     const data = await res.json();
     if (!res.ok) return toast.error(data.error || 'บันทึกแบบประเมินไม่สำเร็จ');
@@ -491,26 +508,59 @@ function EvaluationPanel({ enrollment, onSubmitted }: { enrollment: Enrollment |
   return (
     <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
       <h3 className="mb-3 flex items-center gap-2 text-lg font-black text-slate-900"><Star className="text-amber-500" /> แบบประเมินหลังอบรม</h3>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Rating label="เนื้อหา" value={ratingContent} onChange={setRatingContent} />
-        <Rating label="วิทยากร" value={ratingInstructor} onChange={setRatingInstructor} />
-        <Rating label="ภาพรวม" value={ratingOverall} onChange={setRatingOverall} />
-      </div>
-      <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="ข้อเสนอแนะเพิ่มเติม..." className="mt-3 min-h-28 w-full rounded-2xl border border-slate-200 p-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-200" />
-      <button disabled={!enrollment || Boolean(enrollment.evaluated)} onClick={submitEvaluation} className="mt-3 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+      {questions.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm font-bold text-slate-400">หลักสูตรนี้ยังไม่มีแบบประเมิน</p>
+      ) : (
+        <div className="space-y-4">
+          {questions.map((question, index) => {
+            const key = String(question.question_id);
+            return (
+              <div key={question.question_id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                <p className="mb-3 font-black text-slate-800">
+                  {index + 1}. {question.question_text}
+                  {question.is_required ? <span className="ml-1 text-red-500">*</span> : null}
+                </p>
+                {question.question_type === 'rating' && (
+                  <select value={String(answers[key] || '')} onChange={(event) => setAnswers((current) => ({ ...current, [key]: Number(event.target.value) }))} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none">
+                    <option value="">เลือกคะแนน</option>
+                    {[5, 4, 3, 2, 1].map((item) => <option key={item} value={item}>{item} คะแนน</option>)}
+                  </select>
+                )}
+                {question.question_type === 'text' && (
+                  <textarea value={String(answers[key] || '')} onChange={(event) => setAnswers((current) => ({ ...current, [key]: event.target.value }))} placeholder="พิมพ์คำตอบ..." className="min-h-28 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-200" />
+                )}
+                {question.question_type === 'single_choice' && (
+                  <div className="grid gap-2">
+                    {question.options.map((option) => (
+                      <label key={option.option_id} className="flex cursor-pointer items-center gap-3 rounded-xl bg-white px-3 py-2 text-sm font-bold text-slate-600">
+                        <input type="radio" name={`evaluation-${question.question_id}`} checked={Number(answers[key]) === option.option_id} onChange={() => setAnswers((current) => ({ ...current, [key]: option.option_id }))} />
+                        {option.option_text}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {question.question_type === 'multiple_choice' && (
+                  <div className="grid gap-2">
+                    {question.options.map((option) => {
+                      const values = Array.isArray(answers[key]) ? answers[key] as number[] : [];
+                      return (
+                        <label key={option.option_id} className="flex cursor-pointer items-center gap-3 rounded-xl bg-white px-3 py-2 text-sm font-bold text-slate-600">
+                          <input type="checkbox" checked={values.includes(option.option_id)} onChange={(event) => updateMultiChoice(question.question_id, option.option_id, event.target.checked)} />
+                          {option.option_text}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <button disabled={!enrollment || enrollment.status !== 'completed' || Boolean(enrollment.evaluated) || questions.length === 0} onClick={submitEvaluation} className="mt-3 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
         {enrollment?.evaluated ? 'ส่งแบบประเมินแล้ว' : 'ส่งแบบประเมิน'}
       </button>
+      {enrollment && enrollment.status !== 'completed' && <p className="mt-2 text-xs font-bold text-slate-400">ส่งแบบประเมินได้หลังจบการอบรม</p>}
     </section>
-  );
-}
-
-function Rating({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  return (
-    <label className="text-sm font-bold text-slate-600">
-      {label}
-      <select value={value} onChange={(event) => onChange(Number(event.target.value))} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-black outline-none">
-        {[5, 4, 3, 2, 1].map((item) => <option key={item} value={item}>{item} คะแนน</option>)}
-      </select>
-    </label>
   );
 }

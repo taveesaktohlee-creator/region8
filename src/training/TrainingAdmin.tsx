@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, BookOpen, CheckCircle2, Clock, Eye, FilePlus2, ImagePlus, Plus, RefreshCw, Save, Search, Trash2, UploadCloud, X } from 'lucide-react';
+import { BarChart3, BookOpen, CheckCircle2, Clock, Eye, FilePlus2, ImagePlus, Plus, RefreshCw, Save, Search, Star, Trash2, UploadCloud, X } from 'lucide-react';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
@@ -47,6 +47,35 @@ type AdminQuiz = {
   }[];
 };
 
+type EvaluationQuestionType = 'rating' | 'single_choice' | 'multiple_choice' | 'text';
+
+type AdminEvaluationQuestion = {
+  question_id: number;
+  question_text: string;
+  question_type: EvaluationQuestionType;
+  is_required: number;
+  sort_order: number;
+  options: { option_id: number; option_text: string }[];
+};
+
+type EvaluationReport = {
+  response_count: number;
+  questions: Array<AdminEvaluationQuestion & {
+    total_answers?: number;
+    average_rating?: number | null;
+    option_counts?: Record<string, number>;
+    text_answers?: string[];
+  }>;
+};
+
+type EvaluationFormState = {
+  question_text: string;
+  question_type: EvaluationQuestionType;
+  options: string[];
+  is_required: boolean;
+  sort_order: number;
+};
+
 const courseTypeLabels: Record<Course['course_type'], string> = {
   onsite: 'อบรม ณ สถานที่จัดอบรม (On-site Training)',
   zoom: 'อบรมผ่านระบบ Zoom Meeting',
@@ -57,6 +86,13 @@ const courseStatusLabels: Record<Course['status'], string> = {
   open: 'ลงทะเบียน',
   closed: 'ปิดลงทะเบียน',
   draft: 'ฉบับร่าง',
+};
+
+const evaluationTypeLabels: Record<EvaluationQuestionType, string> = {
+  rating: 'ให้คะแนน 1-5',
+  single_choice: 'เลือกตอบ 1 ข้อ',
+  multiple_choice: 'เลือกได้หลายข้อ',
+  text: 'พิมพ์ข้อความ',
 };
 
 const COURSE_COVER_MAX_BYTES = 1024 * 1024;
@@ -235,6 +271,15 @@ export default function TrainingAdmin() {
   const [materialFile, setMaterialFile] = useState<File | null>(null);
   const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
   const [questionForm, setQuestionForm] = useState({ quiz_type: 'post', question_text: '', choices: ['', '', '', ''], correct_index: 0 });
+  const [evaluationForm, setEvaluationForm] = useState<EvaluationFormState>({
+    question_text: '',
+    question_type: 'rating' as EvaluationQuestionType,
+    options: ['', ''],
+    is_required: true,
+    sort_order: 0,
+  });
+  const [evaluationQuestions, setEvaluationQuestions] = useState<AdminEvaluationQuestion[]>([]);
+  const [evaluationReport, setEvaluationReport] = useState<EvaluationReport | null>(null);
   const [quizSettings, setQuizSettings] = useState(defaultQuizSettings);
   const [quizPreview, setQuizPreview] = useState<AdminQuiz[] | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -269,6 +314,22 @@ export default function TrainingAdmin() {
       };
     });
     setQuizSettings(nextSettings);
+    return data;
+  }, []);
+
+  const loadEvaluationQuestions = useCallback(async (courseId: number) => {
+    const res = await fetch(`${API_BASE}/api/admin/training/courses/${courseId}/evaluation-questions`);
+    if (!res.ok) throw new Error('Cannot load evaluation questions');
+    const data: AdminEvaluationQuestion[] = await res.json();
+    setEvaluationQuestions(data);
+    return data;
+  }, []);
+
+  const loadEvaluationReport = useCallback(async (courseId: number) => {
+    const res = await fetch(`${API_BASE}/api/admin/training/courses/${courseId}/evaluation-report`);
+    if (!res.ok) throw new Error('Cannot load evaluation report');
+    const data: EvaluationReport = await res.json();
+    setEvaluationReport(data);
     return data;
   }, []);
 
@@ -309,6 +370,8 @@ export default function TrainingAdmin() {
     setForm({ ...emptyCourse, ...course, certificate_enabled: Boolean(course.certificate_enabled) });
     if (course.course_id) {
       loadQuizPreview(course.course_id).catch(() => toast.error('โหลดการตั้งค่าแบบทดสอบไม่สำเร็จ'));
+      loadEvaluationQuestions(course.course_id).catch(() => toast.error('โหลดแบบประเมินไม่สำเร็จ'));
+      loadEvaluationReport(course.course_id).catch(() => toast.error('โหลดรายงานแบบประเมินไม่สำเร็จ'));
     }
   };
 
@@ -317,6 +380,9 @@ export default function TrainingAdmin() {
     setForm(emptyCourse);
     setQuizSettings(defaultQuizSettings);
     setQuizPreview(null);
+    setEvaluationQuestions([]);
+    setEvaluationReport(null);
+    setEvaluationForm({ question_text: '', question_type: 'rating', options: ['', ''], is_required: true, sort_order: 0 });
   };
 
   const saveCourse = async () => {
@@ -414,6 +480,36 @@ export default function TrainingAdmin() {
     toast.success(data.message);
     setQuestionForm({ quiz_type: 'post', question_text: '', choices: ['', '', '', ''], correct_index: 0 });
     await loadQuizPreview(selectedCourseId).catch(() => undefined);
+  };
+
+  const addEvaluationQuestion = async () => {
+    if (!selectedCourseId) return toast.warning('กรุณาเลือกหลักสูตรก่อนเพิ่มหัวข้อประเมิน');
+    const options = evaluationForm.options.map((option) => option.trim()).filter(Boolean);
+    const needsOptions = evaluationForm.question_type === 'single_choice' || evaluationForm.question_type === 'multiple_choice';
+    if (!evaluationForm.question_text.trim()) return toast.warning('กรุณาระบุหัวข้อการประเมิน');
+    if (needsOptions && options.length < 2) return toast.warning('คำถามแบบตัวเลือกต้องมีตัวเลือกอย่างน้อย 2 รายการ');
+
+    const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/evaluation-questions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...evaluationForm, options }),
+    });
+    const data = await res.json();
+    if (!res.ok) return toast.error(data.error || 'เพิ่มหัวข้อการประเมินไม่สำเร็จ');
+    toast.success(data.message);
+    setEvaluationForm({ question_text: '', question_type: 'rating', options: ['', ''], is_required: true, sort_order: 0 });
+    await loadEvaluationQuestions(selectedCourseId).catch(() => undefined);
+    await loadEvaluationReport(selectedCourseId).catch(() => undefined);
+  };
+
+  const deleteEvaluationQuestion = async (questionId: number) => {
+    if (!selectedCourseId || !window.confirm('ต้องการลบหัวข้อประเมินนี้หรือไม่')) return;
+    const res = await fetch(`${API_BASE}/api/admin/training/evaluation-questions/${questionId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) return toast.error(data.error || 'ลบหัวข้อการประเมินไม่สำเร็จ');
+    toast.success(data.message);
+    await loadEvaluationQuestions(selectedCourseId).catch(() => undefined);
+    await loadEvaluationReport(selectedCourseId).catch(() => undefined);
   };
 
   const updateQuizSetting = (quizType: QuizType, key: 'hours' | 'minutes' | 'pass_score', value: number) => {
@@ -591,6 +687,32 @@ export default function TrainingAdmin() {
                     />
                   </div>
                 </section>
+
+                <section className="min-w-0 overflow-hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+                  <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h2 className="flex items-center gap-2 text-lg font-black text-slate-900"><Star className="text-amber-500" /> แบบประเมินหลังอบรม</h2>
+                      <p className="text-sm font-semibold text-slate-500">เพิ่มหัวข้อประเมินแบบให้คะแนน เลือกตอบ เลือกหลายข้อ หรือพิมพ์ข้อความ</p>
+                    </div>
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
+                      ผู้ตอบ {evaluationReport?.response_count || 0} คน
+                    </span>
+                  </div>
+                  <div className="grid gap-5 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
+                    <EvaluationQuestionForm
+                      form={evaluationForm}
+                      setForm={setEvaluationForm}
+                      disabled={!selectedCourseId}
+                      disabledReason={!selectedCourseId ? 'กรุณาเลือกหลักสูตรจากรายการ หรือบันทึกหลักสูตรใหม่ก่อนเพิ่มหัวข้อประเมิน' : ''}
+                      onSubmit={addEvaluationQuestion}
+                    />
+                    <EvaluationSummary
+                      questions={evaluationQuestions}
+                      report={evaluationReport}
+                      onDelete={deleteEvaluationQuestion}
+                    />
+                  </div>
+                </section>
               </div>
             </div>
           )}
@@ -670,6 +792,127 @@ function ReportSection({ report, onRefresh, onConfirmAttendance }: {
         </table>
       </div>
     </section>
+  );
+}
+
+function EvaluationQuestionForm({ form, setForm, disabled, disabledReason, onSubmit }: {
+  form: EvaluationFormState;
+  setForm: React.Dispatch<React.SetStateAction<EvaluationFormState>>;
+  disabled: boolean;
+  disabledReason: string;
+  onSubmit: () => void;
+}) {
+  const needsOptions = form.question_type === 'single_choice' || form.question_type === 'multiple_choice';
+  const updateOption = (index: number, value: string) => {
+    setForm((current) => {
+      const next = [...current.options];
+      next[index] = value;
+      return { ...current, options: next };
+    });
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+      <div className="grid gap-3">
+        <Input value={form.question_text} onChange={(value) => setForm((current) => ({ ...current, question_text: value }))} placeholder="หัวข้อการประเมิน" />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <select value={form.question_type} onChange={(event) => setForm((current) => ({ ...current, question_type: event.target.value as EvaluationQuestionType }))} className="min-w-0 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none">
+            {Object.entries(evaluationTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <Input value={String(form.sort_order || 0)} onChange={(value) => setForm((current) => ({ ...current, sort_order: Number(value) || 0 }))} placeholder="ลำดับ" />
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm font-bold text-slate-600">
+          <input type="checkbox" checked={form.is_required} onChange={(event) => setForm((current) => ({ ...current, is_required: event.target.checked }))} />
+          จำเป็นต้องตอบ
+        </label>
+        {needsOptions && (
+          <div className="grid gap-2">
+            <p className="text-xs font-black text-slate-500">ตัวเลือก</p>
+            {form.options.map((option, index) => (
+              <Input key={index} value={option} onChange={(value) => updateOption(index, value)} placeholder={`ตัวเลือก ${index + 1}`} />
+            ))}
+            <button type="button" onClick={() => setForm((current) => ({ ...current, options: [...current.options, ''] }))} className="rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs font-black text-blue-700">
+              เพิ่มตัวเลือก
+            </button>
+          </div>
+        )}
+        {disabledReason && <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">{disabledReason}</p>}
+        <button onClick={onSubmit} disabled={disabled} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+          <Save size={16} /> {disabled ? 'เลือก/บันทึกหลักสูตรก่อน' : 'เพิ่มหัวข้อประเมิน'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function EvaluationSummary({ questions, report, onDelete }: {
+  questions: AdminEvaluationQuestion[];
+  report: EvaluationReport | null;
+  onDelete: (questionId: number) => void;
+}) {
+  const reportByQuestion = new Map((report?.questions || []).map((question) => [question.question_id, question]));
+
+  return (
+    <div className="grid gap-4">
+      {questions.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm font-bold text-slate-400">
+          ยังไม่มีหัวข้อการประเมิน
+        </div>
+      ) : questions.map((question, index) => {
+        const summary = reportByQuestion.get(question.question_id);
+        return (
+          <div key={question.question_id} className="rounded-2xl border border-slate-100 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-black text-slate-900">{index + 1}. {question.question_text}</p>
+                <p className="mt-1 text-xs font-bold text-blue-600">{evaluationTypeLabels[question.question_type]} · {question.is_required ? 'จำเป็นต้องตอบ' : 'ไม่บังคับ'}</p>
+              </div>
+              <button onClick={() => onDelete(question.question_id)} className="rounded-xl bg-red-50 p-2 text-red-600"><Trash2 size={15} /></button>
+            </div>
+            {question.options.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {question.options.map((option) => <span key={option.option_id} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{option.option_text}</span>)}
+              </div>
+            )}
+            <EvaluationQuestionResult summary={summary} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function EvaluationQuestionResult({ summary }: { summary?: EvaluationReport['questions'][number] }) {
+  if (!summary) return <p className="mt-3 text-xs font-bold text-slate-400">ยังไม่มีคำตอบ</p>;
+
+  if (summary.question_type === 'rating') {
+    return (
+      <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm font-black text-amber-700">
+        ค่าเฉลี่ย {summary.average_rating ?? '-'} / 5 จาก {summary.total_answers || 0} คำตอบ
+      </p>
+    );
+  }
+
+  if (summary.question_type === 'single_choice' || summary.question_type === 'multiple_choice') {
+    const entries = Object.entries(summary.option_counts || {});
+    return (
+      <div className="mt-3 grid gap-2">
+        {entries.length === 0 ? <p className="text-xs font-bold text-slate-400">ยังไม่มีคำตอบ</p> : entries.map(([label, count]) => (
+          <div key={label} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm font-bold text-slate-600">
+            <span>{label}</span>
+            <span className="text-blue-700">{count} คน</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 grid gap-2">
+      {(summary.text_answers || []).length === 0 ? <p className="text-xs font-bold text-slate-400">ยังไม่มีคำตอบข้อความ</p> : summary.text_answers?.map((answer, index) => (
+        <p key={index} className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">{answer}</p>
+      ))}
+    </div>
   );
 }
 
