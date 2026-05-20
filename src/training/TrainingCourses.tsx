@@ -4,6 +4,7 @@ import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
+import { getTrainingImageUrl } from './driveMedia';
 
 type Course = {
   course_id: number;
@@ -23,9 +24,9 @@ type Course = {
 };
 
 const typeLabels: Record<Course['course_type'], string> = {
-  online: 'อบรมออนไลน์',
-  zoom: 'อบรมผ่าน Zoom',
-  onsite: 'อบรมในห้อง',
+  online: 'อบรมผ่านสื่ออิเล็กทรอนิกส์ (Online Training)',
+  zoom: 'อบรมผ่านระบบ Zoom Meeting',
+  onsite: 'อบรม ณ สถานที่จัดอบรม (On-site Training)',
 };
 
 const typeIcons = {
@@ -145,9 +146,9 @@ export default function TrainingCourses() {
                   className="bg-transparent text-sm font-bold outline-none"
                 >
                   <option value="all">ทุกประเภท</option>
-                  <option value="online">อบรมออนไลน์</option>
-                  <option value="zoom">อบรมผ่าน Zoom</option>
-                  <option value="onsite">อบรมในห้อง</option>
+                  <option value="onsite">{typeLabels.onsite}</option>
+                  <option value="zoom">{typeLabels.zoom}</option>
+                  <option value="online">{typeLabels.online}</option>
                 </select>
               </div>
             </div>
@@ -175,7 +176,7 @@ export default function TrainingCourses() {
                   >
                     <div className="relative aspect-[16/9] overflow-hidden bg-slate-100">
                       {course.thumbnail_url ? (
-                        <img src={course.thumbnail_url} alt={course.title} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
+                        <img src={getTrainingImageUrl(course.thumbnail_url)} alt={course.title} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
                       ) : fallbackThumbnail(course)}
                       <div className="absolute left-4 top-4 rounded-full bg-white/90 px-3 py-1 text-xs font-black text-slate-700 shadow">
                         {course.category || 'หลักสูตร'}

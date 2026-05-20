@@ -22,6 +22,7 @@ let usageTablesReady: Promise<void> | null = null;
 let profileAvatarReady: Promise<void> | null = null;
 let monitorRecordsReady: Promise<void> | null = null;
 let trainingTablesReady: Promise<void> | null = null;
+let knowledgeTablesReady: Promise<void> | null = null;
 
 const DEFAULT_MENU_ITEMS = [
   ['home', 'หน้าหลัก', 'sidebar', 'Home', '/index', 1],
@@ -31,10 +32,12 @@ const DEFAULT_MENU_ITEMS = [
   ['user_settings', 'ตั้งค่าผู้ใช้งาน', 'sidebar', 'Settings', '/user-settings', 5],
   ['monitor_data', 'บันทึกกำกับติดตามกลุ่มเทคฯ', 'sidebar', 'ClipboardEdit', '/monitor-data', 6],
   ['training_admin', 'จัดการระบบอบรม', 'sidebar', 'GraduationCap', '/training-admin', 7],
+  ['knowledge_admin', 'จัดการคลังความรู้', 'sidebar', 'LibraryBig', '/knowledge-admin', 8],
   ['report_monitor', 'รายงานการกำกับติดตามฯ', 'content', 'Monitor', '/program-monitoring', 10],
   ['report_course', 'หลักสูตรการอบรม', 'content', 'BookOpen', '/training-courses', 11],
   ['report_usage', 'รายงานการใช้งานระบบ', 'content', 'Users', '/system-usage-report', 12],
   ['report_security', 'รายงานการรักษาความปลอดภัย', 'content', 'ShieldCheck', '/office-security-report', 13],
+  ['knowledge', 'คลังความรู้', 'content', 'LibraryBig', '/knowledge', 14],
 ];
 const GOOGLE_DRIVE_AVATAR_FOLDER_ID = '1aaQIZ3nUcr0iDLOq8xENFpM_halgcndE';
 const GOOGLE_AVATAR_UPLOAD_SCRIPT_URL = process.env.GOOGLE_AVATAR_UPLOAD_SCRIPT_URL || GOOGLE_MONITOR_SCRIPT_URL;
@@ -49,6 +52,10 @@ async function ensureColumn(tableName: string, columnName: string, definition: s
   if (rows.length === 0) {
     await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
   }
+}
+
+async function ensureTrainingSchemaColumns() {
+  await ensureColumn('training_quizzes', 'time_limit_minutes', 'INT DEFAULT 0');
 }
 
 async function ensureProfileAvatarColumn() {
@@ -95,6 +102,15 @@ async function ensureDefaultMenuItems() {
     LEFT JOIN group_permissions gp ON gp.group_id = g.group_id AND gp.menu_id = m.menu_id
     WHERE gp.perm_id IS NULL
   `);
+
+  await pool.query(`
+    INSERT INTO group_permissions (group_id, menu_id, can_view)
+    SELECT g.group_id, m.menu_id, 1
+    FROM user_groups g
+    JOIN menu_items m ON m.menu_key = 'knowledge'
+    LEFT JOIN group_permissions gp ON gp.group_id = g.group_id AND gp.menu_id = m.menu_id
+    WHERE gp.perm_id IS NULL
+  `);
 }
 
 async function ensureMonitorRecordsTable() {
@@ -133,6 +149,63 @@ function normalizeTrainingStatus(value: unknown) {
   const text = String(value || '').trim();
   if (['draft', 'open', 'closed'].includes(text)) return text;
   return 'open';
+}
+
+function normalizeKnowledgeStatus(value: unknown) {
+  const text = String(value || '').trim();
+  if (['draft', 'published', 'archived'].includes(text)) return text;
+  return 'published';
+}
+
+async function ensureKnowledgeTables() {
+  if (!knowledgeTablesReady) {
+    knowledgeTablesReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS knowledge_items (
+          item_id INT AUTO_INCREMENT PRIMARY KEY,
+          title VARCHAR(255) NOT NULL,
+          category VARCHAR(160) DEFAULT '',
+          description TEXT NULL,
+          status ENUM('draft','published','archived') NOT NULL DEFAULT 'published',
+          cover_url TEXT NULL,
+          cover_file_id VARCHAR(255) DEFAULT '',
+          pdf_url TEXT NULL,
+          pdf_file_id VARCHAR(255) DEFAULT '',
+          published_at DATETIME NULL,
+          view_count INT DEFAULT 0,
+          sort_order INT DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_knowledge_status (status),
+          INDEX idx_knowledge_published (published_at),
+          INDEX idx_knowledge_sort (sort_order)
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS knowledge_reading_logs (
+          log_id INT AUTO_INCREMENT PRIMARY KEY,
+          item_id INT NOT NULL,
+          user_id INT NOT NULL,
+          session_id INT NULL,
+          start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+          end_time DATETIME NULL,
+          active_seconds INT DEFAULT 0,
+          created_date DATE GENERATED ALWAYS AS (DATE(start_time)) STORED,
+          INDEX idx_knowledge_log_item (item_id),
+          INDEX idx_knowledge_log_user (user_id),
+          INDEX idx_knowledge_log_date (created_date),
+          INDEX idx_knowledge_log_session (session_id),
+          FOREIGN KEY (item_id) REFERENCES knowledge_items(item_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+    })().catch((error) => {
+      knowledgeTablesReady = null;
+      throw error;
+    });
+  }
+
+  return knowledgeTablesReady;
 }
 
 async function seedTrainingSampleData() {
@@ -184,8 +257,8 @@ async function seedTrainingSampleData() {
 
   for (const quizType of ['pre', 'post']) {
     const [quizResult]: any = await pool.query(
-      'INSERT INTO training_quizzes (course_id, quiz_type, title, pass_score) VALUES (?, ?, ?, ?)',
-      [courseId, quizType, quizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน', 70],
+      'INSERT INTO training_quizzes (course_id, quiz_type, title, pass_score, time_limit_minutes) VALUES (?, ?, ?, ?, ?)',
+      [courseId, quizType, quizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน', 70, 30],
     );
     const [questionResult]: any = await pool.query(
       'INSERT INTO training_questions (quiz_id, question_text, sort_order) VALUES (?, ?, ?)',
@@ -268,11 +341,13 @@ async function ensureTrainingTables() {
           quiz_type ENUM('pre','post') NOT NULL,
           title VARCHAR(255) NOT NULL,
           pass_score INT DEFAULT 70,
+          time_limit_minutes INT DEFAULT 0,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           UNIQUE KEY uq_training_quiz_type (course_id, quiz_type),
           FOREIGN KEY (course_id) REFERENCES training_courses(course_id) ON DELETE CASCADE
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
       `);
+      await ensureTrainingSchemaColumns();
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS training_questions (
@@ -456,6 +531,32 @@ async function deleteAvatarFromGoogleDrive(avatarUrlOrFileId: unknown) {
   }
 
   return parsed;
+}
+
+function buildDriveProxyPath(fileId: unknown) {
+  const safeId = String(fileId || '').trim();
+  return safeId ? `/api/google-drive/files/${encodeURIComponent(safeId)}` : '';
+}
+
+async function postToDriveScript(payload: Record<string, unknown>) {
+  const response = await fetch(GOOGLE_AVATAR_UPLOAD_SCRIPT_URL, {
+    method: 'POST',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await response.text();
+  if (!response.ok) throw new Error(text || 'Cannot call Google Apps Script');
+  if (/script function not found|<!doctype|<html/i.test(text)) {
+    throw new Error('Google Apps Script ยังไม่รองรับคำสั่งนี้ โปรดอัปเดต Apps Script แล้ว Deploy เป็น New version');
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('Google Apps Script ส่งผลลัพธ์กลับมาไม่ถูกต้อง');
+  }
 }
 
 async function ensureUsageTables() {
@@ -759,6 +860,128 @@ app.post('/api/users/profile/avatar-drive', async (req, res) => {
   }
 });
 
+// แสดงไฟล์จาก Google Drive ผ่าน backend เพื่อแก้กรณี thumbnail public ของ Drive ไม่แสดง
+app.get('/api/google-drive/files/:fileId', async (req, res) => {
+  try {
+    const fileId = extractGoogleDriveFileId(req.params.fileId);
+    if (!fileId) return res.status(400).send('Invalid Google Drive file id');
+
+    const parsed = await postToDriveScript({
+      action: 'getDriveFile',
+      fileId,
+    });
+
+    if (parsed?.ok === false) {
+      return res.status(404).send(parsed.error || 'Cannot load Google Drive file');
+    }
+
+    const mimeType = String(parsed.mimeType || 'application/octet-stream');
+    const base64 = String(parsed.base64 || '');
+    if (!base64) return res.status(404).send('Google Drive file is empty');
+
+    const bytes = Buffer.from(base64, 'base64');
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Content-Length', bytes.length);
+    res.send(bytes);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send(error instanceof Error ? error.message : 'Cannot load Google Drive file');
+  }
+});
+
+// อัปโหลดรูปปกหลักสูตรไปยัง Google Drive ผ่าน Apps Script
+app.post('/api/admin/training/cover-drive', async (req, res) => {
+  try {
+    const {
+      course_title,
+      file_name,
+      mime_type,
+      base64,
+    } = req.body || {};
+
+    if (!base64 || typeof base64 !== 'string') {
+      return res.status(400).json({ error: 'ไม่พบไฟล์รูปปกที่ต้องการอัปโหลด' });
+    }
+
+    if (!mime_type || typeof mime_type !== 'string' || !mime_type.startsWith('image/')) {
+      return res.status(400).json({ error: 'ไฟล์รูปปกต้องเป็นรูปภาพเท่านั้น' });
+    }
+
+    const safeCourseName = sanitizeAvatarFileName(course_title || 'training-course', 'training-course');
+    const safeFileName = sanitizeAvatarFileName(file_name || `${safeCourseName}-cover.webp`, 'training-cover.webp');
+    const parsed = await postToDriveScript({
+      action: 'uploadDriveFile',
+      folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
+      userId: 'training-cover',
+      displayName: safeCourseName,
+      fileName: `${Date.now()}-course-cover-${safeFileName}`,
+      mimeType: mime_type,
+      base64,
+    });
+
+    if (parsed?.ok === false) {
+      throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลดรูปปกไป Google Drive ไม่สำเร็จ'));
+    }
+
+    res.json({
+      ...parsed,
+      fileProxyPath: buildDriveProxyPath(parsed.fileId),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      error: error instanceof Error
+        ? error.message
+        : 'ไม่สามารถอัปโหลดรูปปกหลักสูตรไปยัง Google Drive ได้',
+    });
+  }
+});
+
+// อัปโหลดเอกสารประกอบหลักสูตรไปยัง Google Drive ผ่าน Apps Script
+app.post('/api/admin/training/material-drive', async (req, res) => {
+  try {
+    const {
+      course_title,
+      file_name,
+      mime_type,
+      base64,
+    } = req.body || {};
+
+    if (!base64 || typeof base64 !== 'string') {
+      return res.status(400).json({ error: 'ไม่พบไฟล์เอกสารที่ต้องการอัปโหลด' });
+    }
+
+    const safeCourseName = sanitizeAvatarFileName(course_title || 'training-course', 'training-course');
+    const safeFileName = sanitizeAvatarFileName(file_name || `${safeCourseName}-material`, 'training-material');
+    const parsed = await postToDriveScript({
+      action: 'uploadDriveFile',
+      folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
+      userId: 'training-material',
+      displayName: safeCourseName,
+      fileName: `${Date.now()}-course-material-${safeFileName}`,
+      mimeType: String(mime_type || 'application/octet-stream'),
+      base64,
+    });
+
+    if (parsed?.ok === false) {
+      throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลดเอกสารไป Google Drive ไม่สำเร็จ'));
+    }
+
+    res.json({
+      ...parsed,
+      fileProxyPath: buildDriveProxyPath(parsed.fileId),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      error: error instanceof Error
+        ? error.message
+        : 'ไม่สามารถอัปโหลดเอกสารประกอบไปยัง Google Drive ได้',
+    });
+  }
+});
+
 // ลบรูปประจำตัวเดิมออกจาก Google Drive
 app.post('/api/users/profile/avatar-drive/delete', async (req, res) => {
   try {
@@ -938,6 +1161,321 @@ app.post('/api/google-monitor-data', async (req, res) => {
   }
 });
 
+// ====== KNOWLEDGE BASE ======
+
+app.post('/api/admin/setup-knowledge-tables', async (_req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    await ensureDefaultMenuItems();
+    res.json({ message: 'ตารางคลังความรู้ถูกสร้างเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการสร้างตารางคลังความรู้' });
+  }
+});
+
+app.get('/api/knowledge/items', async (_req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    const [rows]: any = await pool.query(`
+      SELECT item_id, title, category, description, cover_url, cover_file_id,
+             published_at, view_count, sort_order, updated_at
+      FROM knowledge_items
+      WHERE status = 'published'
+      ORDER BY sort_order ASC, COALESCE(published_at, updated_at) DESC, item_id DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงข้อมูลคลังความรู้ได้' });
+  }
+});
+
+app.get('/api/knowledge/items/:id', async (req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    const itemId = toInt(req.params.id);
+    const [rows]: any = await pool.query(
+      `SELECT item_id, title, category, description, cover_url, cover_file_id,
+              pdf_url, pdf_file_id, published_at, view_count, sort_order, updated_at
+       FROM knowledge_items
+       WHERE item_id = ? AND status = 'published'
+       LIMIT 1`,
+      [itemId],
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'ไม่พบเรื่องในคลังความรู้' });
+    const item = rows[0];
+    res.json({
+      ...item,
+      pdf_proxy_url: item.pdf_file_id ? buildDriveProxyPath(item.pdf_file_id) : '',
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายละเอียดคลังความรู้ได้' });
+  }
+});
+
+app.post('/api/knowledge/items/:id/read/start', async (req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    const itemId = toInt(req.params.id);
+    const userId = toInt(req.body.user_id);
+    const sessionId = toInt(req.body.session_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+
+    const [items]: any = await pool.query(
+      'SELECT item_id FROM knowledge_items WHERE item_id = ? AND status = "published" LIMIT 1',
+      [itemId],
+    );
+    if (items.length === 0) return res.status(404).json({ error: 'ไม่พบเรื่องในคลังความรู้' });
+
+    const [result]: any = await pool.query(
+      'INSERT INTO knowledge_reading_logs (item_id, user_id, session_id, start_time) VALUES (?, ?, ?, NOW())',
+      [itemId, userId, sessionId || null],
+    );
+    await pool.query('UPDATE knowledge_items SET view_count = view_count + 1 WHERE item_id = ?', [itemId]);
+    res.json({ message: 'เริ่มบันทึกการอ่านแล้ว', log_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เริ่มบันทึกการอ่านไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/knowledge/read-logs/:logId/time', async (req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    const logId = toInt(req.params.logId);
+    const userId = toInt(req.body.user_id);
+    const seconds = Math.max(0, Math.min(toInt(req.body.seconds), 3600));
+    if (!logId || seconds <= 0) return res.json({ message: 'ไม่มีเวลาที่ต้องบันทึก' });
+
+    const params = userId
+      ? [seconds, logId, userId]
+      : [seconds, logId];
+    const userClause = userId ? 'AND user_id = ?' : '';
+    await pool.query(
+      `UPDATE knowledge_reading_logs
+       SET active_seconds = active_seconds + ?, end_time = NOW()
+       WHERE log_id = ? ${userClause}`,
+      params,
+    );
+    res.json({ message: 'บันทึกเวลาอ่านเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'บันทึกเวลาอ่านไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/admin/knowledge/items', async (_req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    const [rows]: any = await pool.query(`
+      SELECT *
+      FROM knowledge_items
+      ORDER BY sort_order ASC, updated_at DESC, item_id DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงข้อมูลคลังความรู้ได้' });
+  }
+});
+
+app.post('/api/admin/knowledge/items', async (req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    const body = req.body || {};
+    const title = String(body.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'กรุณาระบุชื่อเรื่อง' });
+    const status = normalizeKnowledgeStatus(body.status);
+    const coverUrl = String(body.cover_url || '').trim();
+    const pdfUrl = String(body.pdf_url || '').trim();
+
+    const [result]: any = await pool.query(
+      `INSERT INTO knowledge_items
+       (title, category, description, status, cover_url, cover_file_id, pdf_url, pdf_file_id,
+        published_at, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${status === 'published' ? 'NOW()' : 'NULL'}, ?)`,
+      [
+        title,
+        String(body.category || '').trim(),
+        String(body.description || '').trim(),
+        status,
+        coverUrl,
+        String(body.cover_file_id || extractGoogleDriveFileId(coverUrl) || '').trim(),
+        pdfUrl,
+        String(body.pdf_file_id || extractGoogleDriveFileId(pdfUrl) || '').trim(),
+        toInt(body.sort_order),
+      ],
+    );
+    res.json({ message: 'เพิ่มเรื่องในคลังความรู้เรียบร้อยแล้ว', item_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เพิ่มเรื่องในคลังความรู้ไม่สำเร็จ' });
+  }
+});
+
+app.put('/api/admin/knowledge/items/:id', async (req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    const itemId = toInt(req.params.id);
+    const body = req.body || {};
+    const title = String(body.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'กรุณาระบุชื่อเรื่อง' });
+    const status = normalizeKnowledgeStatus(body.status);
+    const coverUrl = String(body.cover_url || '').trim();
+    const pdfUrl = String(body.pdf_url || '').trim();
+
+    await pool.query(
+      `UPDATE knowledge_items SET
+       title = ?, category = ?, description = ?, status = ?,
+       cover_url = ?, cover_file_id = ?, pdf_url = ?, pdf_file_id = ?,
+       sort_order = ?,
+       published_at = CASE WHEN ? = 'published' THEN COALESCE(published_at, NOW()) ELSE published_at END
+       WHERE item_id = ?`,
+      [
+        title,
+        String(body.category || '').trim(),
+        String(body.description || '').trim(),
+        status,
+        coverUrl,
+        String(body.cover_file_id || extractGoogleDriveFileId(coverUrl) || '').trim(),
+        pdfUrl,
+        String(body.pdf_file_id || extractGoogleDriveFileId(pdfUrl) || '').trim(),
+        toInt(body.sort_order),
+        status,
+        itemId,
+      ],
+    );
+    res.json({ message: 'แก้ไขเรื่องในคลังความรู้เรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'แก้ไขเรื่องในคลังความรู้ไม่สำเร็จ' });
+  }
+});
+
+app.delete('/api/admin/knowledge/items/:id', async (req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    await pool.query('DELETE FROM knowledge_items WHERE item_id = ?', [req.params.id]);
+    res.json({ message: 'ลบเรื่องในคลังความรู้เรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ลบเรื่องในคลังความรู้ไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/admin/knowledge/cover-drive', async (req, res) => {
+  try {
+    const { item_title, file_name, mime_type, base64 } = req.body || {};
+    if (!base64 || typeof base64 !== 'string') {
+      return res.status(400).json({ error: 'ไม่พบไฟล์รูปปกที่ต้องการอัปโหลด' });
+    }
+    if (!mime_type || typeof mime_type !== 'string' || !mime_type.startsWith('image/')) {
+      return res.status(400).json({ error: 'ไฟล์รูปปกต้องเป็นรูปภาพเท่านั้น' });
+    }
+
+    const safeItemName = sanitizeAvatarFileName(item_title || 'knowledge-item', 'knowledge-item');
+    const safeFileName = sanitizeAvatarFileName(file_name || `${safeItemName}-cover.webp`, 'knowledge-cover.webp');
+    const parsed = await postToDriveScript({
+      action: 'uploadDriveFile',
+      folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
+      userId: 'knowledge-cover',
+      displayName: safeItemName,
+      fileName: `${Date.now()}-knowledge-cover-${safeFileName}`,
+      mimeType: mime_type,
+      base64,
+    });
+
+    if (parsed?.ok === false) {
+      throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลดรูปปกไป Google Drive ไม่สำเร็จ'));
+    }
+
+    res.json({
+      ...parsed,
+      fileProxyPath: buildDriveProxyPath(parsed.fileId),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      error: error instanceof Error
+        ? error.message
+        : 'ไม่สามารถอัปโหลดรูปปกคลังความรู้ไปยัง Google Drive ได้',
+    });
+  }
+});
+
+app.post('/api/admin/knowledge/pdf-drive', async (req, res) => {
+  try {
+    const { item_title, file_name, mime_type, base64 } = req.body || {};
+    if (!base64 || typeof base64 !== 'string') {
+      return res.status(400).json({ error: 'ไม่พบไฟล์ PDF ที่ต้องการอัปโหลด' });
+    }
+    const safeMimeType = String(mime_type || 'application/pdf');
+    if (safeMimeType !== 'application/pdf' && !String(file_name || '').toLowerCase().endsWith('.pdf')) {
+      return res.status(400).json({ error: 'เอกสารคลังความรู้ต้องเป็นไฟล์ PDF เท่านั้น' });
+    }
+
+    const safeItemName = sanitizeAvatarFileName(item_title || 'knowledge-item', 'knowledge-item');
+    const safeFileName = sanitizeAvatarFileName(file_name || `${safeItemName}.pdf`, 'knowledge.pdf');
+    const parsed = await postToDriveScript({
+      action: 'uploadDriveFile',
+      folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
+      userId: 'knowledge-pdf',
+      displayName: safeItemName,
+      fileName: `${Date.now()}-knowledge-pdf-${safeFileName}`,
+      mimeType: 'application/pdf',
+      base64,
+    });
+
+    if (parsed?.ok === false) {
+      throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลด PDF ไป Google Drive ไม่สำเร็จ'));
+    }
+
+    res.json({
+      ...parsed,
+      fileProxyPath: buildDriveProxyPath(parsed.fileId),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      error: error instanceof Error
+        ? error.message
+        : 'ไม่สามารถอัปโหลด PDF คลังความรู้ไปยัง Google Drive ได้',
+    });
+  }
+});
+
+app.get('/api/admin/knowledge/report', async (_req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    const [rows]: any = await pool.query(`
+      SELECT
+        l.item_id,
+        l.user_id,
+        i.title,
+        i.category,
+        u.Name_Surnam AS Name_Surname,
+        u.position,
+        u.Division_Province,
+        u.Department,
+        COUNT(l.log_id) AS read_count,
+        COALESCE(SUM(l.active_seconds), 0) AS total_active_seconds,
+        MIN(l.start_time) AS first_read_at,
+        MAX(COALESCE(l.end_time, l.start_time)) AS last_read_at
+      FROM knowledge_reading_logs l
+      INNER JOIN knowledge_items i ON i.item_id = l.item_id
+      INNER JOIN user u ON u.user_id = l.user_id
+      GROUP BY l.item_id, l.user_id, i.title, i.category, u.Name_Surnam, u.position, u.Division_Province, u.Department
+      ORDER BY last_read_at DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายงานคลังความรู้ได้' });
+  }
+});
+
 // ====== TRAINING / E-LEARNING ======
 
 app.post('/api/admin/setup-training-tables', async (_req, res) => {
@@ -1002,7 +1540,7 @@ app.get('/api/training/courses/:id', async (req, res) => {
       [courseId],
     );
     const [quizzes]: any = await pool.query(
-      'SELECT quiz_id, course_id, quiz_type, title, pass_score FROM training_quizzes WHERE course_id = ? ORDER BY FIELD(quiz_type, "pre", "post")',
+      'SELECT quiz_id, course_id, quiz_type, title, pass_score, time_limit_minutes FROM training_quizzes WHERE course_id = ? ORDER BY FIELD(quiz_type, "pre", "post")',
       [courseId],
     );
 
@@ -1099,7 +1637,7 @@ app.get('/api/training/quizzes/:id', async (req, res) => {
   try {
     await ensureTrainingTables();
     const quizId = toInt(req.params.id);
-    const [quizzes]: any = await pool.query('SELECT quiz_id, course_id, quiz_type, title, pass_score FROM training_quizzes WHERE quiz_id = ?', [quizId]);
+    const [quizzes]: any = await pool.query('SELECT quiz_id, course_id, quiz_type, title, pass_score, time_limit_minutes FROM training_quizzes WHERE quiz_id = ?', [quizId]);
     if (quizzes.length === 0) return res.status(404).json({ error: 'ไม่พบแบบทดสอบ' });
 
     const [questions]: any = await pool.query(
@@ -1139,6 +1677,11 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
     const [quizzes]: any = await pool.query('SELECT * FROM training_quizzes WHERE quiz_id = ?', [quizId]);
     if (quizzes.length === 0) return res.status(404).json({ error: 'ไม่พบแบบทดสอบ' });
     const quiz = quizzes[0];
+    const timeLimitMinutes = Math.max(0, toInt(quiz.time_limit_minutes));
+    const elapsedSeconds = Math.max(0, toInt(req.body.elapsed_seconds));
+    if (timeLimitMinutes > 0 && elapsedSeconds > (timeLimitMinutes * 60) + 5) {
+      return res.status(400).json({ error: 'หมดเวลาทำแบบทดสอบแล้ว ไม่สามารถส่งคำตอบได้' });
+    }
 
     const [enrollments]: any = await pool.query(
       'SELECT * FROM training_enrollments WHERE course_id = ? AND user_id = ?',
@@ -1412,6 +1955,73 @@ app.post('/api/admin/training/courses/:id/materials', async (req, res) => {
   }
 });
 
+app.get('/api/admin/training/courses/:id/quizzes', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const [quizzes]: any = await pool.query(
+      'SELECT quiz_id, course_id, quiz_type, title, pass_score, time_limit_minutes FROM training_quizzes WHERE course_id = ? ORDER BY FIELD(quiz_type, "pre", "post")',
+      [courseId],
+    );
+    if (quizzes.length === 0) return res.json([]);
+
+    const quizIds = quizzes.map((quiz: any) => quiz.quiz_id);
+    const [questions]: any = await pool.query(
+      'SELECT question_id, quiz_id, question_text, sort_order FROM training_questions WHERE quiz_id IN (?) ORDER BY quiz_id, sort_order, question_id',
+      [quizIds],
+    );
+    const questionIds = questions.map((question: any) => question.question_id);
+    const [choices]: any = questionIds.length > 0
+      ? await pool.query(
+          `SELECT choice_id, question_id, choice_text, is_correct, sort_order
+           FROM training_choices
+           WHERE question_id IN (?)
+           ORDER BY question_id, sort_order, choice_id`,
+          [questionIds],
+        )
+      : [[]];
+
+    res.json(quizzes.map((quiz: any) => ({
+      ...quiz,
+      questions: questions
+        .filter((question: any) => question.quiz_id === quiz.quiz_id)
+        .map((question: any) => ({
+          ...question,
+          choices: choices.filter((choice: any) => choice.question_id === question.question_id),
+        })),
+    })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงตัวอย่างแบบทดสอบได้' });
+  }
+});
+
+app.put('/api/admin/training/courses/:id/quizzes/:quizType/settings', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const courseId = toInt(req.params.id);
+    const quizType = req.params.quizType === 'pre' ? 'pre' : 'post';
+    const passScore = Math.max(0, Math.min(toInt(req.body.pass_score, 70), 100));
+    const timeLimitMinutes = Math.max(0, Math.min(toInt(req.body.time_limit_minutes), 24 * 60));
+    const title = quizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน';
+
+    await pool.query(
+      `INSERT INTO training_quizzes (course_id, quiz_type, title, pass_score, time_limit_minutes)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         title = VALUES(title),
+         pass_score = VALUES(pass_score),
+         time_limit_minutes = VALUES(time_limit_minutes)`,
+      [courseId, quizType, title, passScore, timeLimitMinutes],
+    );
+
+    res.json({ message: 'บันทึกการตั้งค่าแบบทดสอบเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'บันทึกการตั้งค่าแบบทดสอบไม่สำเร็จ' });
+  }
+});
+
 app.post('/api/admin/training/courses/:id/questions', async (req, res) => {
   try {
     await ensureTrainingTables();
@@ -1645,10 +2255,12 @@ app.post('/api/admin/setup-tables', async (_req, res) => {
         ('change_password', 'เปลี่ยนรหัสผ่าน',             'sidebar',  'KeyRound',    '/change-password', 4),
         ('user_settings',   'ตั้งค่าผู้ใช้งาน',            'sidebar',  'Settings',    '/user-settings',   5),
         ('training_admin',  'จัดการระบบอบรม',             'sidebar',  'GraduationCap','/training-admin',  7),
+        ('knowledge_admin', 'จัดการคลังความรู้',           'sidebar',  'LibraryBig',   '/knowledge-admin', 8),
         ('report_monitor',  'รายงานการกำกับติดตามฯ',        'content',  'Monitor',     '/program-monitoring', 10),
         ('report_course',   'หลักสูตรการอบรม',              'content',  'BookOpen',    '/training-courses', 11),
         ('report_usage',    'รายงานการใช้งานระบบ',          'content',  'Users',       '/system-usage-report', 12),
-        ('report_security', 'รายงานการรักษาความปลอดภัย',   'content',  'ShieldCheck', '/office-security-report', 13)
+        ('report_security', 'รายงานการรักษาความปลอดภัย',   'content',  'ShieldCheck', '/office-security-report', 13),
+        ('knowledge',       'คลังความรู้',                   'content',  'LibraryBig',   '/knowledge',       14)
       `);
     } else {
       await pool.query(`
@@ -1659,9 +2271,11 @@ app.post('/api/admin/setup-tables', async (_req, res) => {
           WHEN 'report_course' THEN '/training-courses'
           WHEN 'report_usage' THEN '/system-usage-report'
           WHEN 'report_security' THEN '/office-security-report'
+          WHEN 'knowledge_admin' THEN '/knowledge-admin'
+          WHEN 'knowledge' THEN '/knowledge'
           ELSE menu_href
         END
-        WHERE menu_key IN ('training', 'report_monitor', 'report_course', 'report_usage', 'report_security')
+        WHERE menu_key IN ('training', 'report_monitor', 'report_course', 'report_usage', 'report_security', 'knowledge_admin', 'knowledge')
           AND (menu_href IS NULL OR menu_href = '' OR menu_href = '#')
       `);
     }

@@ -40,12 +40,16 @@ function doPost(e) {
     const payload = JSON.parse(rawBody);
     const rowData = payload.row && typeof payload.row === 'object' ? payload.row : payload;
 
-    if (rowData.action === 'uploadAvatar') {
+    if (rowData.action === 'uploadAvatar' || rowData.action === 'uploadDriveFile') {
       return uploadAvatarToDrive_(rowData);
     }
 
     if (rowData.action === 'deleteAvatar') {
       return deleteAvatarFromDrive_(rowData);
+    }
+
+    if (rowData.action === 'getDriveFile') {
+      return getDriveFile_(rowData);
     }
 
     if (!rowData || Object.keys(rowData).length === 0) {
@@ -165,10 +169,11 @@ function uploadAvatarToDrive_(payload) {
 
     return outputJson_({
       ok: true,
-      message: 'อัปโหลดรูปประจำตัวไปยัง Google Drive เรียบร้อยแล้ว',
+      message: 'อัปโหลดไฟล์ไปยัง Google Drive เรียบร้อยแล้ว',
       warning: sharingWarning,
       fileId: fileId,
       fileName: file.getName(),
+      mimeType: file.getMimeType(),
       webViewLink: file.getUrl(),
       url: 'https://drive.google.com/uc?export=view&id=' + fileId,
       thumbnailUrl: 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w640',
@@ -177,6 +182,35 @@ function uploadAvatarToDrive_(payload) {
     return outputJson_({
       ok: false,
       error: 'อัปโหลดรูปไป Google Drive ไม่สำเร็จ: ' + error.toString(),
+    });
+  }
+}
+
+function getDriveFile_(payload) {
+  try {
+    const fileId = extractDriveFileId_(payload.fileId || payload.file_id || payload.url || '');
+
+    if (!fileId) {
+      return outputJson_({
+        ok: false,
+        error: 'ไม่พบรหัสไฟล์ Google Drive',
+      });
+    }
+
+    const file = DriveApp.getFileById(fileId);
+    const blob = file.getBlob();
+
+    return outputJson_({
+      ok: true,
+      fileId: fileId,
+      fileName: file.getName(),
+      mimeType: blob.getContentType(),
+      base64: Utilities.base64Encode(blob.getBytes()),
+    });
+  } catch (error) {
+    return outputJson_({
+      ok: false,
+      error: 'ดึงไฟล์จาก Google Drive ไม่สำเร็จ: ' + error.toString(),
     });
   }
 }

@@ -10,6 +10,9 @@ import TrainingHistory from './training/TrainingHistory'
 import TrainingCourses from './training/TrainingCourses'
 import TrainingCourseDetail from './training/TrainingCourseDetail'
 import TrainingAdmin from './training/TrainingAdmin'
+import KnowledgeList from './knowledge/KnowledgeList'
+import KnowledgeDetail from './knowledge/KnowledgeDetail'
+import KnowledgeAdmin from './knowledge/KnowledgeAdmin'
 import ProgramMonitoring from './monitor/ProgramMonitoring'
 import MonitorData from './user/monitor_data'
 import SystemUsageReport from './user/SystemUsageReport'
@@ -48,8 +51,10 @@ const PROTECTED_ROUTES: Record<string, { component: React.ReactNode; menuKey: st
   '/user-settings':        { component: <UserSettings />,         menuKey: 'user_settings' },
   '/monitor-data':         { component: <MonitorData />,          menuKey: 'monitor_data' },
   '/training-admin':       { component: <TrainingAdmin />,        menuKey: 'training_admin' },
+  '/knowledge-admin':      { component: <KnowledgeAdmin />,       menuKey: 'knowledge_admin' },
   '/training-history':     { component: <TrainingHistory />,      menuKey: 'training' },
   '/training-courses':     { component: <TrainingCourses />,      menuKey: 'report_course' },
+  '/knowledge':            { component: <KnowledgeList />,        menuKey: 'knowledge' },
   '/program-monitoring':   { component: <ProgramMonitoring />,    menuKey: 'report_monitor' },
   '/system-usage-report':  { component: <SystemUsageReport />,    menuKey: 'report_usage' },
   '/office-security-report': { component: <OfficeSecurityReport />, menuKey: 'report_security' },
@@ -65,6 +70,15 @@ function AppRouter() {
     return (
       <PermissionGuard menuKey="report_course">
         <TrainingCourseDetail courseId={courseId} />
+      </PermissionGuard>
+    );
+  }
+
+  if (path.startsWith('/knowledge/')) {
+    const itemId = Number(path.split('/').filter(Boolean)[1]);
+    return (
+      <PermissionGuard menuKey="knowledge">
+        <KnowledgeDetail itemId={itemId} />
       </PermissionGuard>
     );
   }

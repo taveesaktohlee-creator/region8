@@ -4,6 +4,7 @@ import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
+import { getTrainingImageUrl } from './driveMedia';
 
 type HistoryItem = {
   enrollment_id: number;
@@ -139,7 +140,7 @@ export default function TrainingHistory() {
                 <a key={item.enrollment_id} href={`/training-courses/${item.course_id}`} className="grid gap-4 rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_16px_45px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:shadow-[0_24px_60px_rgba(37,99,235,0.14)] md:grid-cols-[180px_1fr]">
                   <div className="aspect-video overflow-hidden rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 md:aspect-auto md:h-full">
                     {item.thumbnail_url ? (
-                      <img src={item.thumbnail_url} alt={item.title} className="h-full w-full object-cover" />
+                      <img src={getTrainingImageUrl(item.thumbnail_url)} alt={item.title} className="h-full w-full object-cover" />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-white"><BookOpen size={40} /></div>
                     )}

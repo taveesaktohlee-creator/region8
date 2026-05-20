@@ -4,6 +4,7 @@ import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
+import { getTrainingImageUrl } from './driveMedia';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -37,8 +38,14 @@ type Enrollment = {
   certificate_code?: string;
 };
 
-type Quiz = { quiz_id: number; quiz_type: 'pre' | 'post'; title: string; pass_score: number };
+type Quiz = { quiz_id: number; quiz_type: 'pre' | 'post'; title: string; pass_score: number; time_limit_minutes?: number };
 type Question = { question_id: number; question_text: string; choices: { choice_id: number; choice_text: string }[] };
+
+const courseTypeLabels: Record<Course['course_type'], string> = {
+  online: 'อบรมผ่านสื่ออิเล็กทรอนิกส์ (Online Training)',
+  zoom: 'อบรมผ่านระบบ Zoom Meeting',
+  onsite: 'อบรม ณ สถานที่จัดอบรม (On-site Training)',
+};
 
 function formatSeconds(seconds?: number) {
   const value = Math.max(0, Number(seconds || 0));
@@ -46,6 +53,25 @@ function formatSeconds(seconds?: number) {
   const minutes = Math.floor((value % 3600) / 60);
   if (hours > 0) return `${hours} ชม. ${minutes} นาที`;
   return `${minutes} นาที`;
+}
+
+function formatCountdown(seconds: number) {
+  const safe = Math.max(0, seconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = safe % 60;
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+function formatQuizLimit(minutes?: number) {
+  const safe = Math.max(0, Number(minutes || 0));
+  if (safe <= 0) return 'ไม่จำกัดเวลา';
+  const hours = Math.floor(safe / 60);
+  const mins = safe % 60;
+  if (hours > 0 && mins > 0) return `${hours} ชม. ${mins} นาที`;
+  if (hours > 0) return `${hours} ชม.`;
+  return `${mins} นาที`;
 }
 
 function InfoBlock({ title, children }: { title: string; children: React.ReactNode }) {
@@ -206,7 +232,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
           <section className="overflow-hidden rounded-[2rem] border border-slate-100 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.12)]">
             <div className="relative h-56 bg-slate-200 sm:h-72">
               {course.thumbnail_url ? (
-                <img src={course.thumbnail_url} alt={course.title} className="h-full w-full object-cover" />
+                <img src={getTrainingImageUrl(course.thumbnail_url)} alt={course.title} className="h-full w-full object-cover" />
               ) : (
                 <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-blue-600 to-indigo-600 text-white">
                   <GraduationCap size={80} />
@@ -220,7 +246,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
                   <div className="mb-3 flex flex-wrap gap-2">
                     <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">{course.category || 'หลักสูตรอบรม'}</span>
                     <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600">
-                      {course.course_type === 'online' ? 'อบรมออนไลน์' : course.course_type === 'zoom' ? 'อบรมผ่าน Zoom' : 'อบรมในห้อง'}
+                      {courseTypeLabels[course.course_type]}
                     </span>
                   </div>
                   <h1 className="text-2xl font-black leading-tight text-slate-900 sm:text-3xl">{course.title}</h1>
@@ -229,7 +255,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
                 <div className="flex flex-wrap gap-3">
                   {!enrollment ? (
                     <button onClick={handleEnroll} className="rounded-2xl bg-red-600 px-6 py-3 text-sm font-black text-white shadow-lg transition hover:bg-red-700">
-                      สมัครเรียน
+                      ลงทะเบียน
                     </button>
                   ) : activeLogId ? (
                     <button onClick={handleStop} className="rounded-2xl bg-slate-900 px-6 py-3 text-sm font-black text-white shadow-lg">
@@ -329,10 +355,33 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
+
+  const limitSeconds = Math.max(0, Number(quiz?.time_limit_minutes || 0) * 60);
+  const isTimed = limitSeconds > 0;
+  const isTimeUp = isTimed && isOpen && remainingSeconds <= 0;
+
+  useEffect(() => {
+    if (!isOpen || !startedAt || !isTimed) return;
+    const timer = window.setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      setRemainingSeconds(Math.max(0, limitSeconds - elapsed));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isOpen, isTimed, limitSeconds, startedAt]);
+
+  useEffect(() => {
+    if (isTimeUp) toast.warning(`${title} หมดเวลาแล้ว กรุณาส่งคำตอบที่ทำไว้`);
+  }, [isTimeUp, title]);
 
   const loadQuiz = async () => {
     if (!quiz) return;
     setIsOpen(true);
+    setAnswers({});
+    const now = Date.now();
+    setStartedAt(now);
+    setRemainingSeconds(limitSeconds);
     if (questions.length > 0) return;
     setIsLoading(true);
     try {
@@ -349,14 +398,17 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
 
   const submitQuiz = async () => {
     if (!quiz || !userId) return;
+    const elapsedSeconds = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0;
     const res = await fetch(`${API_BASE}/api/training/quizzes/${quiz.quiz_id}/submit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, answers }),
+      body: JSON.stringify({ user_id: userId, answers, elapsed_seconds: elapsedSeconds }),
     });
     const data = await res.json();
     if (!res.ok) return toast.error(data.error || 'ส่งแบบทดสอบไม่สำเร็จ');
     toast.success(`${data.message} คะแนน ${data.score}%`);
+    setIsOpen(false);
+    setStartedAt(null);
     onSubmitted();
   };
 
@@ -365,7 +417,7 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-lg font-black text-slate-900">{title}</h3>
-          <p className="text-sm font-semibold text-slate-500">{quiz ? `เกณฑ์ผ่าน ${quiz.pass_score}%` : 'ยังไม่มีแบบทดสอบ'}</p>
+          <p className="text-sm font-semibold text-slate-500">{quiz ? `เกณฑ์ผ่าน ${quiz.pass_score}% · เวลา ${formatQuizLimit(quiz.time_limit_minutes)}` : 'ยังไม่มีแบบทดสอบ'}</p>
         </div>
         <button disabled={!quiz || disabled} onClick={loadQuiz} className="rounded-2xl bg-slate-900 px-5 py-2.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
           เปิดแบบทดสอบ
@@ -373,6 +425,15 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
       </div>
       {isOpen && (
         <div className="mt-5 space-y-4">
+          {quiz && (
+            <div className={`flex flex-col gap-2 rounded-2xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${isTimeUp ? 'border-red-100 bg-red-50 text-red-700' : 'border-blue-100 bg-blue-50 text-blue-700'}`}>
+              <div className="flex items-center gap-2 text-sm font-black">
+                <Clock size={16} />
+                {isTimed ? 'เวลาคงเหลือในการทำแบบทดสอบ' : 'แบบทดสอบนี้ไม่จำกัดเวลา'}
+              </div>
+              <div className="text-2xl font-black tabular-nums">{isTimed ? formatCountdown(remainingSeconds) : 'ไม่จำกัดเวลา'}</div>
+            </div>
+          )}
           {isLoading ? <p className="text-sm font-bold text-slate-400">กำลังโหลด...</p> : questions.map((question, index) => (
             <div key={question.question_id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
               <p className="mb-3 font-black text-slate-800">{index + 1}. {question.question_text}</p>
@@ -394,7 +455,7 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
           ))}
           {questions.length > 0 && (
             <button onClick={submitQuiz} className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white">
-              <Send size={16} /> ส่งคำตอบ
+              <Send size={16} /> {isTimeUp ? 'ส่งคำตอบที่ทำไว้' : 'ส่งคำตอบ'}
             </button>
           )}
         </div>
