@@ -538,6 +538,30 @@ function buildDriveProxyPath(fileId: unknown) {
   return safeId ? `/api/google-drive/files/${encodeURIComponent(safeId)}` : '';
 }
 
+function getDriveUploadFileId(parsed: any) {
+  return extractGoogleDriveFileId(
+    parsed?.fileId ||
+    parsed?.file_id ||
+    parsed?.id ||
+    parsed?.fileProxyPath ||
+    parsed?.webViewLink ||
+    parsed?.web_view_link ||
+    parsed?.url ||
+    parsed?.thumbnailUrl ||
+    '',
+  );
+}
+
+function buildDriveUploadPayload(parsed: any) {
+  const fileId = getDriveUploadFileId(parsed);
+  return {
+    ...parsed,
+    fileId: fileId || parsed?.fileId || parsed?.file_id || '',
+    fileProxyPath: fileId ? buildDriveProxyPath(fileId) : parsed?.fileProxyPath || '',
+    webViewLink: parsed?.webViewLink || parsed?.web_view_link || parsed?.url || '',
+  };
+}
+
 async function postToDriveScript(payload: Record<string, unknown>) {
   const response = await fetch(GOOGLE_AVATAR_UPLOAD_SCRIPT_URL, {
     method: 'POST',
@@ -1378,7 +1402,7 @@ app.post('/api/admin/knowledge/cover-drive', async (req, res) => {
     const safeItemName = sanitizeAvatarFileName(item_title || 'knowledge-item', 'knowledge-item');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeItemName}-cover.webp`, 'knowledge-cover.webp');
     const parsed = await postToDriveScript({
-      action: 'uploadDriveFile',
+      action: 'uploadAvatar',
       folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
       userId: 'knowledge-cover',
       displayName: safeItemName,
@@ -1391,10 +1415,12 @@ app.post('/api/admin/knowledge/cover-drive', async (req, res) => {
       throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลดรูปปกไป Google Drive ไม่สำเร็จ'));
     }
 
-    res.json({
-      ...parsed,
-      fileProxyPath: buildDriveProxyPath(parsed.fileId),
-    });
+    const uploadPayload = buildDriveUploadPayload(parsed);
+    if (!uploadPayload.fileId && !uploadPayload.fileProxyPath && !uploadPayload.webViewLink) {
+      throw new Error('Google Apps Script อัปโหลดสำเร็จไม่สมบูรณ์: ไม่พบรหัสไฟล์หรือ URL จาก Google Drive กรุณา Deploy Apps Script เวอร์ชันล่าสุด');
+    }
+
+    res.json(uploadPayload);
   } catch (error) {
     console.error(error);
     res.status(500).json({
@@ -1419,7 +1445,7 @@ app.post('/api/admin/knowledge/pdf-drive', async (req, res) => {
     const safeItemName = sanitizeAvatarFileName(item_title || 'knowledge-item', 'knowledge-item');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeItemName}.pdf`, 'knowledge.pdf');
     const parsed = await postToDriveScript({
-      action: 'uploadDriveFile',
+      action: 'uploadAvatar',
       folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
       userId: 'knowledge-pdf',
       displayName: safeItemName,
@@ -1432,10 +1458,12 @@ app.post('/api/admin/knowledge/pdf-drive', async (req, res) => {
       throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลด PDF ไป Google Drive ไม่สำเร็จ'));
     }
 
-    res.json({
-      ...parsed,
-      fileProxyPath: buildDriveProxyPath(parsed.fileId),
-    });
+    const uploadPayload = buildDriveUploadPayload(parsed);
+    if (!uploadPayload.fileId && !uploadPayload.fileProxyPath && !uploadPayload.webViewLink) {
+      throw new Error('Google Apps Script อัปโหลดสำเร็จไม่สมบูรณ์: ไม่พบรหัสไฟล์หรือ URL จาก Google Drive กรุณา Deploy Apps Script เวอร์ชันล่าสุด');
+    }
+
+    res.json(uploadPayload);
   } catch (error) {
     console.error(error);
     res.status(500).json({

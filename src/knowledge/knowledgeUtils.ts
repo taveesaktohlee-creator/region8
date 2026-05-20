@@ -105,6 +105,24 @@ export function dataUrlToBase64(dataUrl: string) {
   return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
 }
 
+export function resolveDriveUploadResult(data: any) {
+  const fileId = getDriveFileIdFromUrl(
+    data?.fileId ||
+    data?.file_id ||
+    data?.id ||
+    data?.fileProxyPath ||
+    data?.webViewLink ||
+    data?.web_view_link ||
+    data?.url ||
+    data?.thumbnailUrl ||
+    '',
+  );
+  const proxyPath = data?.fileProxyPath || (fileId ? `/api/google-drive/files/${encodeURIComponent(fileId)}` : '');
+  const url = proxyPath || data?.webViewLink || data?.web_view_link || data?.url || data?.thumbnailUrl || '';
+
+  return { fileId, url };
+}
+
 function loadImageFromUrl(url: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();

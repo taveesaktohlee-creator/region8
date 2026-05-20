@@ -21,6 +21,7 @@ import {
   KNOWLEDGE_PDF_MAX_BYTES,
   optimizeKnowledgeCover,
   readBlobAsDataUrl,
+  resolveDriveUploadResult,
   type KnowledgeItem,
   type KnowledgeStatus,
 } from './knowledgeUtils';
@@ -161,12 +162,13 @@ export default function KnowledgeAdmin() {
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) throw new Error(data.error || 'อัปโหลดรูปปกไม่สำเร็จ');
-      const coverUrl = data.fileProxyPath || (data.fileId ? `/api/google-drive/files/${encodeURIComponent(data.fileId)}` : '') || data.thumbnailUrl || data.url || data.webViewLink;
+      const upload = resolveDriveUploadResult(data);
+      const coverUrl = upload.url;
       if (!coverUrl) throw new Error('Google Drive ไม่ส่ง URL รูปปกกลับมา');
       setForm((current) => ({
         ...current,
         cover_url: coverUrl,
-        cover_file_id: data.fileId || getDriveFileIdFromUrl(coverUrl),
+        cover_file_id: upload.fileId || getDriveFileIdFromUrl(coverUrl),
       }));
       toast.success(`อัปโหลดรูปปกแล้ว (${formatFileSize(optimized.originalSize)} → ${formatFileSize(optimized.outputSize)})`);
     } catch (error) {
@@ -202,12 +204,13 @@ export default function KnowledgeAdmin() {
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) throw new Error(data.error || 'อัปโหลด PDF ไม่สำเร็จ');
-      const pdfUrl = data.fileProxyPath || (data.fileId ? `/api/google-drive/files/${encodeURIComponent(data.fileId)}` : '') || data.webViewLink || data.url;
+      const upload = resolveDriveUploadResult(data);
+      const pdfUrl = upload.url;
       if (!pdfUrl) throw new Error('Google Drive ไม่ส่ง URL PDF กลับมา');
       setForm((current) => ({
         ...current,
         pdf_url: pdfUrl,
-        pdf_file_id: data.fileId || getDriveFileIdFromUrl(pdfUrl),
+        pdf_file_id: upload.fileId || getDriveFileIdFromUrl(pdfUrl),
       }));
       toast.success(`อัปโหลด PDF แล้ว (${formatFileSize(file.size)})`);
     } catch (error) {
