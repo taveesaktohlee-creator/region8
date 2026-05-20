@@ -935,7 +935,7 @@ app.post('/api/admin/training/cover-drive', async (req, res) => {
     const safeCourseName = sanitizeAvatarFileName(course_title || 'training-course', 'training-course');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeCourseName}-cover.webp`, 'training-cover.webp');
     const parsed = await postToDriveScript({
-      action: 'uploadDriveFile',
+      action: 'uploadAvatar',
       folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
       userId: 'training-cover',
       displayName: safeCourseName,
@@ -948,10 +948,12 @@ app.post('/api/admin/training/cover-drive', async (req, res) => {
       throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลดรูปปกไป Google Drive ไม่สำเร็จ'));
     }
 
-    res.json({
-      ...parsed,
-      fileProxyPath: buildDriveProxyPath(parsed.fileId),
-    });
+    const uploadPayload = buildDriveUploadPayload(parsed);
+    if (!uploadPayload.fileId && !uploadPayload.fileProxyPath && !uploadPayload.webViewLink) {
+      throw new Error('Google Apps Script อัปโหลดสำเร็จไม่สมบูรณ์: ไม่พบรหัสไฟล์หรือ URL จาก Google Drive กรุณา Deploy Apps Script เวอร์ชันล่าสุด');
+    }
+
+    res.json(uploadPayload);
   } catch (error) {
     console.error(error);
     res.status(500).json({
@@ -979,7 +981,7 @@ app.post('/api/admin/training/material-drive', async (req, res) => {
     const safeCourseName = sanitizeAvatarFileName(course_title || 'training-course', 'training-course');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeCourseName}-material`, 'training-material');
     const parsed = await postToDriveScript({
-      action: 'uploadDriveFile',
+      action: 'uploadAvatar',
       folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
       userId: 'training-material',
       displayName: safeCourseName,
@@ -992,10 +994,12 @@ app.post('/api/admin/training/material-drive', async (req, res) => {
       throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลดเอกสารไป Google Drive ไม่สำเร็จ'));
     }
 
-    res.json({
-      ...parsed,
-      fileProxyPath: buildDriveProxyPath(parsed.fileId),
-    });
+    const uploadPayload = buildDriveUploadPayload(parsed);
+    if (!uploadPayload.fileId && !uploadPayload.fileProxyPath && !uploadPayload.webViewLink) {
+      throw new Error('Google Apps Script อัปโหลดสำเร็จไม่สมบูรณ์: ไม่พบรหัสไฟล์หรือ URL จาก Google Drive กรุณา Deploy Apps Script เวอร์ชันล่าสุด');
+    }
+
+    res.json(uploadPayload);
   } catch (error) {
     console.error(error);
     res.status(500).json({

@@ -4,7 +4,7 @@ import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
-import { getTrainingImageUrl } from './driveMedia';
+import { getDriveFileIdFromUrl, getTrainingImageUrl } from './driveMedia';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -108,6 +108,24 @@ function readBlobAsDataUrl(blob: Blob) {
 
 function dataUrlToBase64(dataUrl: string) {
   return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+}
+
+function resolveDriveUploadResult(data: any) {
+  const fileId = getDriveFileIdFromUrl(
+    data?.fileId ||
+    data?.file_id ||
+    data?.id ||
+    data?.fileProxyPath ||
+    data?.webViewLink ||
+    data?.web_view_link ||
+    data?.url ||
+    data?.thumbnailUrl ||
+    '',
+  );
+  const proxyPath = data?.fileProxyPath || (fileId ? `/api/google-drive/files/${encodeURIComponent(fileId)}` : '');
+  const url = proxyPath || data?.webViewLink || data?.web_view_link || data?.url || data?.thumbnailUrl || '';
+
+  return { fileId, url };
 }
 
 function splitMinutes(totalMinutes?: number) {
@@ -361,13 +379,15 @@ export default function TrainingAdmin() {
       });
       const uploadData = await uploadRes.json();
       if (!uploadRes.ok || uploadData.ok === false) throw new Error(uploadData.error || 'อัปโหลดเอกสารไป Google Drive ไม่สำเร็จ');
+      const upload = resolveDriveUploadResult(uploadData);
+      if (!upload.url) throw new Error('Google Drive ไม่ส่ง URL เอกสารกลับมา');
 
       const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/materials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: materialForm.title.trim() || materialFile.name,
-          drive_url: uploadData.webViewLink || uploadData.url || uploadData.fileProxyPath,
+          drive_url: upload.url,
         }),
       });
       const data = await res.json();
@@ -812,7 +832,8 @@ function CourseForm({ form, setForm, onSave, selectedCourseId }: { form: Course;
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) throw new Error(data.error || 'อัปโหลดรูปปกไม่สำเร็จ');
-      const coverUrl = data.fileProxyPath || (data.fileId ? `/api/google-drive/files/${encodeURIComponent(data.fileId)}` : '') || data.thumbnailUrl || data.url || data.webViewLink;
+      const upload = resolveDriveUploadResult(data);
+      const coverUrl = upload.url;
       if (!coverUrl) throw new Error('Google Drive ไม่ส่ง URL รูปปกกลับมา');
       update('thumbnail_url', coverUrl);
       setCoverUploadNote(`${optimized.fileName} (${formatFileSize(optimized.originalSize)} → ${formatFileSize(optimized.outputSize)})`);
