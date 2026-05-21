@@ -445,6 +445,7 @@ export default function MonitorData() {
   const [saving, setSaving] = useState(false);
   const [sheetRows, setSheetRows] = useState<SheetRow[]>([]);
   const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
+  const [sourceRound, setSourceRound] = useState<'ครั้งที่ 1' | 'ครั้งที่ 2'>('ครั้งที่ 1');
   const [sourceSearch, setSourceSearch] = useState('');
   const [sheetLoading, setSheetLoading] = useState(false);
   const [form, setForm] = useState<MonitorForm>(initialForm);
@@ -488,10 +489,10 @@ export default function MonitorData() {
       if (!response.ok) throw new Error('Cannot load Google Sheets data');
       const data = await response.json();
       const rows = Array.isArray(data) ? data : [];
-      setSheetRows(rows.filter((row: SheetRow) => normalizeRound(row[SHEET_KEYS.round]) === 'ครั้งที่ 1'));
+      setSheetRows(rows);
     } catch (error) {
       console.error(error);
-      toast.error('ไม่สามารถโหลดข้อมูลครั้งที่ 1 จาก Google Sheets ได้');
+      toast.error('ไม่สามารถโหลดข้อมูลจาก Google Sheets ได้');
     } finally {
       setSheetLoading(false);
     }
@@ -555,6 +556,18 @@ export default function MonitorData() {
     }));
   };
 
+  const resetSelectedSource = (nextRound = sourceRound) => {
+    setSelectedRowIndex(null);
+    setSourceSearch('');
+    setForm({
+      ...initialForm(),
+      visit_round: 'ครั้งที่ 2',
+      office: userData?.Division_Province || '',
+      upload_responsible: userData?.Name_Surname || '',
+    });
+    setSourceRound(nextRound);
+  };
+
   const handleSourceSearchChange = (value: string) => {
     setSourceSearch(value);
     if (hasSelectedSource && value !== form.coop_name) {
@@ -570,6 +583,7 @@ export default function MonitorData() {
   const resetForm = () => {
     setForm({
       ...initialForm(),
+      visit_round: 'ครั้งที่ 2',
       office: userData?.Division_Province || '',
       upload_responsible: userData?.Name_Surname || '',
     });
@@ -579,7 +593,7 @@ export default function MonitorData() {
   };
 
   const validateForm = () => {
-    if (!hasSelectedSource) return 'กรุณาค้นหาและเลือกชื่อสหกรณ์จากข้อมูลครั้งที่ 1';
+    if (!hasSelectedSource) return `กรุณาค้นหาและเลือกชื่อสหกรณ์จากข้อมูล${sourceRound}`;
     if (!form.office.trim()) return 'กรุณากรอกสำนักงานตรวจบัญชีสหกรณ์';
     if (!form.visit_date) return 'กรุณาเลือกวันที่เข้ากำกับติดตาม';
     if (!form.coop_name.trim()) return 'กรุณากรอกชื่อสหกรณ์';
@@ -635,19 +649,23 @@ export default function MonitorData() {
     setForm(sheetRowToForm(row, userData));
     setSourceSearch(toText(row[SHEET_KEYS.coop]));
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    toast.info(`ดึงข้อมูลครั้งที่ 1 ของ ${toText(row[SHEET_KEYS.coop]) || 'สหกรณ์ที่เลือก'} มาแก้ไขเป็นครั้งที่ 2 แล้ว`);
+    toast.info(`ดึงข้อมูล${sourceRound} ของ ${toText(row[SHEET_KEYS.coop]) || 'สหกรณ์ที่เลือก'} มาแก้ไขเป็นครั้งที่ 2 แล้ว`);
   };
+
+  const sourceRows = useMemo(() => {
+    return sheetRows.filter((row: SheetRow) => normalizeRound(row[SHEET_KEYS.round]) === sourceRound);
+  }, [sheetRows, sourceRound]);
 
   const filteredSheetRows = useMemo(() => {
     const keyword = sourceSearch.trim().toLowerCase();
-    if (!keyword) return sheetRows;
-    return sheetRows.filter(row => [
+    if (!keyword) return sourceRows;
+    return sourceRows.filter(row => [
       row[SHEET_KEYS.coop],
       row[SHEET_KEYS.office],
       row[SHEET_KEYS.project],
       row[SHEET_KEYS.visitDate],
     ].some(value => toText(value).toLowerCase().includes(keyword)));
-  }, [sheetRows, sourceSearch]);
+  }, [sourceRows, sourceSearch]);
 
   const sourceSuggestions = useMemo(() => filteredSheetRows.slice(0, 8), [filteredSheetRows]);
 
@@ -676,7 +694,7 @@ export default function MonitorData() {
                   <span className="text-slate-500">บันทึกกำกับติดตามกลุ่มเทคฯ</span>
                 </div>
                 <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900">บันทึกข้อมูลการกำกับติดตาม</h1>
-                <p className="mt-1 text-sm sm:text-base text-slate-500 font-medium">ดึงข้อมูลกำกับติดตามครั้งที่ 1 จาก Google Sheets แล้วบันทึกเพิ่มเป็นครั้งที่ 2</p>
+                <p className="mt-1 text-sm sm:text-base text-slate-500 font-medium">ดึงข้อมูลกำกับติดตามครั้งที่ 1 หรือครั้งที่ 2 จาก Google Sheets มาแก้ไข แล้วบันทึกเป็นครั้งที่ 2</p>
               </div>
               <div className="rounded-2xl border border-blue-100 bg-white px-4 py-3 shadow-sm flex items-center gap-3">
                 <div className="h-11 w-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -695,7 +713,7 @@ export default function MonitorData() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
                       <div className="relative">
-                        <FieldWrap label="ค้นหาและเลือกชื่อสหกรณ์จากข้อมูลครั้งที่ 1" required icon={<Search size={16} />}>
+                        <FieldWrap label={`ค้นหาและเลือกชื่อสหกรณ์จากข้อมูล${sourceRound}`} required icon={<Search size={16} />}>
                           <input
                             value={sourceSearch}
                             onChange={(event) => handleSourceSearchChange(event.target.value)}
@@ -830,7 +848,7 @@ export default function MonitorData() {
                     </div>
                     <div>
                       <p className="font-black text-slate-900">{hasSelectedSource ? 'เตรียมบันทึกครั้งที่ 2' : 'พร้อมบันทึกครั้งที่ 2'}</p>
-                      <p className="text-xs text-slate-500 font-medium">ระบบจะเพิ่มแถวใหม่ลง Google Sheets</p>
+                      <p className="text-xs text-slate-500 font-medium">ระบบจะเพิ่มหรืออัปเดตแถวครั้งที่ 2 ใน Google Sheets</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-1 gap-3">
@@ -847,12 +865,28 @@ export default function MonitorData() {
                 <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div>
-                      <p className="font-black text-slate-900">ข้อมูลครั้งที่ 1 จาก Google Sheets</p>
-                      <p className="text-xs text-slate-500 font-medium">{filteredSheetRows.length} จาก {sheetRows.length} รายการ</p>
+                      <p className="font-black text-slate-900">ข้อมูล{sourceRound} จาก Google Sheets</p>
+                      <p className="text-xs text-slate-500 font-medium">{filteredSheetRows.length} จาก {sourceRows.length} รายการ</p>
                     </div>
                     <button type="button" onClick={handleRefresh} className="cursor-pointer h-10 w-10 rounded-xl bg-slate-50 text-slate-500 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center transition">
                       <RefreshCw size={17} className={isRefreshing || sheetLoading ? 'animate-spin' : ''} />
                     </button>
+                  </div>
+                  <div className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-1">
+                    {(['ครั้งที่ 1', 'ครั้งที่ 2'] as const).map((round) => (
+                      <button
+                        key={round}
+                        type="button"
+                        onClick={() => resetSelectedSource(round)}
+                        className={`cursor-pointer rounded-xl px-3 py-2 text-sm font-black transition ${
+                          sourceRound === round
+                            ? 'bg-white text-blue-700 shadow-sm'
+                            : 'text-slate-500 hover:bg-white/70 hover:text-blue-600'
+                        }`}
+                      >
+                        {round}
+                      </button>
+                    ))}
                   </div>
                   <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
                     {sheetLoading ? (
@@ -862,7 +896,7 @@ export default function MonitorData() {
                       </div>
                     ) : filteredSheetRows.length === 0 ? (
                       <div className="rounded-2xl border border-dashed border-slate-200 p-5 text-center text-sm text-slate-400 font-medium">
-                        ไม่พบข้อมูลกำกับติดตามครั้งที่ 1
+                        ไม่พบข้อมูลกำกับติดตาม{sourceRound}
                       </div>
                     ) : filteredSheetRows.map((row, index) => (
                       <button
@@ -876,7 +910,7 @@ export default function MonitorData() {
                         <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                           <CalendarDays size={14} />
                           <span>{toText(row[SHEET_KEYS.visitDate]) || '-'}</span>
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 font-bold">ครั้งที่ 1</span>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 font-bold">{sourceRound}</span>
                         </div>
                       </button>
                     ))}
