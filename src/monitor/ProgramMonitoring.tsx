@@ -122,7 +122,7 @@ const isFilled = (value: any) => value !== "" && value !== undefined && value !=
 
 const sanitizeFileName = (value: string) => value.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 80);
 
-const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[], index: number): TDocumentDefinitions => {
+const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[], _index: number): TDocumentDefinitions => {
     const keys = Object.keys(row);
     const findKey = (matcher: (key: string) => boolean) => keys.find(matcher);
     const getVal = (key: string | undefined) => key ? row[key] : "";
@@ -223,7 +223,6 @@ const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[],
     const visitDate = textVal(kDate) !== '-' ? textVal(kDate) : row._visitDate;
 
     const content: Content[] = [
-        { text: `${index + 1}`, margin: [0, 0, 0, 8] },
         { text: 'แบบกำกับติดตามการใช้งานโปรแกรมและการนำส่งข้อมูล', style: 'title' },
         { text: `${officeName} ${visitRound}`, style: 'subtitle' },
         {
