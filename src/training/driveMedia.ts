@@ -22,18 +22,31 @@ export function getDriveFileProxyUrl(fileId: string) {
   return `${API_BASE}/api/google-drive/files/${encodeURIComponent(fileId)}`;
 }
 
+export function getDriveThumbnailUrl(fileId: string) {
+  return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w640`;
+}
+
+export function getDriveWebViewUrl(fileId: string) {
+  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`;
+}
+
 export function getTrainingImageUrl(value?: string | null) {
   const raw = String(value || '').trim();
   if (!raw) return '';
 
-  if (raw.startsWith('/api/google-drive/files/')) {
-    return `${API_BASE}${raw}`;
+  const fileId = getDriveFileIdFromUrl(raw);
+  if (fileId) {
+    return getDriveThumbnailUrl(fileId);
   }
 
-  if (/drive\.google\.com/i.test(raw)) {
-    const fileId = getDriveFileIdFromUrl(raw);
-    return fileId ? getDriveFileProxyUrl(fileId) : raw;
-  }
+  return raw;
+}
 
+export function getTrainingFileUrl(value?: string | null) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const fileId = getDriveFileIdFromUrl(raw);
+  if (fileId) return getDriveWebViewUrl(fileId);
   return raw;
 }

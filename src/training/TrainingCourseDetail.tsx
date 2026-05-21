@@ -4,7 +4,7 @@ import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
-import { getTrainingImageUrl } from './driveMedia';
+import { getTrainingFileUrl, getTrainingImageUrl } from './driveMedia';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -324,7 +324,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
                   {materials.length === 0 ? (
                     <p className="text-sm font-semibold text-slate-400">ยังไม่มีเอกสารประกอบ</p>
                   ) : materials.map((material) => (
-                    <a key={material.material_id} href={material.drive_url} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 hover:border-blue-200 hover:bg-blue-50">
+                    <a key={material.material_id} href={getTrainingFileUrl(material.drive_url)} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 hover:border-blue-200 hover:bg-blue-50">
                       {material.title}
                       <ExternalLink size={15} />
                     </a>

@@ -4,7 +4,7 @@ import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
-import { getDriveFileIdFromUrl, getTrainingImageUrl } from './driveMedia';
+import { getDriveFileIdFromUrl, getTrainingFileUrl, getTrainingImageUrl } from './driveMedia';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -28,6 +28,12 @@ type Course = {
   pass_score: number;
   certificate_enabled: boolean;
   enrolled_count?: number;
+};
+
+type TrainingMaterial = {
+  material_id: number;
+  title: string;
+  drive_url: string;
 };
 
 type AdminTab = 'report' | 'courses';
@@ -200,7 +206,7 @@ function resolveDriveUploadResult(data: any) {
   const fileId = candidates.map(getDriveFileIdFromUrl).find(Boolean) || '';
   const proxyPath = candidates.find(value => value.startsWith('/api/google-drive/files/')) || (fileId ? `/api/google-drive/files/${encodeURIComponent(fileId)}` : '');
   const directUrl = candidates.find(value => /^https?:\/\//i.test(value)) || '';
-  const url = proxyPath || directUrl;
+  const url = directUrl || proxyPath;
 
   return { fileId, url };
 }
@@ -389,6 +395,7 @@ export default function TrainingAdmin() {
   });
   const [evaluationQuestions, setEvaluationQuestions] = useState<AdminEvaluationQuestion[]>([]);
   const [evaluationReport, setEvaluationReport] = useState<EvaluationReport | null>(null);
+  const [courseMaterials, setCourseMaterials] = useState<TrainingMaterial[]>([]);
   const [quizSettings, setQuizSettings] = useState(defaultQuizSettings);
   const [quizPreview, setQuizPreview] = useState<AdminQuiz[] | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -428,6 +435,10 @@ export default function TrainingAdmin() {
 
   const loadEvaluationQuestions = useCallback(async (courseId: number) => {
     const res = await fetch(`${API_BASE}/api/admin/training/courses/${courseId}/evaluation-questions`);
+    if (res.status === 404) {
+      setEvaluationQuestions([]);
+      return [];
+    }
     if (!res.ok) throw new Error('Cannot load evaluation questions');
     const data: AdminEvaluationQuestion[] = await res.json();
     setEvaluationQuestions(data);
@@ -436,10 +447,23 @@ export default function TrainingAdmin() {
 
   const loadEvaluationReport = useCallback(async (courseId: number) => {
     const res = await fetch(`${API_BASE}/api/admin/training/courses/${courseId}/evaluation-report`);
+    if (res.status === 404) {
+      setEvaluationReport(null);
+      return null;
+    }
     if (!res.ok) throw new Error('Cannot load evaluation report');
     const data: EvaluationReport = await res.json();
     setEvaluationReport(data);
     return data;
+  }, []);
+
+  const loadCourseMaterials = useCallback(async (courseId: number) => {
+    const res = await fetch(`${API_BASE}/api/training/courses/${courseId}`);
+    if (!res.ok) throw new Error('Cannot load course materials');
+    const data = await res.json();
+    const materials = Array.isArray(data?.materials) ? data.materials : [];
+    setCourseMaterials(materials);
+    return materials;
   }, []);
 
   const refreshAll = useCallback(async () => {
@@ -479,6 +503,7 @@ export default function TrainingAdmin() {
     setForm({ ...emptyCourse, ...course, certificate_enabled: Boolean(course.certificate_enabled) });
     if (course.course_id) {
       loadQuizPreview(course.course_id).catch(() => toast.error('โหลดการตั้งค่าแบบทดสอบไม่สำเร็จ'));
+      loadCourseMaterials(course.course_id).catch(() => setCourseMaterials([]));
       loadEvaluationQuestions(course.course_id).catch(() => toast.error('โหลดแบบประเมินไม่สำเร็จ'));
       loadEvaluationReport(course.course_id).catch(() => toast.error('โหลดรายงานแบบประเมินไม่สำเร็จ'));
     }
@@ -491,6 +516,7 @@ export default function TrainingAdmin() {
     setQuizPreview(null);
     setEvaluationQuestions([]);
     setEvaluationReport(null);
+    setCourseMaterials([]);
     setEvaluationForm({ question_text: '', question_type: 'rating', options: ['', ''], is_required: true, sort_order: 0 });
   };
 
@@ -563,6 +589,7 @@ export default function TrainingAdmin() {
       toast.success(data.message);
       setMaterialForm({ title: '' });
       setMaterialFile(null);
+      await loadCourseMaterials(selectedCourseId).catch(() => undefined);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'เพิ่มเอกสารไม่สำเร็จ');
     } finally {
@@ -742,6 +769,25 @@ export default function TrainingAdmin() {
                       />
                     </label>
                     {materialFile && <p className="text-xs font-bold text-slate-500">{formatFileSize(materialFile.size)}</p>}
+                    {selectedCourseId && (
+                      <div className="space-y-2 rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                        <p className="text-xs font-black text-slate-500">เอกสารที่บันทึกไว้</p>
+                        {courseMaterials.length === 0 ? (
+                          <p className="text-xs font-semibold text-slate-400">ยังไม่มีเอกสารประกอบ</p>
+                        ) : courseMaterials.map((material) => (
+                          <a
+                            key={material.material_id}
+                            href={getTrainingFileUrl(material.drive_url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block overflow-hidden text-ellipsis whitespace-nowrap rounded-xl bg-white px-3 py-2 text-xs font-bold text-blue-700 ring-1 ring-slate-100 hover:bg-blue-50"
+                            title={material.title}
+                          >
+                            {material.title}
+                          </a>
+                        ))}
+                      </div>
+                    )}
                   </QuickPanel>
                   <QuickPanel title="เพิ่มข้อสอบ" icon={<FilePlus2 />} onSubmit={addQuestion}>
                     <select value={questionForm.quiz_type} onChange={(e) => setQuestionForm({ ...questionForm, quiz_type: e.target.value })} className="min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none">
