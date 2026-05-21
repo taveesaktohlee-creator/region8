@@ -127,13 +127,45 @@ const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[],
     const findKey = (matcher: (key: string) => boolean) => keys.find(matcher);
     const getVal = (key: string | undefined) => key ? row[key] : "";
     const textVal = (key: string | undefined) => isFilled(getVal(key)) ? String(getVal(key)) : "-";
-    const line = (label: string, value: any): Content => ({
-        columns: [
-            { text: label, width: 165, bold: true },
-            { text: isFilled(value) ? String(value) : "-", width: '*' },
+    const answer = (value: any, fallback = ''): Content => ({
+        text: isFilled(value) ? String(value) : fallback,
+        decoration: isFilled(value) ? 'underline' : undefined,
+        decorationStyle: 'dotted',
+        decorationColor: '#777777',
+    });
+    const lineText = (items: Content[], margin: [number, number, number, number] = [0, 2, 0, 2]): Content => ({
+        text: items,
+        margin,
+    });
+    const indentedLine = (items: Content[], margin: [number, number, number, number] = [22, 2, 0, 2]): Content => lineText(items, margin);
+    const sectionTitle = (text: string): Content => ({ text, bold: true, margin: [0, 8, 0, 3] });
+    const signatureBlock = (name: string, role: string): Content => ({
+        stack: [
+            {
+                columns: [
+                    {
+                        text: [
+                            '( ',
+                            { text: isFilled(name) ? String(name) : '..................................................', decoration: isFilled(name) ? 'underline' : undefined, decorationStyle: 'dotted' },
+                            ' )',
+                        ],
+                        width: 165,
+                    },
+                    { text: role, width: '*' },
+                ],
+                columnGap: 10,
+                margin: [0, 14, 0, 0],
+            },
+            {
+                text: [
+                    'ตำแหน่ง ',
+                    { text: '..................................................', decoration: 'underline', decorationStyle: 'dotted', decorationColor: '#777777' },
+                ],
+                alignment: 'left',
+                margin: [0, 8, 0, 0],
+            },
         ],
-        columnGap: 8,
-        margin: [0, 2, 0, 2],
+        margin: [170, 14, 0, 8],
     });
 
     const kCoopColumn = findKey(k => k.includes('คอลัมน์ 4') || k.toLowerCase().includes('column 4'));
@@ -147,6 +179,19 @@ const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[],
     const kNb = evaluationKeys.find(k => k.includes('Notbook') || k.includes('Notebook'));
     const kNetwork = evaluationKeys.find(k => k.includes('Network') || k.includes('เครือข่าย'));
     const kRecord = evaluationKeys.find(k => k.startsWith('4.') && k.includes('การบันทึกข้อมูล'));
+    const kBackupNone = evaluationKeys.find(k => k.includes('ไม่ได้สำรองข้อมูลไว้ในสื่อบันทึกอื่น'));
+    const kBackupSingle = evaluationKeys.find(k => k.includes('สำรองข้อมูลในสื่ออื่นเพียงชุดเดียว'));
+    const kBackupMultiple = evaluationKeys.find(k => k.includes('สำรองข้อมูลในสื่อบันทึกอื่นมากกว่า'));
+    const kUps = evaluationKeys.find(k => k.startsWith('7.') || k.includes('เครื่องสำรองไฟ'));
+    const kAccess = evaluationKeys.find(k => k.startsWith('8.') || k.includes('ทะเบียนคุม'));
+    const kUpload = evaluationKeys.find(k => k.startsWith('9.') || k.includes('ผู้รับผิดชอบนำส่ง'));
+    const kSendCurrent = evaluationKeys.find(k => k.startsWith('10.') && k.includes('ส่งข้อมูลเป็นปัจจุบัน'));
+    const kSendNotCurrent = evaluationKeys.find(k => k.startsWith('10.') && k.includes('ส่งข้อมูลไม่เป็นปัจจุบัน'));
+    const kAdvice = evaluationKeys.find(k => k.includes('เรื่องที่แนะนำ') || k.includes('IT Provider'));
+    const kProblem = evaluationKeys.find(k => k.includes('ปัญหาการใช้งานโปรแกรม'));
+    const kTechOfficer = findKey(k => k.includes('เจ้าหน้าที่กลุ่มเทค') || k.includes('ผู้ติดตาม'));
+    const kCoopOfficer = findKey(k => k.includes('เจ้าหน้าที่สหกรณ์') || k.includes('ผู้ให้ข้อมูล'));
+    const kOfficeOfficer = findKey(k => k.includes('เจ้าหน้าที่สำนักงานตรวจบัญชี'));
 
     const systems = [
         { id: '1', name: 'ระบบบัญชีแยกประเภท' },
@@ -165,99 +210,161 @@ const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[],
     ];
 
     const usedKeys = new Set<string>();
-    [kCoopColumn, kOffice, kVisit, kDate, kCoop, kProject, kUser, kPc, kNb, kNetwork, kRecord].forEach(key => key && usedKeys.add(key));
+    [
+        kCoopColumn, kOffice, kVisit, kDate, kCoop, kProject, kUser, kPc, kNb, kNetwork, kRecord,
+        kBackupNone, kBackupSingle, kBackupMultiple, kUps, kAccess, kUpload, kSendCurrent,
+        kSendNotCurrent, kAdvice, kProblem, kTechOfficer, kCoopOfficer, kOfficeOfficer,
+    ].forEach(key => key && usedKeys.add(key));
+
+    const coopName = getVal(kCoopColumn) || getVal(kCoop) || row._coop;
+    const projectName = getVal(kProject) || row._project;
+    const officeName = getVal(kOffice) || row._province;
+    const visitRound = textVal(kVisit) !== '-' ? textVal(kVisit) : row._visitRound;
+    const visitDate = textVal(kDate) !== '-' ? textVal(kDate) : row._visitDate;
 
     const content: Content[] = [
-        { text: `#${index + 1}`, color: '#64748b', fontSize: 12, margin: [0, 0, 0, 6] },
-        { text: 'รายงานผลการกำกับติดตามการใช้งานโปรแกรมและการนำส่งข้อมูล', style: 'title' },
-        { text: `${textVal(kOffice) || row._province} ${textVal(kVisit) !== '-' ? textVal(kVisit) : row._visitRound}`, style: 'subtitle' },
-        { text: `วันที่เข้ากำกับติดตาม: ${textVal(kDate) !== '-' ? textVal(kDate) : row._visitDate}`, alignment: 'right', bold: true, margin: [0, 8, 0, 12] },
-        { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 0.5, lineColor: '#cbd5e1' }], margin: [0, 0, 0, 14] },
-        { text: '1. ข้อมูลสหกรณ์', style: 'sectionHeader' },
-        line('ชื่อสหกรณ์', getVal(kCoopColumn) || getVal(kCoop) || row._coop),
-        line('สหกรณ์เป้าหมายตามโครงการ', getVal(kProject) || row._project),
-        { text: '2. ผู้ใช้งานโปรแกรมระบบบัญชี', style: 'sectionHeader' },
-        line('2.1 จำนวนผู้ใช้งานโปรแกรม', isFilled(getVal(kUser)) ? `${getVal(kUser)} คน` : '-'),
-        line('2.2 คอมพิวเตอร์ PC', getVal(kPc)),
-        line('คอมพิวเตอร์ Notebook', getVal(kNb)),
-        line('2.3 การใช้งานผ่าน Network', getVal(kNetwork)),
+        { text: `${index + 1}`, margin: [0, 0, 0, 8] },
+        { text: 'แบบกำกับติดตามการใช้งานโปรแกรมและการนำส่งข้อมูล', style: 'title' },
+        { text: `${officeName} ${visitRound}`, style: 'subtitle' },
+        {
+            text: [
+                'วันที่เข้ากำกับติดตาม     ',
+                answer(visitDate),
+            ],
+            alignment: 'right',
+            margin: [0, 6, 0, 22],
+        },
+        lineText([
+            { text: '1. ชื่อสหกรณ์   ', bold: true },
+            answer(coopName),
+            { text: '     สหกรณ์เป้าหมายตามโครงการ   ', bold: true },
+            answer(projectName),
+        ], [0, 0, 0, 6]),
+        sectionTitle('2. ผู้ใช้งานโปรแกรมระบบบัญชี'),
+        indentedLine([
+            { text: '2.1 จำนวนผู้ใช้งานโปรแกรม     ', bold: true },
+            answer(getVal(kUser), '      '),
+            { text: '   คน' },
+        ]),
+        indentedLine([
+            { text: '2.2 คอมพิวเตอร์(PC)ใช้งานโปรแกรม     ', bold: true },
+            answer(getVal(kPc), '      '),
+            { text: '    คอมพิวเตอร์โน้ตบุ๊กใช้งานโปรแกรม     ', bold: true },
+            answer(getVal(kNb), '      '),
+        ]),
+        indentedLine([
+            { text: '2.3 การใช้งานโปรแกรมผ่านระบบ (Network)     ', bold: true },
+            answer(getVal(kNetwork)),
+        ]),
+        sectionTitle('3. โปรแกรมระบบบัญชีที่ใช้'),
     ];
 
-    const systemRows = systems.flatMap((sys) => {
+    systems.forEach((sys) => {
         const statusKey = evaluationKeys.find(k => k.includes('สถานะใช้งาน') && k.includes(sys.name));
         const dateKey = evaluationKeys.find(k => k.includes('การบันทึกงานถึงวันที่') && k.includes(sys.name));
         const versionKey = evaluationKeys.find(k => k.includes('เวอร์ชั่น') && k.includes(sys.name));
         [statusKey, dateKey, versionKey].forEach(key => key && usedKeys.add(key));
-        if (!isFilled(getVal(statusKey)) && !isFilled(getVal(dateKey)) && !isFilled(getVal(versionKey))) return [];
-        return [[
-            { text: `${sys.id}. ${sys.name}`, bold: true },
-            textVal(statusKey),
-            textVal(dateKey),
-            textVal(versionKey),
-        ]];
+        content.push(
+            indentedLine([
+                { text: `${sys.id}. ${sys.name}     `, bold: true },
+                { text: 'สถานะ     ', bold: true },
+                answer(getVal(statusKey)),
+                { text: '    (CAD_SOFT)' },
+            ], [22, 2, 0, 1]),
+            indentedLine([
+                { text: 'การบันทึกงานถึงวันที่     ', bold: true },
+                answer(getVal(dateKey)),
+                { text: '     เวอร์ชั่น     ', bold: true },
+                answer(getVal(versionKey)),
+            ], [36, 0, 0, 5]),
+        );
     });
 
-    if (systemRows.length > 0) {
-        content.push(
-            { text: '3. โปรแกรมระบบบัญชีที่ใช้', style: 'sectionHeader' },
-            {
-                table: {
-                    widths: [130, '*', '*', '*'],
-                    body: [
-                        [
-                            { text: 'ระบบ', style: 'tableHeader' },
-                            { text: 'สถานะ', style: 'tableHeader' },
-                            { text: 'บันทึกงานถึงวันที่', style: 'tableHeader' },
-                            { text: 'เวอร์ชั่น', style: 'tableHeader' },
-                        ],
-                        ...systemRows,
-                    ],
-                },
-                layout: 'lightHorizontalLines',
-                margin: [0, 2, 0, 8],
-            }
-        );
-    }
+    content.push(lineText([
+        { text: '4. การบันทึกข้อมูลในโปรแกรมระบบบัญชี     ', bold: true },
+        answer(getVal(kRecord)),
+    ], [0, 6, 0, 5]));
 
-    if (isFilled(getVal(kRecord))) {
-        content.push({ text: '4. การบันทึกข้อมูลในโปรแกรมระบบบัญชี', style: 'sectionHeader' }, line('', getVal(kRecord)));
-    }
+    content.push(sectionTitle('5. การกำหนดสิทธิ์การใช้งานโปรแกรมระบบบัญชี'));
 
-    const permissionLines = perms.flatMap((perm) => {
+    perms.forEach((perm) => {
         const permKey = evaluationKeys.find(k => k.includes('กำหนดสิทธิ์') && k.includes(perm.search));
         if (permKey) usedKeys.add(permKey);
-        if (!isFilled(getVal(permKey))) return [];
-        return [line(`${perm.id} ${perm.name}`, getVal(permKey))];
+        content.push(indentedLine([
+            { text: `${perm.id} ${perm.name}     `, bold: true },
+            answer(getVal(permKey)),
+        ]));
     });
-    if (permissionLines.length > 0) {
-        content.push({ text: '5. การกำหนดสิทธิ์การใช้งานโปรแกรมระบบบัญชี', style: 'sectionHeader' }, ...permissionLines);
+
+    content.push(
+        sectionTitle('6. การสำรองข้อมูลและการเก็บรักษาข้อมูล'),
+        indentedLine([
+            { text: '6.1 ไม่ได้สำรองข้อมูลไว้ในสื่อบันทึกอื่น     ', bold: true },
+            answer(getVal(kBackupNone)),
+        ]),
+        indentedLine([
+            { text: '6.2 สำรองข้อมูลในสื่ออื่นเพียงชุดเดียว     ', bold: true },
+            answer(getVal(kBackupSingle)),
+        ]),
+        indentedLine([
+            { text: '6.3 สำรองข้อมูลในสื่อบันทึกอื่นมากกว่า 1 ชุด     ', bold: true },
+            answer(getVal(kBackupMultiple)),
+        ]),
+        lineText([
+            { text: '7. เครื่องสำรองไฟ     ', bold: true },
+            answer(getVal(kUps)),
+        ], [0, 8, 0, 3]),
+        lineText([
+            { text: '8. การจัดทำทะเบียนคุมการเข้าถึงแฟ้มข้อมูล/รหัสผู้ใช้งานโปรแกรม     ', bold: true },
+            answer(getVal(kAccess)),
+        ], [0, 3, 0, 3]),
+        lineText([
+            { text: '9. ผู้รับผิดชอบนำส่งแฟ้มข้อมูลออนไลน์ ผ่านระบบ SmartMember & SmartManage     ', bold: true },
+            answer(getVal(kUpload)),
+        ], [0, 3, 0, 3]),
+        sectionTitle('10. วิธีการนำส่งข้อมูล SmartMember & SmartManage'),
+        indentedLine([
+            { text: '10.1 ส่งข้อมูลเป็นปัจจุบัน     ', bold: true },
+            answer(getVal(kSendCurrent)),
+        ]),
+        indentedLine([
+            { text: '10.2 ส่งข้อมูลไม่เป็นปัจจุบัน     ', bold: true },
+            answer(getVal(kSendNotCurrent)),
+        ]),
+        lineText([
+            { text: '11. เรื่องที่แนะนำให้เจ้าหน้าที่สหกรณ์/IT Provider ทราบ     ', bold: true },
+            answer(getVal(kAdvice)),
+        ], [0, 8, 0, 3]),
+        lineText([
+            { text: '12. ปัญหาการใช้งานโปรแกรม     ', bold: true },
+            answer(getVal(kProblem)),
+        ], [0, 3, 0, 12]),
+    );
+
+    const extraLines = evaluationKeys
+        .filter(k => !usedKeys.has(k) && isFilled(getVal(k)))
+        .filter(k => !k.includes('ส่งแฟ้มข้อมูลสำรองให้ผู้สอบบัญชี'));
+    if (extraLines.length > 0) {
+        extraLines.forEach((key) => {
+            content.push(lineText([{ text: `${key}     `, bold: true }, answer(getVal(key))], [0, 2, 0, 2]));
+        });
     }
 
-    evaluationKeys
-        .filter(k => !usedKeys.has(k) && isFilled(getVal(k)))
-        .forEach((key) => {
-            content.push({ text: key, style: 'sectionHeader' }, { text: String(getVal(key)), color: '#1d4ed8', margin: [18, 0, 0, 6] });
-        });
+    content.push(
+        signatureBlock(textVal(kTechOfficer) !== '-' ? textVal(kTechOfficer) : '', 'เจ้าหน้าที่กลุ่มเทคโนโลยีสารสนเทศ'),
+        signatureBlock(textVal(kCoopOfficer) !== '-' ? textVal(kCoopOfficer) : '', 'เจ้าหน้าที่สหกรณ์'),
+        signatureBlock(textVal(kOfficeOfficer) !== '-' ? textVal(kOfficeOfficer) : '', 'เจ้าหน้าที่สำนักงานตรวจบัญชี'),
+    );
 
     return {
         pageSize: 'A4',
-        pageMargins: [40, 36, 40, 40],
-        defaultStyle: { font: 'Sarabun', fontSize: 13, lineHeight: 1.18, color: '#111827' },
+        pageMargins: [72, 58, 54, 42],
+        defaultStyle: { font: 'Sarabun', fontSize: 10.7, lineHeight: 1.24, color: '#111111' },
         styles: {
-            title: { fontSize: 17, bold: true, alignment: 'center', margin: [0, 0, 0, 2] },
-            subtitle: { fontSize: 14, alignment: 'center', margin: [0, 0, 0, 8] },
-            sectionHeader: { fontSize: 14, bold: true, margin: [0, 8, 0, 3] },
-            tableHeader: { bold: true, fillColor: '#eaf2ff', color: '#1e3a8a' },
+            title: { fontSize: 12.8, bold: true, alignment: 'center', margin: [0, 0, 0, 8] },
+            subtitle: { fontSize: 11.6, alignment: 'center', margin: [0, 0, 0, 12] },
         },
         content,
-        footer: (currentPage, pageCount) => ({
-            text: `หน้า ${currentPage} / ${pageCount}`,
-            alignment: 'right',
-            margin: [0, 0, 40, 0],
-            font: 'Sarabun',
-            fontSize: 10,
-            color: '#64748b',
-        }),
     };
 };
 
