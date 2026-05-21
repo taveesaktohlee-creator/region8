@@ -181,6 +181,75 @@ async function getReport(courseId: number) {
   return { response_count: responses.length, questions: summaries };
 }
 
+async function submitEvaluation(enrollmentId: number, answers: Record<string, unknown>) {
+  const [enrollments]: any = await pool.query('SELECT * FROM training_enrollments WHERE enrollment_id = ? LIMIT 1', [enrollmentId]);
+  if (enrollments.length === 0) {
+    return { status: 404, payload: { error: 'ไม่พบข้อมูลการลงทะเบียน' } };
+  }
+
+  const enrollment = enrollments[0];
+  if (enrollment.status !== 'completed') {
+    return { status: 400, payload: { error: 'สามารถส่งแบบประเมินได้หลังจบการอบรมเท่านั้น' } };
+  }
+
+  const questions = await getQuestions(enrollment.course_id);
+  if (questions.length === 0) {
+    return { status: 400, payload: { error: 'หลักสูตรนี้ยังไม่ได้ตั้งค่าแบบประเมิน' } };
+  }
+
+  const normalizedAnswers: Array<[number, string]> = [];
+  for (const question of questions) {
+    const key = String(question.question_id);
+    const value = answers[key];
+    const isRequired = Number(question.is_required) === 1;
+    const isEmpty = value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
+
+    if (isEmpty && isRequired) {
+      return { status: 400, payload: { error: `กรุณาตอบ: ${question.question_text}` } };
+    }
+
+    if (isEmpty) {
+      normalizedAnswers.push([question.question_id, '']);
+      continue;
+    }
+
+    if (question.question_type === 'rating') {
+      const rating = Math.max(1, Math.min(toInt(value, 0), 5));
+      if (!rating && isRequired) return { status: 400, payload: { error: `กรุณาให้คะแนน: ${question.question_text}` } };
+      normalizedAnswers.push([question.question_id, String(rating)]);
+    } else if (question.question_type === 'single_choice') {
+      const selected = question.options.find((option: any) => Number(option.option_id) === Number(value));
+      if (!selected) return { status: 400, payload: { error: `ตัวเลือกไม่ถูกต้อง: ${question.question_text}` } };
+      normalizedAnswers.push([question.question_id, selected.option_text]);
+    } else if (question.question_type === 'multiple_choice') {
+      const selectedIds = Array.isArray(value) ? value.map(Number) : [Number(value)];
+      const selectedTexts = selectedIds
+        .map((id) => question.options.find((option: any) => Number(option.option_id) === id)?.option_text)
+        .filter(Boolean);
+      if (selectedTexts.length === 0 && isRequired) return { status: 400, payload: { error: `กรุณาเลือกคำตอบ: ${question.question_text}` } };
+      normalizedAnswers.push([question.question_id, JSON.stringify(selectedTexts)]);
+    } else {
+      normalizedAnswers.push([question.question_id, String(value || '').trim().slice(0, 4000)]);
+    }
+  }
+
+  await pool.query(
+    `INSERT INTO training_evaluation_responses (enrollment_id, course_id, user_id)
+     VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE submitted_at = CURRENT_TIMESTAMP`,
+    [enrollmentId, enrollment.course_id, enrollment.user_id],
+  );
+  const [responseRows]: any = await pool.query('SELECT response_id FROM training_evaluation_responses WHERE enrollment_id = ? LIMIT 1', [enrollmentId]);
+  const responseId = responseRows[0].response_id;
+  await pool.query('DELETE FROM training_evaluation_answers WHERE response_id = ?', [responseId]);
+  await pool.query(
+    'INSERT INTO training_evaluation_answers (response_id, question_id, answer_value) VALUES ?',
+    [normalizedAnswers.map(([questionId, answerValue]) => [responseId, questionId, answerValue])],
+  );
+  await pool.query('UPDATE training_enrollments SET evaluated = 1 WHERE enrollment_id = ?', [enrollmentId]);
+  return { status: 200, payload: { message: 'บันทึกแบบประเมินหลักสูตรเรียบร้อยแล้ว' } };
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
@@ -196,6 +265,7 @@ export default async function handler(req: any, res: any) {
     await ensureEvaluationTables();
     const courseId = toInt(req.query.courseId);
     const questionId = toInt(req.query.questionId);
+    const enrollmentId = toInt(req.query.enrollmentId);
 
     if (req.method === 'GET') {
       if (!courseId) return sendJson(res, 400, { error: 'ไม่พบรหัสหลักสูตร' });
@@ -204,6 +274,13 @@ export default async function handler(req: any, res: any) {
     }
 
     if (req.method === 'POST') {
+      if (req.query.mode === 'submit') {
+        if (!enrollmentId) return sendJson(res, 400, { error: 'ไม่พบรหัสการลงทะเบียน' });
+        const body = await readBody(req);
+        const result = await submitEvaluation(enrollmentId, body.answers && typeof body.answers === 'object' ? body.answers : {});
+        return sendJson(res, result.status, result.payload);
+      }
+
       if (!courseId) return sendJson(res, 400, { error: 'ไม่พบรหัสหลักสูตร' });
       const body = await readBody(req);
       const questionText = String(body.question_text || '').trim();

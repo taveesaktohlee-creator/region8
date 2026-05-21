@@ -90,6 +90,36 @@ function InfoBlock({ title, children }: { title: string; children: React.ReactNo
   );
 }
 
+async function readJsonResponse(response: Response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: text };
+  }
+}
+
+function getEvaluationProxyUrl(params: { courseId?: number; enrollmentId?: number; mode?: 'questions' | 'submit' }) {
+  const search = new URLSearchParams();
+  if (params.courseId) search.set('courseId', String(params.courseId));
+  if (params.enrollmentId) search.set('enrollmentId', String(params.enrollmentId));
+  if (params.mode) search.set('mode', params.mode);
+  return `/training-evaluation-proxy?${search.toString()}`;
+}
+
+async function fetchJsonWithFallback(primaryUrl: string, fallbackUrl: string, init?: RequestInit) {
+  const primaryResponse = await fetch(primaryUrl, init);
+  const primaryData = await readJsonResponse(primaryResponse);
+  if (primaryResponse.status !== 404) {
+    return { response: primaryResponse, data: primaryData };
+  }
+
+  const fallbackResponse = await fetch(fallbackUrl, init);
+  const fallbackData = await readJsonResponse(fallbackResponse);
+  return { response: fallbackResponse, data: fallbackData };
+}
+
 export default function TrainingCourseDetail({ courseId }: { courseId: number }) {
   const [userData, setUserData] = useState<any>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -116,8 +146,11 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
       setMaterials(data.materials || []);
       setQuizzes(data.quizzes || []);
       setEnrollment(data.enrollment || null);
-      const evalRes = await fetch(`${API_BASE}/api/training/courses/${courseId}/evaluation-form`);
-      setEvaluationQuestions(evalRes.ok ? await evalRes.json() : []);
+      const { response: evalResponse, data: evalData } = await fetchJsonWithFallback(
+        `${API_BASE}/api/training/courses/${courseId}/evaluation-form`,
+        getEvaluationProxyUrl({ courseId }),
+      );
+      setEvaluationQuestions(evalResponse.ok && Array.isArray(evalData) ? evalData : []);
     } catch (error) {
       console.error(error);
       toast.error('ไม่สามารถโหลดรายละเอียดหลักสูตรได้');
@@ -175,6 +208,15 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
   const preQuiz = useMemo(() => quizzes.find((quiz) => quiz.quiz_type === 'pre'), [quizzes]);
   const postQuiz = useMemo(() => quizzes.find((quiz) => quiz.quiz_type === 'post'), [quizzes]);
   const firstVideo = lessons.find((lesson) => lesson.embed_url);
+  const hasEnteredTraining = Boolean(
+    enrollment
+    && (
+      activeLogId
+      || enrollment.status === 'in_progress'
+      || enrollment.status === 'completed'
+      || Number(enrollment.attended_seconds || 0) > 0
+    ),
+  );
 
   const handleLogout = () => {
     localStorage.removeItem('user');
@@ -312,25 +354,31 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
               <InfoBlock title="เนื้อหาการอบรม">{course.content_summary || course.description}</InfoBlock>
               <InfoBlock title="วิธีการประเมินผล">{course.evaluation_method || `ทำแบบทดสอบหลังเรียนให้ได้ตั้งแต่ ${course.pass_score || 70}% ขึ้นไป`}</InfoBlock>
 
-              <QuizPanel quiz={preQuiz} title="แบบทดสอบก่อนเรียน" userId={userData?.user_id} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
-              <QuizPanel quiz={postQuiz} title="แบบทดสอบหลังเรียน" userId={userData?.user_id} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
-              <EvaluationPanel enrollment={enrollment} questions={evaluationQuestions} onSubmitted={() => loadDetail(userData?.user_id)} />
+              {hasEnteredTraining && (
+                <>
+                  <QuizPanel quiz={preQuiz} title="แบบทดสอบก่อนเรียน" userId={userData?.user_id} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
+                  <QuizPanel quiz={postQuiz} title="แบบทดสอบหลังเรียน" userId={userData?.user_id} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
+                  <EvaluationPanel enrollment={enrollment} questions={evaluationQuestions} onSubmitted={() => loadDetail(userData?.user_id)} />
+                </>
+              )}
             </div>
 
             <aside className="flex flex-col gap-5">
-              <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-                <h3 className="mb-4 flex items-center gap-2 text-lg font-black"><FileText className="text-blue-600" /> เอกสารประกอบ</h3>
-                <div className="space-y-3">
-                  {materials.length === 0 ? (
-                    <p className="text-sm font-semibold text-slate-400">ยังไม่มีเอกสารประกอบ</p>
-                  ) : materials.map((material) => (
-                    <a key={material.material_id} href={getTrainingFileUrl(material.drive_url)} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 hover:border-blue-200 hover:bg-blue-50">
-                      {material.title}
-                      <ExternalLink size={15} />
-                    </a>
-                  ))}
-                </div>
-              </section>
+              {hasEnteredTraining && (
+                <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+                  <h3 className="mb-4 flex items-center gap-2 text-lg font-black"><FileText className="text-blue-600" /> เอกสารประกอบ</h3>
+                  <div className="space-y-3">
+                    {materials.length === 0 ? (
+                      <p className="text-sm font-semibold text-slate-400">ยังไม่มีเอกสารประกอบ</p>
+                    ) : materials.map((material) => (
+                      <a key={material.material_id} href={getTrainingFileUrl(material.drive_url)} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 hover:border-blue-200 hover:bg-blue-50">
+                        {material.title}
+                        <ExternalLink size={15} />
+                      </a>
+                    ))}
+                  </div>
+                </section>
+              )}
               <section className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
                 <h3 className="text-lg font-black text-blue-900">สถานะของคุณ</h3>
                 <p className="mt-2 text-sm font-bold text-blue-700">
@@ -494,13 +542,12 @@ function EvaluationPanel({ enrollment, questions, onSubmitted }: { enrollment: E
 
   const submitEvaluation = async () => {
     if (!enrollment?.enrollment_id) return;
-    const res = await fetch(`${API_BASE}/api/training/enrollments/${enrollment.enrollment_id}/evaluation`, {
+    const { response, data } = await fetchJsonWithFallback(`${API_BASE}/api/training/enrollments/${enrollment.enrollment_id}/evaluation`, getEvaluationProxyUrl({ enrollmentId: enrollment.enrollment_id, mode: 'submit' }), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ answers }),
     });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'บันทึกแบบประเมินไม่สำเร็จ');
+    if (!response.ok) return toast.error(data.error || 'บันทึกแบบประเมินไม่สำเร็จ');
     toast.success(data.message);
     onSubmitted();
   };
