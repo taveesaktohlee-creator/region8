@@ -23,6 +23,10 @@ function fmtTime(sec: number) {
 }
 
 function parseLocalDateTime(value: string) {
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(String(value).trim())) {
+    return new Date(value);
+  }
+
   const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
   if (!match) return new Date(value);
   const [, year, month, day, hour = '0', minute = '0', second = '0'] = match;
