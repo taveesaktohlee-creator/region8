@@ -1,6 +1,19 @@
-import pool from '../src/lib/dbconnect';
+import mysql from 'mysql2/promise';
 
 type EvaluationQuestionType = 'rating' | 'single_choice' | 'multiple_choice' | 'text';
+
+const pool = mysql.createPool({
+  host: process.env.DB_HOST || '157.85.98.50',
+  port: Number(process.env.DB_PORT) || 3307,
+  user: process.env.DB_USER || 'admin',
+  password: process.env.DB_PASSWORD || '041853671',
+  database: process.env.DB_NAME || 'isr8',
+  timezone: '+07:00',
+  dateStrings: true,
+  waitForConnections: true,
+  connectionLimit: 2,
+  queueLimit: 0,
+});
 
 function sendJson(res: any, status: number, payload: unknown) {
   res.statusCode = status;
