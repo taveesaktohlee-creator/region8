@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/drive-upload-proxy",
+      "destination": "/api/drive-upload"
+    },
+    {
       "source": "/api/:path*",
       "destination": "http://region8.duckdns.org/api/:path*"
     },

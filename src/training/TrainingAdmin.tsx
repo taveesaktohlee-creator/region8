@@ -246,12 +246,12 @@ async function uploadTrainingDriveFile(params: {
     throw new Error(primaryData?.error || `อัปโหลด${uploadLabel}ไป Google Drive ไม่สำเร็จ`);
   }
 
-  const fallbackResponse = await fetch(`${API_BASE}/api/google-monitor-data`, {
+  const fallbackResponse = await fetch('/drive-upload-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       row: {
-        action: 'uploadDriveFile',
+        action: 'uploadAvatar',
         userId: `training-${params.kind}`,
         displayName: params.courseTitle || 'training-course',
         fileName: `${Date.now()}-course-${params.kind}-${params.fileName}`,
