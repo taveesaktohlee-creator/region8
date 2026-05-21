@@ -205,6 +205,74 @@ function resolveDriveUploadResult(data: any) {
   return { fileId, url };
 }
 
+async function readJsonResponse(response: Response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: text };
+  }
+}
+
+async function uploadTrainingDriveFile(params: {
+  kind: 'cover' | 'material';
+  courseTitle: string;
+  fileName: string;
+  mimeType: string;
+  base64: string;
+}) {
+  const endpoint = params.kind === 'cover' ? 'cover-drive' : 'material-drive';
+  const uploadLabel = params.kind === 'cover' ? 'รูปปก' : 'เอกสาร';
+  const primaryResponse = await fetch(`${API_BASE}/api/admin/training/${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      course_title: params.courseTitle || 'training-course',
+      file_name: params.fileName,
+      mime_type: params.mimeType,
+      base64: params.base64,
+    }),
+  });
+  const primaryData = await readJsonResponse(primaryResponse);
+  const primaryUpload = primaryResponse.ok && primaryData?.ok !== false
+    ? resolveDriveUploadResult(primaryData)
+    : { fileId: '', url: '' };
+
+  if (primaryUpload.url) return primaryUpload;
+
+  const shouldFallback = primaryResponse.ok && primaryData?.ok !== false;
+  if (!shouldFallback) {
+    throw new Error(primaryData?.error || `อัปโหลด${uploadLabel}ไป Google Drive ไม่สำเร็จ`);
+  }
+
+  const fallbackResponse = await fetch(`${API_BASE}/api/google-monitor-data`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      row: {
+        action: 'uploadDriveFile',
+        userId: `training-${params.kind}`,
+        displayName: params.courseTitle || 'training-course',
+        fileName: `${Date.now()}-course-${params.kind}-${params.fileName}`,
+        mimeType: params.mimeType || 'application/octet-stream',
+        base64: params.base64,
+      },
+    }),
+  });
+  const fallbackData = await readJsonResponse(fallbackResponse);
+  if (!fallbackResponse.ok || fallbackData?.ok === false) {
+    throw new Error(fallbackData?.error || `อัปโหลด${uploadLabel}ไป Google Drive ไม่สำเร็จ`);
+  }
+
+  const fallbackUpload = resolveDriveUploadResult(fallbackData);
+  if (!fallbackUpload.url) {
+    throw new Error(`Google Drive ไม่ส่ง URL ${uploadLabel}กลับมา`);
+  }
+
+  return fallbackUpload;
+}
+
 function splitMinutes(totalMinutes?: number) {
   const safe = Math.max(0, Number(totalMinutes || 0));
   return { hours: Math.floor(safe / 60), minutes: safe % 60 };
@@ -474,20 +542,13 @@ export default function TrainingAdmin() {
     try {
       setIsUploadingMaterial(true);
       const dataUrl = await readBlobAsDataUrl(materialFile);
-      const uploadRes = await fetch(`${API_BASE}/api/admin/training/material-drive`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          course_title: form.title || 'training-course',
-          file_name: materialFile.name,
-          mime_type: materialFile.type || 'application/octet-stream',
-          base64: dataUrlToBase64(dataUrl),
-        }),
+      const upload = await uploadTrainingDriveFile({
+        kind: 'material',
+        courseTitle: form.title || 'training-course',
+        fileName: materialFile.name,
+        mimeType: materialFile.type || 'application/octet-stream',
+        base64: dataUrlToBase64(dataUrl),
       });
-      const uploadData = await uploadRes.json();
-      if (!uploadRes.ok || uploadData.ok === false) throw new Error(uploadData.error || 'อัปโหลดเอกสารไป Google Drive ไม่สำเร็จ');
-      const upload = resolveDriveUploadResult(uploadData);
-      if (!upload.url) throw new Error('Google Drive ไม่ส่ง URL เอกสารกลับมา');
 
       const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/materials`, {
         method: 'POST',
@@ -1104,19 +1165,13 @@ function CourseForm({ form, setForm, onSave, selectedCourseId }: { form: Course;
       const optimized = await optimizeCourseCover(file);
       setCoverPreviewUrl(optimized.previewUrl);
       setCoverImageError(false);
-      const res = await fetch(`${API_BASE}/api/admin/training/cover-drive`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          course_title: form.title || 'training-course',
-          file_name: optimized.fileName,
-          mime_type: optimized.mimeType,
-          base64: optimized.base64,
-        }),
+      const upload = await uploadTrainingDriveFile({
+        kind: 'cover',
+        courseTitle: form.title || 'training-course',
+        fileName: optimized.fileName,
+        mimeType: optimized.mimeType,
+        base64: optimized.base64,
       });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) throw new Error(data.error || 'อัปโหลดรูปปกไม่สำเร็จ');
-      const upload = resolveDriveUploadResult(data);
       const coverUrl = upload.url;
       if (!coverUrl) throw new Error('Google Drive ไม่ส่ง URL รูปปกกลับมา');
       update('thumbnail_url', coverUrl);
