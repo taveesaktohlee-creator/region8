@@ -594,27 +594,68 @@ function buildDriveProxyPath(fileId: unknown) {
   return safeId ? `/api/google-drive/files/${encodeURIComponent(safeId)}` : '';
 }
 
+function parseJsonish(value: any): any {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function collectDriveUploadCandidates(value: any, output: string[] = [], depth = 0) {
+  if (value == null || depth > 4) return output;
+  const parsed = parseJsonish(value);
+
+  if (typeof parsed === 'string') {
+    if (parsed.trim()) output.push(parsed.trim());
+    return output;
+  }
+
+  if (Array.isArray(parsed)) {
+    parsed.forEach(item => collectDriveUploadCandidates(item, output, depth + 1));
+    return output;
+  }
+
+  if (typeof parsed === 'object') {
+    [
+      'fileProxyPath',
+      'fileId',
+      'file_id',
+      'id',
+      'url',
+      'driveUrl',
+      'drive_url',
+      'webViewLink',
+      'web_view_link',
+      'webContentLink',
+      'downloadUrl',
+      'thumbnailUrl',
+    ].forEach((key) => collectDriveUploadCandidates(parsed[key], output, depth + 1));
+
+    ['data', 'file', 'result', 'payload', 'response'].forEach((key) => {
+      collectDriveUploadCandidates(parsed[key], output, depth + 1);
+    });
+  }
+
+  return output;
+}
+
 function getDriveUploadFileId(parsed: any) {
-  return extractGoogleDriveFileId(
-    parsed?.fileId ||
-    parsed?.file_id ||
-    parsed?.id ||
-    parsed?.fileProxyPath ||
-    parsed?.webViewLink ||
-    parsed?.web_view_link ||
-    parsed?.url ||
-    parsed?.thumbnailUrl ||
-    '',
-  );
+  return collectDriveUploadCandidates(parsed).map(extractGoogleDriveFileId).find(Boolean) || '';
 }
 
 function buildDriveUploadPayload(parsed: any) {
   const fileId = getDriveUploadFileId(parsed);
+  const candidates = collectDriveUploadCandidates(parsed);
+  const directUrl = candidates.find(value => /^https?:\/\//i.test(value)) || '';
   return {
     ...parsed,
     fileId: fileId || parsed?.fileId || parsed?.file_id || '',
     fileProxyPath: fileId ? buildDriveProxyPath(fileId) : parsed?.fileProxyPath || '',
-    webViewLink: parsed?.webViewLink || parsed?.web_view_link || parsed?.url || '',
+    webViewLink: parsed?.webViewLink || parsed?.web_view_link || parsed?.url || directUrl || '',
   };
 }
 

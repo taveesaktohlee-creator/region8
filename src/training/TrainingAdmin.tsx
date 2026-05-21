@@ -146,20 +146,61 @@ function dataUrlToBase64(dataUrl: string) {
   return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
 }
 
+function parseJsonish(value: any): any {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function collectDriveUploadCandidates(value: any, output: string[] = [], depth = 0) {
+  if (value == null || depth > 4) return output;
+  const parsed = parseJsonish(value);
+
+  if (typeof parsed === 'string') {
+    if (parsed.trim()) output.push(parsed.trim());
+    return output;
+  }
+
+  if (Array.isArray(parsed)) {
+    parsed.forEach(item => collectDriveUploadCandidates(item, output, depth + 1));
+    return output;
+  }
+
+  if (typeof parsed === 'object') {
+    [
+      'fileProxyPath',
+      'fileId',
+      'file_id',
+      'id',
+      'url',
+      'driveUrl',
+      'drive_url',
+      'webViewLink',
+      'web_view_link',
+      'webContentLink',
+      'downloadUrl',
+      'thumbnailUrl',
+    ].forEach((key) => collectDriveUploadCandidates(parsed[key], output, depth + 1));
+
+    ['data', 'file', 'result', 'payload', 'response'].forEach((key) => {
+      collectDriveUploadCandidates(parsed[key], output, depth + 1);
+    });
+  }
+
+  return output;
+}
+
 function resolveDriveUploadResult(data: any) {
-  const fileId = getDriveFileIdFromUrl(
-    data?.fileId ||
-    data?.file_id ||
-    data?.id ||
-    data?.fileProxyPath ||
-    data?.webViewLink ||
-    data?.web_view_link ||
-    data?.url ||
-    data?.thumbnailUrl ||
-    '',
-  );
-  const proxyPath = data?.fileProxyPath || (fileId ? `/api/google-drive/files/${encodeURIComponent(fileId)}` : '');
-  const url = proxyPath || data?.webViewLink || data?.web_view_link || data?.url || data?.thumbnailUrl || '';
+  const candidates = collectDriveUploadCandidates(data);
+  const fileId = candidates.map(getDriveFileIdFromUrl).find(Boolean) || '';
+  const proxyPath = candidates.find(value => value.startsWith('/api/google-drive/files/')) || (fileId ? `/api/google-drive/files/${encodeURIComponent(fileId)}` : '');
+  const directUrl = candidates.find(value => /^https?:\/\//i.test(value)) || '';
+  const url = proxyPath || directUrl;
 
   return { fileId, url };
 }
