@@ -3149,7 +3149,7 @@ app.get('/api/usage/users-table', async (req, res) => {
         DATE_FORMAT(u.registration_date, '%Y-%m-%d %H:%i:%s') AS registration_date,
         CASE WHEN MAX(s_online.session_id) IS NULL THEN 0 ELSE 1 END AS is_online,
         DATE_FORMAT(MAX(s_online.last_seen_at), '%Y-%m-%d %H:%i:%s') AS last_seen_at,
-        (SELECT DATE_FORMAT(MAX(login_time), '%Y-%m-%d %H:%i:%s') FROM user_sessions WHERE user_id = u.user_id ${lastLoginFilter}) AS last_login,
+        (SELECT DATE_FORMAT(MAX(COALESCE(last_seen_at, login_time)), '%Y-%m-%d %H:%i:%s') FROM user_sessions WHERE user_id = u.user_id ${lastLoginFilter}) AS last_login,
         (SELECT COUNT(*) FROM user_sessions WHERE user_id = u.user_id ${sessionFilter}) AS total_logins,
         (SELECT COALESCE(SUM(active_seconds), 0) FROM user_activity_log WHERE user_id = u.user_id ${activityFilter}) AS total_active_seconds
       FROM user u
