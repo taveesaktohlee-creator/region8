@@ -5,6 +5,10 @@
       "destination": "/api/drive-upload"
     },
     {
+      "source": "/training-evaluation-proxy",
+      "destination": "/api/training-evaluation"
+    },
+    {
       "source": "/api/:path*",
       "destination": "http://region8.duckdns.org/api/:path*"
     },

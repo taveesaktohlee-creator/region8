@@ -279,6 +279,26 @@ async function uploadTrainingDriveFile(params: {
   return fallbackUpload;
 }
 
+function getEvaluationProxyUrl(params: { courseId?: number; questionId?: number; mode?: 'questions' | 'report' }) {
+  const search = new URLSearchParams();
+  if (params.courseId) search.set('courseId', String(params.courseId));
+  if (params.questionId) search.set('questionId', String(params.questionId));
+  if (params.mode) search.set('mode', params.mode);
+  return `/training-evaluation-proxy?${search.toString()}`;
+}
+
+async function fetchJsonWithFallback(primaryUrl: string, fallbackUrl: string, init?: RequestInit) {
+  const primaryResponse = await fetch(primaryUrl, init);
+  const primaryData = await readJsonResponse(primaryResponse);
+  if (primaryResponse.status !== 404) {
+    return { response: primaryResponse, data: primaryData };
+  }
+
+  const fallbackResponse = await fetch(fallbackUrl, init);
+  const fallbackData = await readJsonResponse(fallbackResponse);
+  return { response: fallbackResponse, data: fallbackData };
+}
+
 function splitMinutes(totalMinutes?: number) {
   const safe = Math.max(0, Number(totalMinutes || 0));
   return { hours: Math.floor(safe / 60), minutes: safe % 60 };
@@ -434,25 +454,21 @@ export default function TrainingAdmin() {
   }, []);
 
   const loadEvaluationQuestions = useCallback(async (courseId: number) => {
-    const res = await fetch(`${API_BASE}/api/admin/training/courses/${courseId}/evaluation-questions`);
-    if (res.status === 404) {
-      setEvaluationQuestions([]);
-      return [];
-    }
-    if (!res.ok) throw new Error('Cannot load evaluation questions');
-    const data: AdminEvaluationQuestion[] = await res.json();
+    const { response, data } = await fetchJsonWithFallback(
+      `${API_BASE}/api/admin/training/courses/${courseId}/evaluation-questions`,
+      getEvaluationProxyUrl({ courseId }),
+    );
+    if (!response.ok) throw new Error(data?.error || 'Cannot load evaluation questions');
     setEvaluationQuestions(data);
     return data;
   }, []);
 
   const loadEvaluationReport = useCallback(async (courseId: number) => {
-    const res = await fetch(`${API_BASE}/api/admin/training/courses/${courseId}/evaluation-report`);
-    if (res.status === 404) {
-      setEvaluationReport(null);
-      return null;
-    }
-    if (!res.ok) throw new Error('Cannot load evaluation report');
-    const data: EvaluationReport = await res.json();
+    const { response, data } = await fetchJsonWithFallback(
+      `${API_BASE}/api/admin/training/courses/${courseId}/evaluation-report`,
+      getEvaluationProxyUrl({ courseId, mode: 'report' }),
+    );
+    if (!response.ok) throw new Error(data?.error || 'Cannot load evaluation report');
     setEvaluationReport(data);
     return data;
   }, []);
@@ -618,13 +634,12 @@ export default function TrainingAdmin() {
     if (!evaluationForm.question_text.trim()) return toast.warning('กรุณาระบุหัวข้อการประเมิน');
     if (needsOptions && options.length < 2) return toast.warning('คำถามแบบตัวเลือกต้องมีตัวเลือกอย่างน้อย 2 รายการ');
 
-    const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/evaluation-questions`, {
+    const { response, data } = await fetchJsonWithFallback(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/evaluation-questions`, getEvaluationProxyUrl({ courseId: selectedCourseId }), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...evaluationForm, options }),
     });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'เพิ่มหัวข้อการประเมินไม่สำเร็จ');
+    if (!response.ok) return toast.error(data.error || 'เพิ่มหัวข้อการประเมินไม่สำเร็จ');
     toast.success(data.message);
     setEvaluationForm({ question_text: '', question_type: 'rating', options: ['', ''], is_required: true, sort_order: 0 });
     await loadEvaluationQuestions(selectedCourseId).catch(() => undefined);
@@ -633,9 +648,12 @@ export default function TrainingAdmin() {
 
   const deleteEvaluationQuestion = async (questionId: number) => {
     if (!selectedCourseId || !window.confirm('ต้องการลบหัวข้อประเมินนี้หรือไม่')) return;
-    const res = await fetch(`${API_BASE}/api/admin/training/evaluation-questions/${questionId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'ลบหัวข้อการประเมินไม่สำเร็จ');
+    const { response, data } = await fetchJsonWithFallback(
+      `${API_BASE}/api/admin/training/evaluation-questions/${questionId}`,
+      getEvaluationProxyUrl({ questionId }),
+      { method: 'DELETE' },
+    );
+    if (!response.ok) return toast.error(data.error || 'ลบหัวข้อการประเมินไม่สำเร็จ');
     toast.success(data.message);
     await loadEvaluationQuestions(selectedCourseId).catch(() => undefined);
     await loadEvaluationReport(selectedCourseId).catch(() => undefined);
