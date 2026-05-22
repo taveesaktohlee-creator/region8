@@ -427,6 +427,20 @@ async function ensureTrainingTables() {
       `);
 
       await pool.query(`
+        UPDATE training_enrollments e
+        LEFT JOIN (
+          SELECT enrollment_id, MAX(submitted_at) AS submitted_at
+          FROM training_quiz_attempts
+          WHERE quiz_type = 'post'
+          GROUP BY enrollment_id
+        ) post_attempt ON post_attempt.enrollment_id = e.enrollment_id
+        SET e.status = 'completed',
+            e.completed_at = COALESCE(e.completed_at, post_attempt.submitted_at, NOW())
+        WHERE e.post_score IS NOT NULL
+          AND e.status <> 'completed'
+      `);
+
+      await pool.query(`
         CREATE TABLE IF NOT EXISTS training_evaluations (
           evaluation_id INT AUTO_INCREMENT PRIMARY KEY,
           enrollment_id INT NOT NULL UNIQUE,
@@ -1830,6 +1844,23 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
       [quiz.course_id, userId],
     );
     if (enrollments.length === 0) return res.status(400).json({ error: 'กรุณาลงทะเบียนหลักสูตรก่อนทำแบบทดสอบ' });
+    const enrollment = enrollments[0];
+    if (quiz.quiz_type === 'pre' && enrollment.pre_score !== null && enrollment.pre_score !== undefined) {
+      return res.status(400).json({ error: `แบบทดสอบก่อนเรียนทำได้เพียงครั้งเดียว คะแนนเดิม ${enrollment.pre_score}%` });
+    }
+    if (quiz.quiz_type === 'post' && enrollment.post_score !== null && enrollment.post_score !== undefined) {
+      return res.status(400).json({ error: `แบบทดสอบหลังเรียนทำได้เพียงครั้งเดียว คะแนนเดิม ${enrollment.post_score}%` });
+    }
+
+    const [attempts]: any = await pool.query(
+      'SELECT attempt_id, score FROM training_quiz_attempts WHERE enrollment_id = ? AND quiz_type = ? LIMIT 1',
+      [enrollment.enrollment_id, quiz.quiz_type],
+    );
+    if (attempts.length > 0) {
+      return res.status(400).json({
+        error: `${quiz.quiz_type === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน'}ทำได้เพียงครั้งเดียว คะแนนเดิม ${attempts[0].score}%`,
+      });
+    }
 
     const [questions]: any = await pool.query('SELECT question_id FROM training_questions WHERE quiz_id = ?', [quizId]);
     if (questions.length === 0) return res.status(400).json({ error: 'แบบทดสอบนี้ยังไม่มีคำถาม' });
@@ -1846,7 +1877,6 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
     }
     const total = questionIds.length;
     const score = Number(((correctCount / total) * 100).toFixed(2));
-    const enrollment = enrollments[0];
 
     await pool.query(
       `INSERT INTO training_quiz_attempts (enrollment_id, quiz_id, quiz_type, score, total_questions, answers)
@@ -1854,42 +1884,40 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
       [enrollment.enrollment_id, quizId, quiz.quiz_type, score, total, JSON.stringify(answers)],
     );
 
+    const [courseRows]: any = await pool.query('SELECT course_type, pass_score FROM training_courses WHERE course_id = ?', [quiz.course_id]);
+    const course = courseRows[0];
+    const passScore = Number(course?.pass_score || quiz.pass_score || 70);
+    const passed = score >= passScore;
+
     if (quiz.quiz_type === 'pre') {
       await pool.query(
         'UPDATE training_enrollments SET pre_score = ?, pre_total = ? WHERE enrollment_id = ?',
         [score, total, enrollment.enrollment_id],
       );
     } else {
-      await pool.query(
-        'UPDATE training_enrollments SET post_score = ?, post_total = ? WHERE enrollment_id = ?',
-        [score, total, enrollment.enrollment_id],
-      );
-    }
-
-    const [courseRows]: any = await pool.query('SELECT course_type, pass_score FROM training_courses WHERE course_id = ?', [quiz.course_id]);
-    const course = courseRows[0];
-    if (
-      quiz.quiz_type === 'post' &&
-      score >= Number(course?.pass_score || quiz.pass_score || 70) &&
-      (course?.course_type === 'online' || enrollment.attendance_confirmed)
-    ) {
-      const certificateCode = `TR-${quiz.course_id}-${enrollment.user_id}-${Date.now().toString(36).toUpperCase()}`;
+      const certificateCode = passed && (course?.course_type === 'online' || enrollment.attendance_confirmed)
+        ? `TR-${quiz.course_id}-${enrollment.user_id}-${Date.now().toString(36).toUpperCase()}`
+        : '';
       await pool.query(
         `UPDATE training_enrollments
-         SET status = 'completed', completed_at = COALESCE(completed_at, NOW()), certificate_code = IF(certificate_code = '', ?, certificate_code)
+         SET post_score = ?,
+             post_total = ?,
+             status = 'completed',
+             completed_at = COALESCE(completed_at, NOW()),
+             certificate_code = IF(? <> '' AND certificate_code = '', ?, certificate_code)
          WHERE enrollment_id = ?`,
-        [certificateCode, enrollment.enrollment_id],
+        [score, total, certificateCode, certificateCode, enrollment.enrollment_id],
       );
     }
 
     res.json({
-      message: quiz.quiz_type === 'post' && score >= Number(course?.pass_score || quiz.pass_score || 70)
+      message: quiz.quiz_type === 'post' && passed
         ? 'ส่งแบบทดสอบเรียบร้อยแล้ว คะแนนผ่านเกณฑ์'
         : 'ส่งแบบทดสอบเรียบร้อยแล้ว',
       score,
       total,
       correct: correctCount,
-      passed: score >= Number(course?.pass_score || quiz.pass_score || 70),
+      passed,
     });
   } catch (error) {
     console.error(error);

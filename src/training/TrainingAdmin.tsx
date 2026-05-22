@@ -340,9 +340,31 @@ function formatQuizLimit(minutes?: number) {
   if (safe <= 0) return 'ไม่จำกัดเวลา';
   const hours = Math.floor(safe / 60);
   const mins = safe % 60;
-  if (hours > 0 && mins > 0) return `${hours} ชม. ${mins} นาที`;
-  if (hours > 0) return `${hours} ชม.`;
-  return `${mins} นาที`;
+  return `${hours} ชม. ${mins} นาที`;
+}
+
+function formatSecondsAsHoursMinutes(seconds?: number) {
+  const safe = Math.max(0, Number(seconds || 0));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  return `${hours} ชม. ${minutes} นาที`;
+}
+
+function enrollmentStatusMeta(status?: string) {
+  if (status === 'completed') return { label: 'สำเร็จการอบรม', className: 'bg-emerald-50 text-emerald-700 border-emerald-100' };
+  if (status === 'in_progress') return { label: 'กำลังอบรม', className: 'bg-blue-50 text-blue-700 border-blue-100' };
+  if (status === 'registered') return { label: 'ลงทะเบียนแล้ว', className: 'bg-slate-50 text-slate-600 border-slate-100' };
+  return { label: status || '-', className: 'bg-slate-50 text-slate-600 border-slate-100' };
+}
+
+function passResultMeta(postScore?: number | null, passScore?: number | null) {
+  if (postScore === null || postScore === undefined) {
+    return { label: 'ยังไม่สอบหลังเรียน', className: 'bg-slate-50 text-slate-500 border-slate-100' };
+  }
+  const passed = Number(postScore) >= Number(passScore || 70);
+  return passed
+    ? { label: 'ผ่าน', className: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
+    : { label: 'ไม่ผ่าน', className: 'bg-rose-50 text-rose-700 border-rose-100' };
 }
 
 function loadImageFromUrl(url: string) {
@@ -1015,21 +1037,30 @@ function ReportSection({ report, onRefresh, onConfirmAttendance }: {
               <tr>
                 <td colSpan={7} className="px-4 py-12 text-center font-bold text-slate-400">ยังไม่มีข้อมูลผู้ลงทะเบียน</td>
               </tr>
-            ) : report.map((row) => (
-              <tr key={row.enrollment_id} className="border-b border-slate-100">
-                <td className="px-4 py-3 font-bold text-slate-800">{row.Name_Surname}<p className="text-xs text-slate-400">{row.position}</p></td>
-                <td className="max-w-[360px] px-4 py-3 font-semibold text-slate-600">{row.title}</td>
-                <td className="px-4 py-3 text-xs font-black text-blue-600">{courseTypeLabels[row.course_type as Course['course_type']] || row.course_type}</td>
-                <td className="px-4 py-3 font-bold">{Math.floor((row.attended_seconds || 0) / 60)} นาที</td>
-                <td className="px-4 py-3 font-bold">{row.pre_score ?? '-'} / {row.post_score ?? '-'}</td>
-                <td className="px-4 py-3 font-bold">{row.status}</td>
-                <td className="px-4 py-3">
-                  <button onClick={() => onConfirmAttendance(row.enrollment_id, !row.attendance_confirmed)} className={`rounded-xl px-3 py-2 text-xs font-black ${row.attendance_confirmed ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-                    {row.attendance_confirmed ? 'ยืนยันแล้ว' : 'ยืนยันเข้าอบรม'}
-                  </button>
-                </td>
-              </tr>
-            ))}
+            ) : report.map((row) => {
+              const status = enrollmentStatusMeta(row.status);
+              const result = passResultMeta(row.post_score, row.pass_score);
+              return (
+                <tr key={row.enrollment_id} className="border-b border-slate-100">
+                  <td className="px-4 py-3 font-bold text-slate-800">{row.Name_Surname}<p className="text-xs text-slate-400">{row.position}</p></td>
+                  <td className="max-w-[360px] px-4 py-3 font-semibold text-slate-600">{row.title}</td>
+                  <td className="px-4 py-3 text-xs font-black text-blue-600">{courseTypeLabels[row.course_type as Course['course_type']] || row.course_type}</td>
+                  <td className="px-4 py-3 font-bold">{formatSecondsAsHoursMinutes(row.attended_seconds)}</td>
+                  <td className="px-4 py-3 font-bold">{row.pre_score ?? '-'} / {row.post_score ?? '-'}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col items-start gap-1">
+                      <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${status.className}`}>{status.label}</span>
+                      <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${result.className}`}>{result.label}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <button onClick={() => onConfirmAttendance(row.enrollment_id, !row.attendance_confirmed)} className={`rounded-xl px-3 py-2 text-xs font-black ${row.attendance_confirmed ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                      {row.attendance_confirmed ? 'ยืนยันแล้ว' : 'ยืนยันเข้าอบรม'}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1283,6 +1314,13 @@ function CourseForm({ form, setForm, onSave, selectedCourseId }: { form: Course;
   const [coverImageError, setCoverImageError] = useState(false);
   const update = (key: keyof Course, value: any) => setForm((current) => ({ ...current, [key]: value }));
   const coverImageSrc = coverPreviewUrl || getTrainingImageUrl(form.thumbnail_url);
+  const duration = splitMinutes(form.duration_minutes);
+  const updateDuration = (key: 'hours' | 'minutes', value: string) => {
+    const next = Math.max(0, Number(value) || 0);
+    const hours = key === 'hours' ? next : duration.hours;
+    const minutes = key === 'minutes' ? next : duration.minutes;
+    update('duration_minutes', (hours * 60) + minutes);
+  };
 
   useEffect(() => {
     setCoverUploadNote('');
@@ -1331,7 +1369,10 @@ function CourseForm({ form, setForm, onSave, selectedCourseId }: { form: Course;
       <Input value={form.title} onChange={(v) => update('title', v)} placeholder="ชื่อหลักสูตร" />
       <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Input value={form.category} onChange={(v) => update('category', v)} placeholder="หมวดหมู่" />
-        <Input value={String(form.duration_minutes)} onChange={(v) => update('duration_minutes', Number(v) || 0)} placeholder="เวลาเรียน (นาที)" />
+        <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+          <Input value={String(duration.hours)} onChange={(v) => updateDuration('hours', v)} placeholder="เวลาเรียน (ชั่วโมง)" />
+          <Input value={String(duration.minutes)} onChange={(v) => updateDuration('minutes', v)} placeholder="เวลาเรียน (นาที)" />
+        </div>
       </div>
       <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <select value={form.course_type} onChange={(e) => update('course_type', e.target.value)} className="min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none">

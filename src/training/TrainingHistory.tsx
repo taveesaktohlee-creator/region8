@@ -17,6 +17,7 @@ type HistoryItem = {
   status: 'registered' | 'in_progress' | 'completed';
   pre_score?: number | null;
   post_score?: number | null;
+  pass_score?: number | null;
   attended_seconds: number;
   evaluated: number;
   attendance_confirmed: number;
@@ -29,14 +30,18 @@ function formatSeconds(seconds?: number) {
   const value = Math.max(0, Number(seconds || 0));
   const hours = Math.floor(value / 3600);
   const minutes = Math.floor((value % 3600) / 60);
-  if (hours > 0) return `${hours} ชม. ${minutes} นาที`;
-  return `${minutes} นาที`;
+  return `${hours} ชม. ${minutes} นาที`;
 }
 
 function statusMeta(status: HistoryItem['status']) {
-  if (status === 'completed') return { label: 'ผ่านหลักสูตร', icon: CheckCircle2, color: 'bg-emerald-50 text-emerald-700 border-emerald-100' };
+  if (status === 'completed') return { label: 'สำเร็จการอบรม', icon: CheckCircle2, color: 'bg-emerald-50 text-emerald-700 border-emerald-100' };
   if (status === 'in_progress') return { label: 'กำลังอบรม', icon: Clock, color: 'bg-blue-50 text-blue-700 border-blue-100' };
   return { label: 'ลงทะเบียนแล้ว', icon: Calendar, color: 'bg-slate-50 text-slate-600 border-slate-100' };
+}
+
+function passResult(postScore?: number | null, passScore?: number | null) {
+  if (postScore === null || postScore === undefined) return '-';
+  return Number(postScore) >= Number(passScore || 70) ? 'ผ่าน' : 'ไม่ผ่าน';
 }
 
 export default function TrainingHistory() {
@@ -168,7 +173,7 @@ export default function TrainingHistory() {
                       <Metric icon={<Clock size={16} />} label="เวลาเข้าอบรม" value={formatSeconds(item.attended_seconds)} />
                       <Metric icon={<Star size={16} />} label="ก่อนเรียน" value={item.pre_score != null ? `${item.pre_score}%` : '-'} />
                       <Metric icon={<CheckCircle2 size={16} />} label="หลังเรียน" value={item.post_score != null ? `${item.post_score}%` : '-'} />
-                      <Metric icon={item.evaluated ? <CheckCircle2 size={16} /> : <XCircle size={16} />} label="ประเมินหลักสูตร" value={item.evaluated ? 'ส่งแล้ว' : 'ยังไม่ส่ง'} />
+                      <Metric icon={item.post_score != null && passResult(item.post_score, item.pass_score) === 'ผ่าน' ? <CheckCircle2 size={16} /> : <XCircle size={16} />} label="ผลการอบรม" value={passResult(item.post_score, item.pass_score)} />
                     </div>
                   </div>
                 </a>

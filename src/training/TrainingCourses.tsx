@@ -21,6 +21,8 @@ type Course = {
   material_count?: number;
   enrollment_id?: number | null;
   enrollment_status?: string | null;
+  post_score?: number | null;
+  pass_score?: number | null;
 };
 
 const typeLabels: Record<Course['course_type'], string> = {
@@ -34,6 +36,24 @@ const typeIcons = {
   zoom: Video,
   onsite: MapPin,
 };
+
+function formatMinutes(totalMinutes?: number) {
+  const value = Math.max(0, Number(totalMinutes || 0));
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return `${hours} ชม. ${minutes} นาที`;
+}
+
+function enrollmentBadgeLabel(course: Course) {
+  if (!course.enrollment_id) return '';
+  if (course.enrollment_status === 'completed') {
+    if (course.post_score === null || course.post_score === undefined) return 'สำเร็จการอบรม';
+    const passed = Number(course.post_score) >= Number(course.pass_score || 70);
+    return `สำเร็จการอบรม · ${passed ? 'ผ่าน' : 'ไม่ผ่าน'}`;
+  }
+  if (course.enrollment_status === 'in_progress') return 'กำลังอบรม';
+  return 'ลงทะเบียนแล้ว';
+}
 
 function fallbackThumbnail(course: Course) {
   const bg = course.course_type === 'online'
@@ -168,6 +188,7 @@ export default function TrainingCourses() {
               filteredCourses.map((course) => {
                 const TypeIcon = typeIcons[course.course_type];
                 const isRegistered = Boolean(course.enrollment_id);
+                const badgeLabel = enrollmentBadgeLabel(course);
                 return (
                   <a
                     key={course.course_id}
@@ -183,7 +204,7 @@ export default function TrainingCourses() {
                       </div>
                       {isRegistered && (
                         <div className="absolute right-4 top-4 rounded-full bg-emerald-500 px-3 py-1 text-xs font-black text-white shadow">
-                          ลงทะเบียนแล้ว
+                          {badgeLabel}
                         </div>
                       )}
                     </div>
@@ -196,7 +217,7 @@ export default function TrainingCourses() {
                       </div>
                       <div className="space-y-2 text-sm font-semibold text-slate-500">
                         <div className="flex items-center gap-2"><Users size={15} /> {course.instructor || 'ยังไม่ระบุวิทยากร'}</div>
-                        <div className="flex items-center gap-2"><Clock size={15} /> {course.duration_minutes || 0} นาที</div>
+                        <div className="flex items-center gap-2"><Clock size={15} /> {formatMinutes(course.duration_minutes)}</div>
                         <div className="flex items-center gap-2"><CalendarCheck size={15} /> ผู้ลงทะเบียน {course.enrolled_count || 0} คน</div>
                       </div>
                       <div className="mt-auto rounded-2xl bg-slate-50 px-4 py-3 text-center text-sm font-black text-blue-700 transition group-hover:bg-blue-600 group-hover:text-white">

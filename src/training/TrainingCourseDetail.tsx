@@ -58,8 +58,14 @@ function formatSeconds(seconds?: number) {
   const value = Math.max(0, Number(seconds || 0));
   const hours = Math.floor(value / 3600);
   const minutes = Math.floor((value % 3600) / 60);
-  if (hours > 0) return `${hours} ชม. ${minutes} นาที`;
-  return `${minutes} นาที`;
+  return `${hours} ชม. ${minutes} นาที`;
+}
+
+function formatMinutes(totalMinutes?: number) {
+  const value = Math.max(0, Number(totalMinutes || 0));
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return `${hours} ชม. ${minutes} นาที`;
 }
 
 function formatCountdown(seconds: number) {
@@ -76,9 +82,22 @@ function formatQuizLimit(minutes?: number) {
   if (safe <= 0) return 'ไม่จำกัดเวลา';
   const hours = Math.floor(safe / 60);
   const mins = safe % 60;
-  if (hours > 0 && mins > 0) return `${hours} ชม. ${mins} นาที`;
-  if (hours > 0) return `${hours} ชม.`;
-  return `${mins} นาที`;
+  return `${hours} ชม. ${mins} นาที`;
+}
+
+function getPassResult(postScore?: number | null, passScore?: number) {
+  if (postScore === null || postScore === undefined) return null;
+  return Number(postScore) >= Number(passScore || 70) ? 'ผ่าน' : 'ไม่ผ่าน';
+}
+
+function getEnrollmentStatusLabel(enrollment: Enrollment | null, passScore?: number) {
+  if (!enrollment) return 'ยังไม่ได้ลงทะเบียน';
+  if (enrollment.status === 'completed') {
+    const result = getPassResult(enrollment.post_score, passScore);
+    return result ? `สำเร็จการอบรม · ${result}` : 'สำเร็จการอบรม';
+  }
+  if (enrollment.status === 'registered') return 'ลงทะเบียนแล้ว';
+  return 'กำลังอบรม';
 }
 
 function InfoBlock({ title, children }: { title: string; children: React.ReactNode }) {
@@ -331,10 +350,10 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
           <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
             <div className="flex flex-col gap-5">
               <div className="grid gap-3 sm:grid-cols-4">
-                <Stat icon={<Clock />} label="เวลาเรียน" value={`${course.duration_minutes || 0} นาที`} />
+                <Stat icon={<Clock />} label="เวลาเรียน" value={formatMinutes(course.duration_minutes)} />
                 <Stat icon={<CalendarCheck />} label="เวลาที่เข้าอบรม" value={formatSeconds(enrollment?.attended_seconds)} />
                 <Stat icon={<Award />} label="คะแนนก่อนเรียน" value={enrollment?.pre_score != null ? `${enrollment.pre_score}%` : '-'} />
-                <Stat icon={<CheckCircle2 />} label="คะแนนหลังเรียน" value={enrollment?.post_score != null ? `${enrollment.post_score}%` : '-'} />
+                <Stat icon={<CheckCircle2 />} label="คะแนนหลังเรียน" value={enrollment?.post_score != null ? `${enrollment.post_score}% ${getPassResult(enrollment.post_score, course.pass_score)}` : '-'} />
               </div>
 
               {firstVideo && (
@@ -351,13 +370,14 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
               <InfoBlock title="เป้าหมายการเรียนรู้">{course.learning_objectives}</InfoBlock>
               <InfoBlock title="ประเด็นการเรียนรู้">{course.learning_topics}</InfoBlock>
               <InfoBlock title="กลุ่มเป้าหมาย">{course.target_group}</InfoBlock>
+              {course.location?.trim() && <InfoBlock title="สถานที่จัดอบรม">{course.location}</InfoBlock>}
               <InfoBlock title="เนื้อหาการอบรม">{course.content_summary || course.description}</InfoBlock>
               <InfoBlock title="วิธีการประเมินผล">{course.evaluation_method || `ทำแบบทดสอบหลังเรียนให้ได้ตั้งแต่ ${course.pass_score || 70}% ขึ้นไป`}</InfoBlock>
 
               {hasEnteredTraining && (
                 <>
-                  <QuizPanel quiz={preQuiz} title="แบบทดสอบก่อนเรียน" userId={userData?.user_id} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
-                  <QuizPanel quiz={postQuiz} title="แบบทดสอบหลังเรียน" userId={userData?.user_id} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
+                  <QuizPanel quiz={preQuiz} title="แบบทดสอบก่อนเรียน" userId={userData?.user_id} attemptedScore={enrollment?.pre_score} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
+                  <QuizPanel quiz={postQuiz} title="แบบทดสอบหลังเรียน" userId={userData?.user_id} attemptedScore={enrollment?.post_score} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
                   <EvaluationPanel enrollment={enrollment} questions={evaluationQuestions} onSubmitted={() => loadDetail(userData?.user_id)} />
                 </>
               )}
@@ -382,7 +402,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
               <section className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
                 <h3 className="text-lg font-black text-blue-900">สถานะของคุณ</h3>
                 <p className="mt-2 text-sm font-bold text-blue-700">
-                  {!enrollment ? 'ยังไม่ได้ลงทะเบียน' : enrollment.status === 'completed' ? 'ผ่านหลักสูตรแล้ว' : 'กำลังอบรม'}
+                  {getEnrollmentStatusLabel(enrollment, course.pass_score)}
                 </p>
                 {enrollment?.certificate_code && (
                   <p className="mt-3 rounded-2xl bg-white px-4 py-3 text-xs font-black text-slate-700">เลขใบรับรอง: {enrollment.certificate_code}</p>
@@ -408,7 +428,7 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
   );
 }
 
-function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz; title: string; userId?: number; onSubmitted: () => void; disabled?: boolean }) {
+function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled }: { quiz?: Quiz; title: string; userId?: number; attemptedScore?: number | null; onSubmitted: () => void; disabled?: boolean }) {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [isOpen, setIsOpen] = useState(false);
@@ -419,6 +439,14 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
   const limitSeconds = Math.max(0, Number(quiz?.time_limit_minutes || 0) * 60);
   const isTimed = limitSeconds > 0;
   const isTimeUp = isTimed && isOpen && remainingSeconds <= 0;
+  const hasAttempted = attemptedScore !== undefined && attemptedScore !== null;
+
+  useEffect(() => {
+    if (hasAttempted) {
+      setIsOpen(false);
+      setStartedAt(null);
+    }
+  }, [hasAttempted]);
 
   useEffect(() => {
     if (!isOpen || !startedAt || !isTimed) return;
@@ -435,6 +463,10 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
 
   const loadQuiz = async () => {
     if (!quiz) return;
+    if (hasAttempted) {
+      toast.info(`${title} ทำแล้ว คะแนน ${attemptedScore}%`);
+      return;
+    }
     setIsOpen(true);
     setAnswers({});
     const now = Date.now();
@@ -456,6 +488,10 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
 
   const submitQuiz = async () => {
     if (!quiz || !userId) return;
+    if (hasAttempted) {
+      toast.warning(`${title} ทำได้เพียงครั้งเดียว`);
+      return;
+    }
     const elapsedSeconds = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0;
     const res = await fetch(`${API_BASE}/api/training/quizzes/${quiz.quiz_id}/submit`, {
       method: 'POST',
@@ -475,12 +511,23 @@ function QuizPanel({ quiz, title, userId, onSubmitted, disabled }: { quiz?: Quiz
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-lg font-black text-slate-900">{title}</h3>
-          <p className="text-sm font-semibold text-slate-500">{quiz ? `เกณฑ์ผ่าน ${quiz.pass_score}% · เวลา ${formatQuizLimit(quiz.time_limit_minutes)}` : 'ยังไม่มีแบบทดสอบ'}</p>
+          <p className="text-sm font-semibold text-slate-500">
+            {quiz
+              ? hasAttempted
+                ? `ทำแล้ว · คะแนนที่ได้ ${attemptedScore}%`
+                : `เกณฑ์ผ่าน ${quiz.pass_score}% · เวลา ${formatQuizLimit(quiz.time_limit_minutes)} · ทำได้ 1 ครั้ง`
+              : 'ยังไม่มีแบบทดสอบ'}
+          </p>
         </div>
-        <button disabled={!quiz || disabled} onClick={loadQuiz} className="rounded-2xl bg-slate-900 px-5 py-2.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
-          เปิดแบบทดสอบ
+        <button disabled={!quiz || disabled || hasAttempted} onClick={loadQuiz} className="rounded-2xl bg-slate-900 px-5 py-2.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+          {hasAttempted ? 'ทำแบบทดสอบแล้ว' : 'เปิดแบบทดสอบ'}
         </button>
       </div>
+      {hasAttempted && (
+        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
+          คะแนนที่สอบได้ {attemptedScore}%
+        </div>
+      )}
       {isOpen && (
         <div className="mt-5 space-y-4">
           {quiz && (

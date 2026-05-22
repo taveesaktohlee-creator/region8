@@ -49,6 +49,73 @@ const statusLabels: Record<KnowledgeStatus, string> = {
   archived: 'เก็บถาวร',
 };
 
+async function readJsonResponse(response: Response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: text };
+  }
+}
+
+async function uploadKnowledgeDriveFile(params: {
+  kind: 'cover' | 'pdf';
+  itemTitle: string;
+  fileName: string;
+  mimeType: string;
+  base64: string;
+}) {
+  const endpoint = params.kind === 'cover' ? 'cover-drive' : 'pdf-drive';
+  const uploadLabel = params.kind === 'cover' ? 'รูปปก' : 'PDF';
+  const primaryResponse = await fetch(`${API_BASE}/api/admin/knowledge/${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      item_title: params.itemTitle || 'knowledge-item',
+      file_name: params.fileName,
+      mime_type: params.mimeType,
+      base64: params.base64,
+    }),
+  });
+  const primaryData = await readJsonResponse(primaryResponse);
+  const primaryUpload = primaryResponse.ok && primaryData?.ok !== false
+    ? resolveDriveUploadResult(primaryData)
+    : { fileId: '', url: '' };
+
+  if (primaryUpload.url) return primaryUpload;
+
+  const fallbackResponse = await fetch('/drive-upload-proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      row: {
+        action: 'uploadAvatar',
+        userId: `knowledge-${params.kind}`,
+        displayName: params.itemTitle || 'knowledge-item',
+        fileName: `${Date.now()}-knowledge-${params.kind}-${params.fileName}`,
+        mimeType: params.mimeType || (params.kind === 'pdf' ? 'application/pdf' : 'application/octet-stream'),
+        base64: params.base64,
+      },
+    }),
+  });
+  const fallbackData = await readJsonResponse(fallbackResponse);
+  if (!fallbackResponse.ok || fallbackData?.ok === false) {
+    throw new Error(
+      fallbackData?.error ||
+      primaryData?.error ||
+      `อัปโหลด${uploadLabel}ไป Google Drive ไม่สำเร็จ`,
+    );
+  }
+
+  const fallbackUpload = resolveDriveUploadResult(fallbackData);
+  if (!fallbackUpload.url) {
+    throw new Error(`Google Drive ไม่ส่ง URL ${uploadLabel} กลับมา`);
+  }
+
+  return fallbackUpload;
+}
+
 export default function KnowledgeAdmin() {
   const [userData, setUserData] = useState<any>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -150,19 +217,13 @@ export default function KnowledgeAdmin() {
       setIsUploadingCover(true);
       const optimized = await optimizeKnowledgeCover(file);
       setCoverPreviewUrl(optimized.previewUrl);
-      const res = await fetch(`${API_BASE}/api/admin/knowledge/cover-drive`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          item_title: form.title || 'knowledge-item',
-          file_name: optimized.fileName,
-          mime_type: optimized.mimeType,
-          base64: optimized.base64,
-        }),
+      const upload = await uploadKnowledgeDriveFile({
+        kind: 'cover',
+        itemTitle: form.title || 'knowledge-item',
+        fileName: optimized.fileName,
+        mimeType: optimized.mimeType,
+        base64: optimized.base64,
       });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) throw new Error(data.error || 'อัปโหลดรูปปกไม่สำเร็จ');
-      const upload = resolveDriveUploadResult(data);
       const coverUrl = upload.url;
       if (!coverUrl) throw new Error('Google Drive ไม่ส่ง URL รูปปกกลับมา');
       setForm((current) => ({
@@ -192,19 +253,13 @@ export default function KnowledgeAdmin() {
     try {
       setIsUploadingPdf(true);
       const dataUrl = await readBlobAsDataUrl(file);
-      const res = await fetch(`${API_BASE}/api/admin/knowledge/pdf-drive`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          item_title: form.title || 'knowledge-item',
-          file_name: file.name,
-          mime_type: file.type || 'application/pdf',
-          base64: dataUrlToBase64(dataUrl),
-        }),
+      const upload = await uploadKnowledgeDriveFile({
+        kind: 'pdf',
+        itemTitle: form.title || 'knowledge-item',
+        fileName: file.name,
+        mimeType: file.type || 'application/pdf',
+        base64: dataUrlToBase64(dataUrl),
       });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) throw new Error(data.error || 'อัปโหลด PDF ไม่สำเร็จ');
-      const upload = resolveDriveUploadResult(data);
       const pdfUrl = upload.url;
       if (!pdfUrl) throw new Error('Google Drive ไม่ส่ง URL PDF กลับมา');
       setForm((current) => ({
