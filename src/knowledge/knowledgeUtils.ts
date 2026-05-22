@@ -117,6 +117,7 @@ export function formatDuration(seconds?: number) {
   const safe = Math.max(0, Number(seconds || 0));
   const hours = Math.floor(safe / 3600);
   const minutes = Math.floor((safe % 3600) / 60);
+  if (safe > 0 && hours === 0 && minutes === 0) return 'น้อยกว่า 1 นาที';
   if (hours > 0) return `${hours} ชม. ${minutes} นาที`;
   return `${minutes} นาที`;
 }

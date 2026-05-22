@@ -8,6 +8,9 @@ import { API_BASE } from '../lib/apiConfig';
 import { closeSession, getSessionId, stopHeartbeat } from '../lib/activityTracker';
 import { formatDuration, formatThaiDate, getKnowledgeAssetUrl, getKnowledgePdfOpenUrl, getKnowledgePdfPreviewUrl, type KnowledgeItem } from './knowledgeUtils';
 
+const READING_FLUSH_INTERVAL_MS = 15_000;
+const MAX_READING_CHUNK_SECONDS = 60;
+
 function getStoredUser() {
   try {
     const savedUser = localStorage.getItem('user');
@@ -30,6 +33,7 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
   const viewerVisibleRef = useRef(false);
   const startedRef = useRef(false);
   const userIdRef = useRef<number | null>(null);
+  const isPageFocusedRef = useRef(false);
 
   const loadItem = useCallback(async () => {
     setIsLoading(true);
@@ -69,7 +73,12 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
   }, [item]);
 
   const shouldTrackReading = useCallback(() => {
-    return document.visibilityState === 'visible' && document.hasFocus() && viewerVisibleRef.current;
+    return (
+      document.visibilityState === 'visible' &&
+      document.hasFocus() &&
+      isPageFocusedRef.current &&
+      viewerVisibleRef.current
+    );
   }, []);
 
   const sendReadingTime = useCallback((seconds: number, useBeacon = false) => {
@@ -95,7 +104,10 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
 
   const pauseTracking = useCallback((useBeacon = false) => {
     if (!activeStartRef.current) return;
-    const elapsed = Math.floor((Date.now() - activeStartRef.current) / 1000);
+    const elapsed = Math.min(
+      Math.floor((Date.now() - activeStartRef.current) / 1000),
+      MAX_READING_CHUNK_SECONDS,
+    );
     activeStartRef.current = null;
     if (elapsed > 0) sendReadingTime(elapsed, useBeacon);
   }, [sendReadingTime]);
@@ -135,25 +147,41 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
     const viewer = viewerRef.current;
     if (!viewer) return;
 
+    const updateFocusState = () => {
+      isPageFocusedRef.current = document.visibilityState === 'visible' && document.hasFocus();
+      syncTracking();
+    };
+
     const observer = new IntersectionObserver((entries) => {
       viewerVisibleRef.current = (entries[0]?.intersectionRatio || 0) >= 0.5;
       syncTracking();
     }, { threshold: [0, 0.25, 0.5, 0.75, 1] });
     observer.observe(viewer);
 
-    const handleVisibility = () => syncTracking();
-    const handleFocus = () => syncTracking();
-    const handleBlur = () => syncTracking();
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible') {
+        isPageFocusedRef.current = false;
+        pauseTracking(true);
+        return;
+      }
+      updateFocusState();
+    };
+    const handleFocus = () => updateFocusState();
+    const handleBlur = () => window.setTimeout(updateFocusState, 100);
     const handlePageHide = () => pauseTracking(true);
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', handleFocus);
     window.addEventListener('blur', handleBlur);
     window.addEventListener('beforeunload', handlePageHide);
     window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('freeze', handlePageHide);
 
     const timer = window.setInterval(() => {
       if (shouldTrackReading() && activeStartRef.current) {
-        const elapsed = Math.floor((Date.now() - activeStartRef.current) / 1000);
+        const elapsed = Math.min(
+          Math.floor((Date.now() - activeStartRef.current) / 1000),
+          MAX_READING_CHUNK_SECONDS,
+        );
         if (elapsed > 0) {
           activeStartRef.current = Date.now();
           sendReadingTime(elapsed);
@@ -161,9 +189,9 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
       } else {
         pauseTracking();
       }
-    }, 15_000);
+    }, READING_FLUSH_INTERVAL_MS);
 
-    syncTracking();
+    updateFocusState();
 
     return () => {
       observer.disconnect();
@@ -172,9 +200,11 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
       window.removeEventListener('blur', handleBlur);
       window.removeEventListener('beforeunload', handlePageHide);
       window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('freeze', handlePageHide);
       window.clearInterval(timer);
       pauseTracking(true);
       viewerVisibleRef.current = false;
+      isPageFocusedRef.current = false;
     };
   }, [pauseTracking, pdfPreviewUrl, readLogId, sendReadingTime, shouldTrackReading, syncTracking]);
 

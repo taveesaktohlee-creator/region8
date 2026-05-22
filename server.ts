@@ -1398,7 +1398,7 @@ app.post('/api/knowledge/read-logs/:logId/time', async (req, res) => {
     await ensureKnowledgeTables();
     const logId = toInt(req.params.logId);
     const userId = toInt(req.body.user_id);
-    const seconds = Math.max(0, Math.min(toInt(req.body.seconds), 3600));
+    const seconds = Math.max(0, Math.min(toInt(req.body.seconds), 60));
     if (!logId || seconds <= 0) return res.json({ message: 'ไม่มีเวลาที่ต้องบันทึก' });
 
     const params = userId
