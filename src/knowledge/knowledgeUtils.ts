@@ -58,15 +58,44 @@ export function getDriveFileProxyUrl(fileId: string) {
   return `${API_BASE}/api/google-drive/files/${encodeURIComponent(fileId)}`;
 }
 
+export function getDriveThumbnailUrl(fileId: string) {
+  return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w1000`;
+}
+
+export function getDrivePreviewUrl(fileId: string) {
+  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`;
+}
+
+export function getDriveWebViewUrl(fileId: string) {
+  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`;
+}
+
 export function getKnowledgeAssetUrl(value?: string | null) {
   const raw = String(value || '').trim();
   if (!raw) return '';
 
-  if (raw.startsWith('/api/google-drive/files/')) return `${API_BASE}${raw}`;
-  if (/drive\.google\.com/i.test(raw)) {
-    const fileId = getDriveFileIdFromUrl(raw);
-    return fileId ? getDriveFileProxyUrl(fileId) : raw;
-  }
+  const fileId = getDriveFileIdFromUrl(raw);
+  if (fileId) return getDriveThumbnailUrl(fileId);
+
+  return raw;
+}
+
+export function getKnowledgePdfPreviewUrl(value?: string | null) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const fileId = getDriveFileIdFromUrl(raw);
+  if (fileId) return getDrivePreviewUrl(fileId);
+
+  return raw;
+}
+
+export function getKnowledgePdfOpenUrl(value?: string | null) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const fileId = getDriveFileIdFromUrl(raw);
+  if (fileId) return getDriveWebViewUrl(fileId);
 
   return raw;
 }
@@ -117,8 +146,7 @@ export function resolveDriveUploadResult(data: any) {
     data?.thumbnailUrl ||
     '',
   );
-  const proxyPath = data?.fileProxyPath || (fileId ? `/api/google-drive/files/${encodeURIComponent(fileId)}` : '');
-  const url = proxyPath || data?.webViewLink || data?.web_view_link || data?.url || data?.thumbnailUrl || '';
+  const url = data?.webViewLink || data?.web_view_link || data?.url || data?.thumbnailUrl || data?.fileProxyPath || (fileId ? getDriveWebViewUrl(fileId) : '');
 
   return { fileId, url };
 }

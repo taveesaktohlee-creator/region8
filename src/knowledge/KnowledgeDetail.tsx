@@ -6,7 +6,7 @@ import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
 import { closeSession, getSessionId, stopHeartbeat } from '../lib/activityTracker';
-import { formatDuration, formatThaiDate, getDriveFileProxyUrl, getKnowledgeAssetUrl, type KnowledgeItem } from './knowledgeUtils';
+import { formatDuration, formatThaiDate, getKnowledgeAssetUrl, getKnowledgePdfOpenUrl, getKnowledgePdfPreviewUrl, type KnowledgeItem } from './knowledgeUtils';
 
 function getStoredUser() {
   try {
@@ -58,11 +58,14 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
     return () => window.removeEventListener('resize', handleResize);
   }, [loadItem]);
 
-  const pdfUrl = useMemo(() => {
+  const pdfPreviewUrl = useMemo(() => {
     if (!item) return '';
-    if (item.pdf_proxy_url) return getKnowledgeAssetUrl(item.pdf_proxy_url);
-    if (item.pdf_file_id) return getDriveFileProxyUrl(item.pdf_file_id);
-    return getKnowledgeAssetUrl(item.pdf_url);
+    return getKnowledgePdfPreviewUrl(item.pdf_file_id || item.pdf_url || item.pdf_proxy_url);
+  }, [item]);
+
+  const pdfOpenUrl = useMemo(() => {
+    if (!item) return '';
+    return getKnowledgePdfOpenUrl(item.pdf_file_id || item.pdf_url || item.pdf_proxy_url);
   }, [item]);
 
   const shouldTrackReading = useCallback(() => {
@@ -128,7 +131,7 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
   }, [item, itemId, userData?.user_id]);
 
   useEffect(() => {
-    if (!readLogId || !pdfUrl) return;
+    if (!readLogId || !pdfPreviewUrl) return;
     const viewer = viewerRef.current;
     if (!viewer) return;
 
@@ -173,7 +176,7 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
       pauseTracking(true);
       viewerVisibleRef.current = false;
     };
-  }, [pauseTracking, pdfUrl, readLogId, sendReadingTime, shouldTrackReading, syncTracking]);
+  }, [pauseTracking, pdfPreviewUrl, readLogId, sendReadingTime, shouldTrackReading, syncTracking]);
 
   const handleLogout = async () => {
     pauseTracking(true);
@@ -253,16 +256,16 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
               <h2 className="flex items-center gap-2 text-lg font-black text-slate-900">
                 <FileText className="text-blue-600" /> เอกสาร PDF
               </h2>
-              {pdfUrl && (
-                <a href={pdfUrl} target="_blank" rel="noreferrer" className="text-sm font-black text-blue-600 hover:underline">
+              {pdfOpenUrl && (
+                <a href={pdfOpenUrl} target="_blank" rel="noreferrer" className="text-sm font-black text-blue-600 hover:underline">
                   เปิดเอกสารเต็มหน้าจอ
                 </a>
               )}
             </div>
-            {pdfUrl ? (
+            {pdfPreviewUrl ? (
               <iframe
                 title={item.title}
-                src={pdfUrl}
+                src={pdfPreviewUrl}
                 className="h-[78vh] min-h-[620px] w-full bg-slate-100"
               />
             ) : (
