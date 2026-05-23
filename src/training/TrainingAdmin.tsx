@@ -113,6 +113,8 @@ const defaultQuizSettings = {
   post: { hours: 0, minutes: 30, pass_score: 70 },
 };
 
+const REPORT_PAGE_SIZE = 10;
+
 const emptyCourse: Course = {
   title: '',
   category: '',
@@ -1010,14 +1012,75 @@ function ReportSection({ report, onRefresh, onConfirmAttendance }: {
   onRefresh: () => void;
   onConfirmAttendance: (enrollmentId: number, confirmed: boolean) => void;
 }) {
+  const [selectedDivision, setSelectedDivision] = useState('ทั้งหมด');
+  const [reportSearch, setReportSearch] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const divisionOptions = useMemo(() => {
+    const divisions = Array.from(
+      new Set(report.map((row) => String(row.Division_Province || '').trim()).filter(Boolean)),
+    );
+    return ['ทั้งหมด', ...divisions.sort((a, b) => a.localeCompare(b, 'th'))];
+  }, [report]);
+  const filteredReport = useMemo(() => {
+    const needle = reportSearch.trim().toLowerCase();
+    return report.filter((row) => {
+      const matchesDivision = selectedDivision === 'ทั้งหมด' || String(row.Division_Province || '').trim() === selectedDivision;
+      if (!matchesDivision) return false;
+      if (!needle) return true;
+      return [
+        row.Name_Surname,
+        row.position,
+        row.Division_Province,
+        row.Department,
+        row.title,
+        row.category,
+        courseTypeLabels[row.course_type as Course['course_type']] || row.course_type,
+        enrollmentStatusMeta(row.status).label,
+        passResultMeta(row.post_score, row.pass_score).label,
+      ].some((value) => String(value || '').toLowerCase().includes(needle));
+    });
+  }, [report, reportSearch, selectedDivision]);
+  const totalPages = Math.max(1, Math.ceil(filteredReport.length / REPORT_PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const pageStart = (safePage - 1) * REPORT_PAGE_SIZE;
+  const paginatedReport = filteredReport.slice(pageStart, pageStart + REPORT_PAGE_SIZE);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedDivision, reportSearch, report]);
+
   return (
     <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="text-blue-600" /> รายงานผู้ลงทะเบียน</h2>
           <p className="text-sm font-semibold text-slate-500">รายชื่อผู้ลงทะเบียน เวลาเข้าอบรม คะแนนก่อน/หลัง และสถานะยืนยัน</p>
         </div>
-        <button onClick={onRefresh} className="rounded-xl bg-slate-100 p-2 text-slate-600"><RefreshCw size={16} /></button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <label className="text-xs font-black text-slate-500" htmlFor="training-report-division">หน่วยงาน</label>
+          <select
+            id="training-report-division"
+            value={selectedDivision}
+            onChange={(event) => setSelectedDivision(event.target.value)}
+            className="min-w-[260px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+          >
+            {divisionOptions.map((division) => (
+              <option key={division} value={division}>{division}</option>
+            ))}
+          </select>
+          <label className="sr-only" htmlFor="training-report-search">ค้นหารายงานผู้ลงทะเบียน</label>
+          <div className="relative min-w-[260px]">
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <input
+              id="training-report-search"
+              value={reportSearch}
+              onChange={(event) => setReportSearch(event.target.value)}
+              placeholder="ค้นหาผู้ลงทะเบียน หลักสูตร หรือสถานะ..."
+              className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            />
+          </div>
+          <button onClick={onRefresh} className="rounded-xl bg-slate-100 p-3 text-slate-600"><RefreshCw size={16} /></button>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">
@@ -1033,11 +1096,11 @@ function ReportSection({ report, onRefresh, onConfirmAttendance }: {
             </tr>
           </thead>
           <tbody>
-            {report.length === 0 ? (
+            {filteredReport.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center font-bold text-slate-400">ยังไม่มีข้อมูลผู้ลงทะเบียน</td>
+                <td colSpan={7} className="px-4 py-12 text-center font-bold text-slate-400">ยังไม่มีข้อมูลผู้ลงทะเบียนในหน่วยงานนี้</td>
               </tr>
-            ) : report.map((row) => {
+            ) : paginatedReport.map((row) => {
               const status = enrollmentStatusMeta(row.status);
               const result = passResultMeta(row.post_score, row.pass_score);
               return (
@@ -1064,7 +1127,61 @@ function ReportSection({ report, onRefresh, onConfirmAttendance }: {
           </tbody>
         </table>
       </div>
+      <ReportPagination
+        currentPage={safePage}
+        totalPages={totalPages}
+        totalItems={filteredReport.length}
+        pageStart={pageStart}
+        pageCount={paginatedReport.length}
+        onPageChange={setCurrentPage}
+      />
     </section>
+  );
+}
+
+function ReportPagination({
+  currentPage,
+  totalPages,
+  totalItems,
+  pageStart,
+  pageCount,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+  pageStart: number;
+  pageCount: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (totalItems === 0) return null;
+  const from = pageStart + 1;
+  const to = pageStart + pageCount;
+  return (
+    <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 text-sm font-bold text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+      <span>แสดง {from.toLocaleString('th-TH')}-{to.toLocaleString('th-TH')} จาก {totalItems.toLocaleString('th-TH')} รายการ</span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+          disabled={currentPage <= 1}
+          className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          ก่อนหน้า
+        </button>
+        <span className="rounded-xl bg-slate-100 px-4 py-2 font-black text-slate-700">
+          {currentPage.toLocaleString('th-TH')} / {totalPages.toLocaleString('th-TH')}
+        </span>
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+          disabled={currentPage >= totalPages}
+          className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          ถัดไป
+        </button>
+      </div>
+    </div>
   );
 }
 

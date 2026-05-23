@@ -109,6 +109,7 @@ const MENU_MAP: Record<string, { menu_key: string; menu_name: string }> = {
   '/program-monitoring':     { menu_key: 'report_monitor', menu_name: 'รายงานการกำกับติดตาม' },
   '/training-courses':       { menu_key: 'report_course', menu_name: 'หลักสูตรการอบรม' },
   '/knowledge':              { menu_key: 'knowledge', menu_name: 'คลังความรู้' },
+  '/activity-calendar':      { menu_key: 'activity_calendar', menu_name: 'ตารางกิจกรรม' },
   '/system-usage-report':    { menu_key: 'report_usage', menu_name: 'รายงานการใช้งานระบบ' },
   '/office-security-report': { menu_key: 'report_security', menu_name: 'รายงานความปลอดภัย' },
 };

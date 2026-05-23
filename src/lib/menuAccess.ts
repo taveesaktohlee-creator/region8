@@ -32,6 +32,7 @@ const LEGACY_MENU_ITEMS: UserMenuItem[] = [
   { menu_id: 12, menu_key: 'report_usage', menu_name: 'รายงานการใช้งานระบบ', menu_type: 'content', menu_icon: 'Users', menu_href: '/system-usage-report', sort_order: 12, is_active: 1 },
   { menu_id: 13, menu_key: 'report_security', menu_name: 'รายงานการรักษาความปลอดภัย', menu_type: 'content', menu_icon: 'ShieldCheck', menu_href: '/office-security-report', sort_order: 13, is_active: 1 },
   { menu_id: 14, menu_key: 'knowledge', menu_name: 'คลังความรู้', menu_type: 'content', menu_icon: 'LibraryBig', menu_href: '/knowledge', sort_order: 14, is_active: 1 },
+  { menu_id: 15, menu_key: 'activity_calendar', menu_name: 'ตารางกิจกรรม', menu_type: 'content', menu_icon: 'CalendarDays', menu_href: '/activity-calendar', sort_order: 15, is_active: 1 },
 ];
 
 interface MenuCache {

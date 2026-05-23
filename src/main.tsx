@@ -14,6 +14,7 @@ import TrainingAdmin from './training/TrainingAdmin'
 import KnowledgeList from './knowledge/KnowledgeList'
 import KnowledgeDetail from './knowledge/KnowledgeDetail'
 import KnowledgeAdmin from './knowledge/KnowledgeAdmin'
+import ActivityCalendar from './activity/ActivityCalendar'
 import ProgramMonitoring from './monitor/ProgramMonitoring'
 import MonitorData from './user/monitor_data'
 import SystemUsageReport from './user/SystemUsageReport'
@@ -57,6 +58,7 @@ const PROTECTED_ROUTES: Record<string, { component: React.ReactNode; menuKey: st
   '/training-history':     { component: <TrainingHistory />,      menuKey: 'training' },
   '/training-courses':     { component: <TrainingCourses />,      menuKey: 'report_course' },
   '/knowledge':            { component: <KnowledgeList />,        menuKey: 'knowledge' },
+  '/activity-calendar':    { component: <ActivityCalendar />,     menuKey: 'activity_calendar' },
   '/program-monitoring':   { component: <ProgramMonitoring />,    menuKey: 'report_monitor' },
   '/system-usage-report':  { component: <SystemUsageReport />,    menuKey: 'report_usage' },
   '/office-security-report': { component: <OfficeSecurityReport />, menuKey: 'report_security' },

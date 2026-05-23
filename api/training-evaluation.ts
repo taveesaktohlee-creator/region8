@@ -246,8 +246,15 @@ async function submitEvaluation(enrollmentId: number, answers: Record<string, un
     'INSERT INTO training_evaluation_answers (response_id, question_id, answer_value) VALUES ?',
     [normalizedAnswers.map(([questionId, answerValue]) => [responseId, questionId, answerValue])],
   );
-  await pool.query('UPDATE training_enrollments SET evaluated = 1 WHERE enrollment_id = ?', [enrollmentId]);
-  return { status: 200, payload: { message: 'บันทึกแบบประเมินหลักสูตรเรียบร้อยแล้ว' } };
+  await pool.query(
+    `UPDATE training_enrollments
+     SET evaluated = 1,
+         status = 'completed',
+         completed_at = COALESCE(completed_at, NOW())
+     WHERE enrollment_id = ?`,
+    [enrollmentId],
+  );
+  return { status: 200, payload: { message: 'บันทึกแบบประเมินหลักสูตรเรียบร้อยแล้ว', status: 'completed', evaluated: 1 } };
 }
 
 export default async function handler(req: any, res: any) {

@@ -30,8 +30,8 @@ type Course = {
 type Enrollment = {
   enrollment_id: number;
   status: string;
-  pre_score?: number | null;
-  post_score?: number | null;
+  pre_score?: number | string | null;
+  post_score?: number | string | null;
   attended_seconds?: number;
   attendance_confirmed?: number;
   evaluated?: number;
@@ -39,6 +39,7 @@ type Enrollment = {
 };
 
 type Quiz = { quiz_id: number; quiz_type: 'pre' | 'post'; title: string; pass_score: number; time_limit_minutes?: number };
+type QuizSubmitResult = { quizType: Quiz['quiz_type']; score: number; passed?: boolean };
 type Question = { question_id: number; question_text: string; choices: { choice_id: number; choice_text: string }[] };
 type EvaluationQuestion = {
   question_id: number;
@@ -85,8 +86,19 @@ function formatQuizLimit(minutes?: number) {
   return `${hours} ชม. ${mins} นาที`;
 }
 
-function getPassResult(postScore?: number | null, passScore?: number) {
-  if (postScore === null || postScore === undefined) return null;
+function hasScore(score: unknown) {
+  return score !== null && score !== undefined && String(score).trim() !== '';
+}
+
+function formatScore(score?: number | string | null) {
+  if (!hasScore(score)) return '-';
+  const value = Number(score);
+  if (!Number.isFinite(value)) return '-';
+  return `${value.toFixed(2)}%`;
+}
+
+function getPassResult(postScore?: number | string | null, passScore?: number) {
+  if (!hasScore(postScore)) return null;
   return Number(postScore) >= Number(passScore || 70) ? 'ผ่าน' : 'ไม่ผ่าน';
 }
 
@@ -227,6 +239,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
   const preQuiz = useMemo(() => quizzes.find((quiz) => quiz.quiz_type === 'pre'), [quizzes]);
   const postQuiz = useMemo(() => quizzes.find((quiz) => quiz.quiz_type === 'post'), [quizzes]);
   const firstVideo = lessons.find((lesson) => lesson.embed_url);
+  const hasPostQuizResult = hasScore(enrollment?.post_score);
   const hasEnteredTraining = Boolean(
     enrollment
     && (
@@ -278,6 +291,26 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
     await loadDetail(userData?.user_id);
     toast.info('หยุดนับเวลาเข้าอบรมแล้ว');
   };
+
+  const handleQuizSubmitted = useCallback(async (result?: QuizSubmitResult) => {
+    if (result) {
+      setEnrollment((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          status: result.quizType === 'post' ? 'completed' : current.status,
+          pre_score: result.quizType === 'pre' ? result.score : current.pre_score,
+          post_score: result.quizType === 'post' ? result.score : current.post_score,
+        };
+      });
+    }
+    await loadDetail(userData?.user_id);
+  }, [loadDetail, userData?.user_id]);
+
+  const handleEvaluationSubmitted = useCallback(async () => {
+    setEnrollment((current) => current ? { ...current, status: 'completed', evaluated: 1 } : current);
+    await loadDetail(userData?.user_id);
+  }, [loadDetail, userData?.user_id]);
 
   if (isLoading || !course) {
     return (
@@ -352,8 +385,8 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
               <div className="grid gap-3 sm:grid-cols-4">
                 <Stat icon={<Clock />} label="เวลาเรียน" value={formatMinutes(course.duration_minutes)} />
                 <Stat icon={<CalendarCheck />} label="เวลาที่เข้าอบรม" value={formatSeconds(enrollment?.attended_seconds)} />
-                <Stat icon={<Award />} label="คะแนนก่อนเรียน" value={enrollment?.pre_score != null ? `${enrollment.pre_score}%` : '-'} />
-                <Stat icon={<CheckCircle2 />} label="คะแนนหลังเรียน" value={enrollment?.post_score != null ? `${enrollment.post_score}% ${getPassResult(enrollment.post_score, course.pass_score)}` : '-'} />
+                <Stat icon={<Award />} label="คะแนนก่อนเรียน" value={formatScore(enrollment?.pre_score)} />
+                <Stat icon={<CheckCircle2 />} label="คะแนนหลังเรียน" value={hasPostQuizResult ? `${formatScore(enrollment?.post_score)} ${getPassResult(enrollment?.post_score, course.pass_score)}` : '-'} />
               </div>
 
               {firstVideo && (
@@ -376,9 +409,11 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
 
               {hasEnteredTraining && (
                 <>
-                  <QuizPanel quiz={preQuiz} title="แบบทดสอบก่อนเรียน" userId={userData?.user_id} attemptedScore={enrollment?.pre_score} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
-                  <QuizPanel quiz={postQuiz} title="แบบทดสอบหลังเรียน" userId={userData?.user_id} attemptedScore={enrollment?.post_score} onSubmitted={() => loadDetail(userData?.user_id)} disabled={!enrollment} />
-                  <EvaluationPanel enrollment={enrollment} questions={evaluationQuestions} onSubmitted={() => loadDetail(userData?.user_id)} />
+                  <QuizPanel quiz={preQuiz} title="แบบทดสอบก่อนเรียน" userId={userData?.user_id} attemptedScore={enrollment?.pre_score} onSubmitted={handleQuizSubmitted} disabled={!enrollment} />
+                  <QuizPanel quiz={postQuiz} title="แบบทดสอบหลังเรียน" userId={userData?.user_id} attemptedScore={enrollment?.post_score} onSubmitted={handleQuizSubmitted} disabled={!enrollment} />
+                  {hasPostQuizResult && enrollment?.status === 'completed' && (
+                    <EvaluationPanel enrollment={enrollment} questions={evaluationQuestions} onSubmitted={handleEvaluationSubmitted} />
+                  )}
                 </>
               )}
             </div>
@@ -428,7 +463,7 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
   );
 }
 
-function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled }: { quiz?: Quiz; title: string; userId?: number; attemptedScore?: number | null; onSubmitted: () => void; disabled?: boolean }) {
+function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled }: { quiz?: Quiz; title: string; userId?: number; attemptedScore?: number | string | null; onSubmitted: (result?: QuizSubmitResult) => void | Promise<void>; disabled?: boolean }) {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [isOpen, setIsOpen] = useState(false);
@@ -439,7 +474,7 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
   const limitSeconds = Math.max(0, Number(quiz?.time_limit_minutes || 0) * 60);
   const isTimed = limitSeconds > 0;
   const isTimeUp = isTimed && isOpen && remainingSeconds <= 0;
-  const hasAttempted = attemptedScore !== undefined && attemptedScore !== null;
+  const hasAttempted = hasScore(attemptedScore);
 
   useEffect(() => {
     if (hasAttempted) {
@@ -464,7 +499,7 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
   const loadQuiz = async () => {
     if (!quiz) return;
     if (hasAttempted) {
-      toast.info(`${title} ทำแล้ว คะแนน ${attemptedScore}%`);
+      toast.info(`${title} ทำแล้ว คะแนน ${formatScore(attemptedScore)}`);
       return;
     }
     setIsOpen(true);
@@ -500,10 +535,11 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
     });
     const data = await res.json();
     if (!res.ok) return toast.error(data.error || 'ส่งแบบทดสอบไม่สำเร็จ');
-    toast.success(`${data.message} คะแนน ${data.score}%`);
+    const score = Number(data.score);
+    toast.success(`${data.message} คะแนน ${formatScore(score)}`);
     setIsOpen(false);
     setStartedAt(null);
-    onSubmitted();
+    await Promise.resolve(onSubmitted({ quizType: quiz.quiz_type, score, passed: Boolean(data.passed) }));
   };
 
   return (
@@ -514,7 +550,7 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
           <p className="text-sm font-semibold text-slate-500">
             {quiz
               ? hasAttempted
-                ? `ทำแล้ว · คะแนนที่ได้ ${attemptedScore}%`
+                ? `ทำแล้ว · คะแนนที่ได้ ${formatScore(attemptedScore)}`
                 : `เกณฑ์ผ่าน ${quiz.pass_score}% · เวลา ${formatQuizLimit(quiz.time_limit_minutes)} · ทำได้ 1 ครั้ง`
               : 'ยังไม่มีแบบทดสอบ'}
           </p>
@@ -525,7 +561,7 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
       </div>
       {hasAttempted && (
         <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
-          คะแนนที่สอบได้ {attemptedScore}%
+          คะแนนที่สอบได้ {formatScore(attemptedScore)}
         </div>
       )}
       {isOpen && (
@@ -569,7 +605,7 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
   );
 }
 
-function EvaluationPanel({ enrollment, questions, onSubmitted }: { enrollment: Enrollment | null; questions: EvaluationQuestion[]; onSubmitted: () => void }) {
+function EvaluationPanel({ enrollment, questions, onSubmitted }: { enrollment: Enrollment | null; questions: EvaluationQuestion[]; onSubmitted: () => void | Promise<void> }) {
   const [answers, setAnswers] = useState<Record<string, string | number | number[]>>({});
 
   useEffect(() => {
@@ -596,7 +632,7 @@ function EvaluationPanel({ enrollment, questions, onSubmitted }: { enrollment: E
     });
     if (!response.ok) return toast.error(data.error || 'บันทึกแบบประเมินไม่สำเร็จ');
     toast.success(data.message);
-    onSubmitted();
+    await Promise.resolve(onSubmitted());
   };
 
   return (

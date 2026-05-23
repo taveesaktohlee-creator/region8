@@ -159,7 +159,7 @@ const buildProgramMonitoringPdf = (row: ProcessedData, evaluationKeys: string[],
             {
                 text: [
                     'ตำแหน่ง ',
-                    { text: '..................................................', decoration: 'underline', decorationStyle: 'dotted', decorationColor: '#777777' },
+                    { text: '..................................................', color: '#111111' },
                 ],
                 alignment: 'left',
                 margin: [0, 8, 0, 0],

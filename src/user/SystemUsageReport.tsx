@@ -12,6 +12,7 @@ interface Summary { totalRegistered: number; totalLogins: number; totalGovOffice
 interface UserRow { user_id: number; Name_Surname: string; username: string; position: string; type: string; Division_Province: string; is_online: number; last_seen_at: string | null; last_login: string | null; total_logins: number; total_active_seconds: number; registration_date: string | null; }
 interface HistoryRow { date: string; menu_key: string; menu_name: string; total_seconds: number; visit_count: number; first_visit: string; last_visit: string; }
 
+const USER_REPORT_PAGE_SIZE = 10;
 
 function fmtTime(sec: number) {
   const s = Number(sec) || 0;
@@ -68,7 +69,6 @@ export default function SystemUsageReport() {
   const [search, setSearch] = useState('');
   const [selectedDivision, setSelectedDivision] = useState('all');
   const [page, setPage] = useState(1);
-  const perPage = 10;
   const [modalUser, setModalUser] = useState<UserRow | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [histLoading, setHistLoading] = useState(false);
@@ -194,9 +194,14 @@ export default function SystemUsageReport() {
 
   const reportSummary = selectedDivision === 'all' ? summary : filteredSummary;
   const filtered = divisionFilteredUsers.filter(u => (u.Name_Surname || '').includes(search) || (u.username || '').includes(search) || (u.Division_Province || '').includes(search) || (u.position || '').includes(search));
-  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
-  const paged = filtered.slice((page - 1) * perPage, page * perPage);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / USER_REPORT_PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageStart = (safePage - 1) * USER_REPORT_PAGE_SIZE;
+  const paged = filtered.slice(pageStart, pageStart + USER_REPORT_PAGE_SIZE);
 
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
 
 
   // Compute per-menu summary across entire selected period
@@ -399,7 +404,7 @@ export default function SystemUsageReport() {
                 <tbody className="divide-y divide-slate-100">
                   {paged.map((u, i) => (
                     <tr key={u.user_id} className="hover:bg-blue-50/30 transition-colors">
-                      <td className="px-4 py-3 text-slate-400">{(page-1)*perPage+i+1}</td>
+                      <td className="px-4 py-3 text-slate-400">{pageStart+i+1}</td>
                       <td className="px-4 py-3 font-medium text-slate-800">{u.Name_Surname||'-'}</td>
                       <td className="px-4 py-3 text-slate-600 text-xs">{u.position||'-'}</td>
                       <td className="px-4 py-3"><span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${u.type==='ข้าราชการ'?'bg-orange-100 text-orange-700':'bg-purple-100 text-purple-700'}`}>{u.type||'-'}</span></td>
@@ -437,12 +442,29 @@ export default function SystemUsageReport() {
               {paged.length===0&&<div className="p-8 text-center text-slate-400 text-sm">ไม่พบข้อมูล</div>}
             </div>
 
-            {totalPages>1&&(
-              <div className="p-4 border-t border-slate-100 flex items-center justify-between">
-                <span className="text-xs text-slate-400">หน้า {page}/{totalPages}</span>
+            {filtered.length > 0 && (
+              <div className="flex flex-col gap-3 border-t border-slate-100 p-4 text-sm font-bold text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                <span>
+                  แสดง {(pageStart + 1).toLocaleString('th-TH')}-{(pageStart + paged.length).toLocaleString('th-TH')} จาก {filtered.length.toLocaleString('th-TH')} รายการ
+                </span>
                 <div className="flex items-center gap-2">
-                  <button disabled={page<=1} onClick={()=>setPage(p=>p-1)} className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-30"><ChevronLeft size={16}/></button>
-                  <button disabled={page>=totalPages} onClick={()=>setPage(p=>p+1)} className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-30"><ChevronRight size={16}/></button>
+                  <button
+                    disabled={safePage <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 px-4 py-2 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <ChevronLeft size={16} /> ก่อนหน้า
+                  </button>
+                  <span className="rounded-xl bg-slate-100 px-4 py-2 text-slate-700">
+                    {safePage.toLocaleString('th-TH')} / {totalPages.toLocaleString('th-TH')}
+                  </span>
+                  <button
+                    disabled={safePage >= totalPages}
+                    onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 px-4 py-2 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    ถัดไป <ChevronRight size={16} />
+                  </button>
                 </div>
               </div>
             )}
