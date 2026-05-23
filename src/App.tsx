@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Button, Link } from '@heroui/react';
-import { User, Lock, ArrowRight, Landmark } from 'lucide-react';
+import { Button } from '@heroui/react';
+import { User, Lock, ArrowRight, Landmark, Mail, Send, X } from 'lucide-react';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { API_BASE } from './lib/apiConfig';
@@ -11,6 +11,24 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isLoginSuccess, setIsLoginSuccess] = useState(false);
+  const [isForgotOpen, setIsForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [confirmedEmail, setConfirmedEmail] = useState('');
+  const [forgotStep, setForgotStep] = useState<'email' | 'confirm'>('email');
+  const [isCheckingEmail, setIsCheckingEmail] = useState(false);
+  const [isSendingResetLink, setIsSendingResetLink] = useState(false);
+
+  const validateEmail = (email: string) => {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  };
+
+  const closeForgotPassword = (force = false) => {
+    if (!force && (isCheckingEmail || isSendingResetLink)) return;
+    setIsForgotOpen(false);
+    setForgotEmail('');
+    setConfirmedEmail('');
+    setForgotStep('email');
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,6 +71,69 @@ export default function App() {
     }
   };
 
+  const handleCheckEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const email = forgotEmail.trim();
+    if (!email) {
+      toast.error('กรุณากรอกอีเมล');
+      return;
+    }
+    if (!validateEmail(email)) {
+      toast.error('กรุณากรอกอีเมลให้ถูกต้อง');
+      return;
+    }
+
+    setIsCheckingEmail(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/users/forgot-password/check-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'ไม่สามารถตรวจสอบอีเมลได้');
+        return;
+      }
+      if (!data.exists) {
+        toast.error('ไม่พบอีเมลนี้ในระบบ');
+        return;
+      }
+
+      setConfirmedEmail(data.email || email);
+      setForgotStep('confirm');
+    } catch (error) {
+      toast.error('ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้');
+    } finally {
+      setIsCheckingEmail(false);
+    }
+  };
+
+  const handleSendResetLink = async () => {
+    setIsSendingResetLink(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/users/forgot-password/send-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: confirmedEmail })
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'ไม่สามารถส่งลิงก์รีเซ็ตรหัสผ่านได้');
+        return;
+      }
+
+      toast.success('ส่งลิงก์รีเซ็ตรหัสผ่านไปยังอีเมลเรียบร้อยแล้ว');
+      closeForgotPassword(true);
+    } catch (error) {
+      toast.error('ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้');
+    } finally {
+      setIsSendingResetLink(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-sky-50 p-4">
       <ToastContainer position="top-right" autoClose={3000} />
@@ -72,6 +153,88 @@ export default function App() {
               <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">กำลังเข้าสู่ระบบ</h2>
               <p className="text-slate-500 mt-2 font-medium">กรุณารอสักครู่ ระบบกำลังจัดเตรียมข้อมูลของคุณ...</p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isForgotOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-xl font-extrabold text-slate-800">ลืมรหัสผ่าน?</h3>
+                <p className="mt-1 text-sm font-medium text-slate-500">
+                  {forgotStep === 'email'
+                    ? 'กรอกอีเมลที่ลงทะเบียนไว้เพื่อตรวจสอบข้อมูล'
+                    : 'ยืนยันการส่งลิงก์รีเซ็ตรหัสผ่านไปยังอีเมลนี้'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => closeForgotPassword()}
+                className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                aria-label="ปิด"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {forgotStep === 'email' ? (
+              <form onSubmit={handleCheckEmail} className="space-y-5" noValidate>
+                <div className="flex flex-col gap-2">
+                  <label className="text-sm font-semibold text-gray-700">อีเมล</label>
+                  <div className="relative">
+                    <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <input
+                      type="email"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      placeholder="example@email.com"
+                      className="w-full rounded-xl bg-sky-50/60 py-3 pl-10 pr-4 text-base shadow-sm outline-none transition-all hover:bg-sky-100/60 focus:bg-white focus:ring-2 focus:ring-sky-400"
+                    />
+                  </div>
+                </div>
+
+                <Button
+                  type="submit"
+                  isDisabled={isCheckingEmail}
+                  className="w-full rounded-xl bg-sky-500 py-6 text-base font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:bg-sky-600 disabled:opacity-50"
+                >
+                  {isCheckingEmail ? 'กำลังตรวจสอบ...' : 'ตรวจสอบอีเมล'}
+                </Button>
+              </form>
+            ) : (
+              <div className="space-y-5">
+                <div className="rounded-xl border border-sky-100 bg-sky-50 p-4">
+                  <p className="text-sm font-medium text-slate-600">ระบบพบอีเมลนี้ในข้อมูลผู้ใช้งาน</p>
+                  <p className="mt-1 break-all text-base font-bold text-sky-700">{confirmedEmail}</p>
+                </div>
+
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onPress={() => setForgotStep('email')}
+                    isDisabled={isSendingResetLink}
+                    className="flex-1 rounded-xl border-2 border-slate-200 py-6 text-base font-semibold text-slate-600"
+                  >
+                    แก้ไขอีเมล
+                  </Button>
+                  <Button
+                    type="button"
+                    onPress={handleSendResetLink}
+                    isDisabled={isSendingResetLink}
+                    className="flex-1 rounded-xl bg-sky-500 py-6 text-base font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:bg-sky-600 disabled:opacity-50"
+                  >
+                    {isSendingResetLink ? 'กำลังส่ง...' : (
+                      <span className="flex items-center gap-2">
+                        ส่งลิงก์ <Send size={17} />
+                      </span>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -151,9 +314,13 @@ export default function App() {
 
               <div className="flex items-center justify-between mt-1">
 
-                <Link href="#" className="text-sm font-semibold text-sky-500 hover:text-sky-600 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => setIsForgotOpen(true)}
+                  className="text-sm font-semibold text-sky-500 transition-colors hover:text-sky-600"
+                >
                   ลืมรหัสผ่าน?
-                </Link>
+                </button>
               </div>
 
               <div className="flex flex-col gap-3 mt-4">

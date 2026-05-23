@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import nodemailer from 'nodemailer';
 import { pool } from './src/lib/dbconnect.js';
 
 const app = express();
@@ -23,6 +25,7 @@ let profileAvatarReady: Promise<void> | null = null;
 let monitorRecordsReady: Promise<void> | null = null;
 let trainingTablesReady: Promise<void> | null = null;
 let knowledgeTablesReady: Promise<void> | null = null;
+let passwordResetTokensReady: Promise<void> | null = null;
 
 const DEFAULT_MENU_ITEMS = [
   ['home', 'หน้าหลัก', 'sidebar', 'Home', '/index', 1],
@@ -41,6 +44,112 @@ const DEFAULT_MENU_ITEMS = [
 ];
 const GOOGLE_DRIVE_AVATAR_FOLDER_ID = '1aaQIZ3nUcr0iDLOq8xENFpM_halgcndE';
 const GOOGLE_AVATAR_UPLOAD_SCRIPT_URL = process.env.GOOGLE_AVATAR_UPLOAD_SCRIPT_URL || GOOGLE_MONITOR_SCRIPT_URL;
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PASSWORD_RESET_TOKEN_TTL_MINUTES = 30;
+
+function normalizeEmail(value: unknown) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function hashResetToken(token: string) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getAppBaseUrl(req: express.Request) {
+  const configured = process.env.APP_BASE_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  return `${req.protocol}://${req.get('host')}`.replace(/\/+$/, '');
+}
+
+async function ensurePasswordResetTokensTable() {
+  if (!passwordResetTokensReady) {
+    passwordResetTokensReady = pool.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        token_id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        token_hash CHAR(64) NOT NULL,
+        expires_at DATETIME NOT NULL,
+        used_at DATETIME NULL,
+        request_ip VARCHAR(50) NULL,
+        user_agent VARCHAR(500) NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_password_reset_token_hash (token_hash),
+        INDEX idx_password_reset_user (user_id),
+        INDEX idx_password_reset_expires (expires_at),
+        INDEX idx_password_reset_used (used_at)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `).then(() => undefined).catch((error) => {
+      passwordResetTokensReady = null;
+      throw error;
+    });
+  }
+
+  return passwordResetTokensReady;
+}
+
+function createMailTransporter() {
+  const host = process.env.SMTP_HOST?.trim();
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = process.env.SMTP_USER?.trim();
+  const pass = process.env.SMTP_PASSWORD;
+
+  if (!host || !user || !pass) {
+    throw new Error('SMTP configuration is incomplete');
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+  });
+}
+
+async function sendPasswordResetEmail(email: string, displayName: string | null, resetLink: string) {
+  const transporter = createMailTransporter();
+  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim();
+  const recipientName = displayName || 'ผู้ใช้งาน';
+  const safeRecipientName = escapeHtml(recipientName);
+  const safeResetLink = escapeHtml(resetLink);
+
+  await transporter.sendMail({
+    from,
+    to: email,
+    subject: 'ลิงก์รีเซ็ตรหัสผ่านระบบสารสนเทศ สตท.8',
+    text: [
+      `เรียน ${recipientName}`,
+      '',
+      'ระบบได้รับคำขอรีเซ็ตรหัสผ่านของคุณ',
+      `กรุณาคลิกลิงก์นี้ภายใน ${PASSWORD_RESET_TOKEN_TTL_MINUTES} นาที:`,
+      resetLink,
+      '',
+      'หากคุณไม่ได้ทำรายการนี้ กรุณาเพิกเฉยต่ออีเมลฉบับนี้',
+    ].join('\n'),
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #0f172a;">
+        <p>เรียน ${safeRecipientName}</p>
+        <p>ระบบได้รับคำขอรีเซ็ตรหัสผ่านของคุณ</p>
+        <p>
+          <a href="${safeResetLink}" style="display:inline-block;padding:12px 18px;background:#0ea5e9;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:700;">
+            รีเซ็ตรหัสผ่าน
+          </a>
+        </p>
+        <p>ลิงก์นี้จะหมดอายุภายใน ${PASSWORD_RESET_TOKEN_TTL_MINUTES} นาที</p>
+        <p style="color:#64748b;">หากคุณไม่ได้ทำรายการนี้ กรุณาเพิกเฉยต่ออีเมลฉบับนี้</p>
+      </div>
+    `,
+  });
+}
 
 async function ensureColumn(tableName: string, columnName: string, definition: string) {
   const [rows]: any = await pool.query(
@@ -922,6 +1031,121 @@ app.post('/api/users/login', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการเข้าสู่ระบบ' });
+  }
+});
+
+// ตรวจสอบอีเมลสำหรับขอรีเซ็ตรหัสผ่าน
+app.post('/api/users/forgot-password/check-email', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    if (!email || !EMAIL_RE.test(email)) {
+      return res.status(400).json({ error: 'กรุณากรอกอีเมลให้ถูกต้อง' });
+    }
+
+    const [users]: any = await pool.query(
+      'SELECT user_id FROM user WHERE LOWER(email) = ? LIMIT 1',
+      [email]
+    );
+
+    res.json({ exists: users.length > 0, email });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการตรวจสอบอีเมล' });
+  }
+});
+
+// ส่งลิงก์รีเซ็ตรหัสผ่านไปยังอีเมลที่ลงทะเบียนไว้
+app.post('/api/users/forgot-password/send-link', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    if (!email || !EMAIL_RE.test(email)) {
+      return res.status(400).json({ error: 'กรุณากรอกอีเมลให้ถูกต้อง' });
+    }
+
+    const [users]: any = await pool.query(
+      'SELECT user_id, Name_Surnam, email FROM user WHERE LOWER(email) = ? LIMIT 1',
+      [email]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'ไม่พบอีเมลนี้ในระบบ' });
+    }
+
+    await ensurePasswordResetTokensTable();
+
+    const user = users[0];
+    const token = crypto.randomBytes(32).toString('hex');
+    const tokenHash = hashResetToken(token);
+    const resetLink = `${getAppBaseUrl(req)}/reset-password?token=${encodeURIComponent(token)}`;
+
+    await pool.query(
+      'UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL',
+      [user.user_id]
+    );
+    await pool.query(
+      `INSERT INTO password_reset_tokens
+       (user_id, token_hash, expires_at, request_ip, user_agent)
+       VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE), ?, ?)`,
+      [
+        user.user_id,
+        tokenHash,
+        PASSWORD_RESET_TOKEN_TTL_MINUTES,
+        req.ip || '',
+        String(req.headers['user-agent'] || '').slice(0, 500),
+      ]
+    );
+
+    await sendPasswordResetEmail(user.email, user.Name_Surnam || null, resetLink);
+
+    res.json({ message: 'ส่งลิงก์รีเซ็ตรหัสผ่านไปยังอีเมลเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    if (error instanceof Error && error.message === 'SMTP configuration is incomplete') {
+      return res.status(500).json({ error: 'ยังไม่ได้ตั้งค่า SMTP สำหรับส่งอีเมล' });
+    }
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการส่งลิงก์รีเซ็ตรหัสผ่าน' });
+  }
+});
+
+// รีเซ็ตรหัสผ่านด้วย token จากอีเมล
+app.post('/api/users/reset-password', async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    const newPassword = String(req.body?.newPassword || '');
+
+    if (!token) {
+      return res.status(400).json({ error: 'ไม่พบโทเคนสำหรับรีเซ็ตรหัสผ่าน' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'รหัสผ่านใหม่ควรมีความยาวอย่างน้อย 6 ตัวอักษร' });
+    }
+
+    await ensurePasswordResetTokensTable();
+
+    const tokenHash = hashResetToken(token);
+    const [tokens]: any = await pool.query(
+      `SELECT token_id, user_id
+       FROM password_reset_tokens
+       WHERE token_hash = ? AND used_at IS NULL AND expires_at > NOW()
+       LIMIT 1`,
+      [tokenHash]
+    );
+
+    if (tokens.length === 0) {
+      return res.status(400).json({ error: 'ลิงก์รีเซ็ตรหัสผ่านไม่ถูกต้องหรือหมดอายุแล้ว' });
+    }
+
+    const resetToken = tokens[0];
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    await pool.query('UPDATE user SET password = ? WHERE user_id = ?', [hashedPassword, resetToken.user_id]);
+    await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE token_id = ?', [resetToken.token_id]);
+
+    res.json({ message: 'ตั้งรหัสผ่านใหม่เรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการรีเซ็ตรหัสผ่าน' });
   }
 });
 

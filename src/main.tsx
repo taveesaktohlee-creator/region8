@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import Register from './user/Register'
+import ResetPassword from './user/ResetPassword'
 import Index from './index'
 import Profile from './user/Profile'
 import ChangePassword from './user/ChangePassword'
@@ -24,10 +25,11 @@ import './index.css'
 import { HeroUIProvider } from '@heroui/system'
 
 const path = window.location.pathname;
+const PUBLIC_ROUTES = ['/', '/register', '/reset-password'];
 
 // เริ่ม heartbeat + page tracking สำหรับ logged-in users
 const userStr = localStorage.getItem('user');
-if (userStr && userStr !== 'undefined' && path !== '/' && path !== '/register') {
+if (userStr && userStr !== 'undefined' && !PUBLIC_ROUTES.includes(path)) {
   void (async () => {
     let sid = getSessionId();
     if (!sid) {
@@ -63,6 +65,7 @@ const PROTECTED_ROUTES: Record<string, { component: React.ReactNode; menuKey: st
 function AppRouter() {
   // หน้าที่ไม่ต้องตรวจสอบสิทธิ์
   if (path === '/register') return <Register />;
+  if (path === '/reset-password') return <ResetPassword />;
   if (path === '/index') return <Index />;
 
   if (path.startsWith('/training-courses/')) {
