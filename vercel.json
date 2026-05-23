@@ -9,6 +9,18 @@
       "destination": "/api/training-evaluation"
     },
     {
+      "source": "/api/users/forgot-password/check-email",
+      "destination": "/api/forgot-password-check-email"
+    },
+    {
+      "source": "/api/users/forgot-password/send-link",
+      "destination": "/api/forgot-password-send-link"
+    },
+    {
+      "source": "/api/users/reset-password",
+      "destination": "/api/reset-password"
+    },
+    {
       "source": "/api/:path*",
       "destination": "http://region8.duckdns.org/api/:path*"
     },
