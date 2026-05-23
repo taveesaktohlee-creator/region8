@@ -180,6 +180,9 @@ async function sendPasswordResetEmailViaAppsScript(email: string, displayName: s
   if (parsed?.ok === false) {
     throw new Error(parsed.error || 'Google Apps Script ส่งอีเมลรีเซ็ตรหัสผ่านไม่สำเร็จ');
   }
+  if (parsed?.emailSent !== true) {
+    throw new Error('Google Apps Script ยังไม่ได้รัน action ส่งอีเมลรีเซ็ตรหัสผ่านจริง โปรด Deploy web app เป็น New version แล้วตรวจว่า GOOGLE_PASSWORD_RESET_SCRIPT_URL ชี้ไป deployment ล่าสุด');
+  }
 }
 
 async function sendPasswordResetEmail(email: string, displayName: string | null, resetLink: string) {

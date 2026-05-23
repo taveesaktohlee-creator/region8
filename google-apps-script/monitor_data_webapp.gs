@@ -156,6 +156,9 @@ function sendPasswordResetEmail_(payload) {
 
     return outputJson_({
       ok: true,
+      emailSent: true,
+      action: 'sendPasswordResetEmail',
+      to: email,
       message: 'ส่งลิงก์รีเซ็ตรหัสผ่านไปยังอีเมลเรียบร้อยแล้ว',
     });
   } catch (error) {
@@ -173,6 +176,10 @@ function escapeHtml_(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function authorizePasswordResetMail() {
+  return MailApp.getRemainingDailyQuota();
 }
 
 function updateExistingMonitorRow_(sheet, headers, rowData, row, options) {
