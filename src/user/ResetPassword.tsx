@@ -14,6 +14,19 @@ export default function ResetPassword() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
+  const readApiResponse = async (res: Response) => {
+    const text = await res.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return {
+        error: res.status === 404
+          ? 'ไม่พบ API นี้บนเซิร์ฟเวอร์ กรุณาอัปเดต backend เป็นเวอร์ชันล่าสุด'
+          : text || 'เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง'
+      };
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -41,7 +54,7 @@ export default function ResetPassword() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, newPassword }),
       });
-      const data = await res.json();
+      const data = await readApiResponse(res);
 
       if (!res.ok) {
         toast.error(data.error || 'ไม่สามารถตั้งรหัสผ่านใหม่ได้');

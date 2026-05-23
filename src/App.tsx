@@ -22,6 +22,19 @@ export default function App() {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   };
 
+  const readApiResponse = async (res: Response) => {
+    const text = await res.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return {
+        error: res.status === 404
+          ? 'ไม่พบ API นี้บนเซิร์ฟเวอร์ กรุณาอัปเดต backend เป็นเวอร์ชันล่าสุด'
+          : text || 'เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง'
+      };
+    }
+  };
+
   const closeForgotPassword = (force = false) => {
     if (!force && (isCheckingEmail || isSendingResetLink)) return;
     setIsForgotOpen(false);
@@ -49,7 +62,7 @@ export default function App() {
         body: JSON.stringify({ username, password })
       });
 
-      const data = await res.json();
+      const data = await readApiResponse(res);
       if (!res.ok) {
         toast.error(data.error || 'เข้าสู่ระบบไม่สำเร็จ');
       } else {
@@ -90,7 +103,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email })
       });
-      const data = await res.json();
+      const data = await readApiResponse(res);
 
       if (!res.ok) {
         toast.error(data.error || 'ไม่สามารถตรวจสอบอีเมลได้');
@@ -118,7 +131,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: confirmedEmail })
       });
-      const data = await res.json();
+      const data = await readApiResponse(res);
 
       if (!res.ok) {
         toast.error(data.error || 'ไม่สามารถส่งลิงก์รีเซ็ตรหัสผ่านได้');

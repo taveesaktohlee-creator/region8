@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
-import nodemailer from 'nodemailer';
 import { pool } from './src/lib/dbconnect.js';
 
 const app = express();
@@ -97,7 +96,7 @@ async function ensurePasswordResetTokensTable() {
   return passwordResetTokensReady;
 }
 
-function createMailTransporter() {
+async function createMailTransporter() {
   const host = process.env.SMTP_HOST?.trim();
   const port = Number(process.env.SMTP_PORT || 587);
   const user = process.env.SMTP_USER?.trim();
@@ -105,6 +104,13 @@ function createMailTransporter() {
 
   if (!host || !user || !pass) {
     throw new Error('SMTP configuration is incomplete');
+  }
+
+  let nodemailer;
+  try {
+    nodemailer = await import('nodemailer');
+  } catch {
+    throw new Error('Nodemailer package is not installed');
   }
 
   return nodemailer.createTransport({
@@ -116,7 +122,7 @@ function createMailTransporter() {
 }
 
 async function sendPasswordResetEmail(email: string, displayName: string | null, resetLink: string) {
-  const transporter = createMailTransporter();
+  const transporter = await createMailTransporter();
   const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim();
   const recipientName = displayName || 'ผู้ใช้งาน';
   const safeRecipientName = escapeHtml(recipientName);
@@ -1102,6 +1108,9 @@ app.post('/api/users/forgot-password/send-link', async (req, res) => {
     console.error(error);
     if (error instanceof Error && error.message === 'SMTP configuration is incomplete') {
       return res.status(500).json({ error: 'ยังไม่ได้ตั้งค่า SMTP สำหรับส่งอีเมล' });
+    }
+    if (error instanceof Error && error.message === 'Nodemailer package is not installed') {
+      return res.status(500).json({ error: 'ยังไม่ได้ติดตั้งแพ็กเกจ nodemailer ในฝั่งเซิร์ฟเวอร์' });
     }
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการส่งลิงก์รีเซ็ตรหัสผ่าน' });
   }
