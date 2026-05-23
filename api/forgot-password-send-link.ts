@@ -4,6 +4,10 @@ import nodemailer from 'nodemailer';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_RESET_TOKEN_TTL_MINUTES = 30;
+const GOOGLE_PASSWORD_RESET_SCRIPT_URL =
+  process.env.GOOGLE_PASSWORD_RESET_SCRIPT_URL ||
+  process.env.GOOGLE_AVATAR_UPLOAD_SCRIPT_URL ||
+  'https://script.google.com/macros/s/AKfycbwiK32Dwn80oGfbG4yElZQmKW0IwblvPO85yCW_1ex7LfcCzwd0FtgWMfG45aSqUd3H/exec';
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || '157.85.98.50',
@@ -68,14 +72,39 @@ function getAppBaseUrl(req: any) {
   return `${protocol}://${host}`.replace(/\/+$/, '');
 }
 
+function inferSmtpDefaults(user?: string) {
+  const domain = String(user || '').split('@').pop()?.toLowerCase() || '';
+  if (domain === 'gmail.com') return { host: 'smtp.gmail.com', port: 465 };
+  if (['outlook.com', 'hotmail.com', 'live.com', 'msn.com'].includes(domain)) {
+    return { host: 'smtp.office365.com', port: 587 };
+  }
+  if (domain === 'cad.go.th' || domain === 'mail.cad.go.th') {
+    return { host: 'mail.cad.go.th', port: 587 };
+  }
+  return { host: '', port: 587 };
+}
+
 function getMailConfig() {
-  const user = process.env.SMTP_USER?.trim() || process.env.GMAIL_USER?.trim() || process.env.EMAIL_USER?.trim();
-  const pass = process.env.SMTP_PASSWORD || process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD;
-  const host = process.env.SMTP_HOST?.trim() || (user?.endsWith('@gmail.com') ? 'smtp.gmail.com' : '');
-  const port = Number(process.env.SMTP_PORT || (host === 'smtp.gmail.com' ? 465 : 587));
+  const user =
+    process.env.SMTP_USER?.trim() ||
+    process.env.GMAIL_USER?.trim() ||
+    process.env.OUTLOOK_USER?.trim() ||
+    process.env.HOTMAIL_USER?.trim() ||
+    process.env.CAD_MAIL_USER?.trim() ||
+    process.env.EMAIL_USER?.trim();
+  const pass =
+    process.env.SMTP_PASSWORD ||
+    process.env.GMAIL_APP_PASSWORD ||
+    process.env.OUTLOOK_PASSWORD ||
+    process.env.HOTMAIL_PASSWORD ||
+    process.env.CAD_MAIL_PASSWORD ||
+    process.env.EMAIL_PASSWORD;
+  const inferred = inferSmtpDefaults(user);
+  const host = process.env.SMTP_HOST?.trim() || inferred.host;
+  const port = Number(process.env.SMTP_PORT || inferred.port);
   const missing = [
-    !user ? 'SMTP_USER หรือ GMAIL_USER' : '',
-    !pass ? 'SMTP_PASSWORD หรือ GMAIL_APP_PASSWORD' : '',
+    !user ? 'SMTP_USER, GMAIL_USER, OUTLOOK_USER, HOTMAIL_USER หรือ CAD_MAIL_USER' : '',
+    !pass ? 'SMTP_PASSWORD, GMAIL_APP_PASSWORD, OUTLOOK_PASSWORD, HOTMAIL_PASSWORD หรือ CAD_MAIL_PASSWORD' : '',
     !host ? 'SMTP_HOST' : '',
   ].filter(Boolean);
 
@@ -112,9 +141,7 @@ async function ensurePasswordResetTokensTable() {
   `);
 }
 
-function createMailTransporter() {
-  const mailConfig = getMailConfig();
-
+function createMailTransporter(mailConfig: ReturnType<typeof getMailConfig>) {
   return nodemailer.createTransport({
     host: mailConfig.host,
     port: mailConfig.port,
@@ -123,9 +150,51 @@ function createMailTransporter() {
   });
 }
 
+async function sendPasswordResetEmailViaAppsScript(email: string, displayName: string | null, resetLink: string) {
+  const response = await fetch(GOOGLE_PASSWORD_RESET_SCRIPT_URL, {
+    method: 'POST',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      action: 'sendPasswordResetEmail',
+      email,
+      displayName,
+      resetLink,
+      expiresMinutes: PASSWORD_RESET_TOKEN_TTL_MINUTES,
+    }),
+  });
+
+  const text = await response.text();
+  if (!response.ok) throw new Error(text || 'Cannot call Google Apps Script for password reset email');
+  if (/script function not found|<!doctype|<html/i.test(text)) {
+    throw new Error('Google Apps Script ยังไม่รองรับการส่งอีเมลรีเซ็ตรหัสผ่าน โปรดอัปเดตไฟล์ google-apps-script/monitor_data_webapp.gs แล้ว Deploy เป็น New version');
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Google Apps Script ส่งผลลัพธ์การส่งอีเมลกลับมาไม่ถูกต้อง');
+  }
+
+  if (parsed?.ok === false) {
+    throw new Error(parsed.error || 'Google Apps Script ส่งอีเมลรีเซ็ตรหัสผ่านไม่สำเร็จ');
+  }
+}
+
 async function sendPasswordResetEmail(email: string, displayName: string | null, resetLink: string) {
-  const mailConfig = getMailConfig();
-  const transporter = createMailTransporter();
+  let mailConfig: ReturnType<typeof getMailConfig>;
+  try {
+    mailConfig = getMailConfig();
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('SMTP configuration is incomplete')) {
+      await sendPasswordResetEmailViaAppsScript(email, displayName, resetLink);
+      return;
+    }
+    throw error;
+  }
+
+  const transporter = createMailTransporter(mailConfig);
   const recipientName = displayName || 'ผู้ใช้งาน';
   const safeRecipientName = escapeHtml(recipientName);
   const safeResetLink = escapeHtml(resetLink);
@@ -226,6 +295,10 @@ export default async function handler(req: any, res: any) {
       sendJson(res, 500, {
         error: `ยังไม่ได้ตั้งค่าอีเมลสำหรับส่งลิงก์รีเซ็ตรหัสผ่าน (${error.message.replace('SMTP configuration is incomplete: ', '')})`
       });
+      return;
+    }
+    if (error instanceof Error && /Google Apps Script|ส่งอีเมลรีเซ็ต|Cannot call Google Apps Script/i.test(error.message)) {
+      sendJson(res, 500, { error: error.message });
       return;
     }
     sendJson(res, 500, { error: 'เกิดข้อผิดพลาดในการส่งลิงก์รีเซ็ตรหัสผ่าน' });

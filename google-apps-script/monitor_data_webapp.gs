@@ -52,6 +52,10 @@ function doPost(e) {
       return getDriveFile_(rowData);
     }
 
+    if (rowData.action === 'sendPasswordResetEmail') {
+      return sendPasswordResetEmail_(rowData);
+    }
+
     if (!rowData || Object.keys(rowData).length === 0) {
       return outputJson_({
         ok: false,
@@ -99,6 +103,76 @@ function doPost(e) {
       error: error && error.message ? error.message : String(error),
     });
   }
+}
+
+function sendPasswordResetEmail_(payload) {
+  try {
+    const email = String(payload.email || '').trim();
+    const displayName = String(payload.displayName || payload.display_name || 'ผู้ใช้งาน').trim() || 'ผู้ใช้งาน';
+    const resetLink = String(payload.resetLink || payload.reset_link || '').trim();
+    const expiresMinutes = Number(payload.expiresMinutes || payload.expires_minutes || 30) || 30;
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return outputJson_({
+        ok: false,
+        error: 'อีเมลสำหรับส่งลิงก์รีเซ็ตรหัสผ่านไม่ถูกต้อง',
+      });
+    }
+
+    if (!/^https?:\/\//i.test(resetLink)) {
+      return outputJson_({
+        ok: false,
+        error: 'ลิงก์รีเซ็ตรหัสผ่านไม่ถูกต้อง',
+      });
+    }
+
+    const subject = 'ลิงก์รีเซ็ตรหัสผ่านระบบสารสนเทศ สตท.8';
+    const body = [
+      'เรียน ' + displayName,
+      '',
+      'ระบบได้รับคำขอรีเซ็ตรหัสผ่านของคุณ',
+      'กรุณาคลิกลิงก์นี้ภายใน ' + expiresMinutes + ' นาที:',
+      resetLink,
+      '',
+      'หากคุณไม่ได้ทำรายการนี้ กรุณาเพิกเฉยต่ออีเมลฉบับนี้',
+    ].join('\n');
+
+    const htmlBody =
+      '<div style="font-family:Arial,sans-serif;line-height:1.6;color:#0f172a;">' +
+        '<p>เรียน ' + escapeHtml_(displayName) + '</p>' +
+        '<p>ระบบได้รับคำขอรีเซ็ตรหัสผ่านของคุณ</p>' +
+        '<p><a href="' + escapeHtml_(resetLink) + '" style="display:inline-block;padding:12px 18px;background:#0ea5e9;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:700;">รีเซ็ตรหัสผ่าน</a></p>' +
+        '<p>ลิงก์นี้จะหมดอายุภายใน ' + expiresMinutes + ' นาที</p>' +
+        '<p style="color:#64748b;">หากคุณไม่ได้ทำรายการนี้ กรุณาเพิกเฉยต่ออีเมลฉบับนี้</p>' +
+      '</div>';
+
+    MailApp.sendEmail({
+      to: email,
+      subject: subject,
+      body: body,
+      htmlBody: htmlBody,
+      name: 'ระบบสารสนเทศ สตท.8',
+    });
+
+    return outputJson_({
+      ok: true,
+      message: 'ส่งลิงก์รีเซ็ตรหัสผ่านไปยังอีเมลเรียบร้อยแล้ว',
+    });
+  } catch (error) {
+    return outputJson_({
+      ok: false,
+      error: 'ส่งอีเมลรีเซ็ตรหัสผ่านไม่สำเร็จ: ' + error.toString(),
+    });
+  }
+}
+
+function escapeHtml_(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function updateExistingMonitorRow_(sheet, headers, rowData, row, options) {
