@@ -70,6 +70,31 @@ function getAppBaseUrl(req: express.Request) {
   return `${req.protocol}://${req.get('host')}`.replace(/\/+$/, '');
 }
 
+function getMailConfig() {
+  const user = process.env.SMTP_USER?.trim() || process.env.GMAIL_USER?.trim() || process.env.EMAIL_USER?.trim();
+  const pass = process.env.SMTP_PASSWORD || process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASSWORD;
+  const host = process.env.SMTP_HOST?.trim() || (user?.endsWith('@gmail.com') ? 'smtp.gmail.com' : '');
+  const port = Number(process.env.SMTP_PORT || (host === 'smtp.gmail.com' ? 465 : 587));
+  const missing = [
+    !user ? 'SMTP_USER หรือ GMAIL_USER' : '',
+    !pass ? 'SMTP_PASSWORD หรือ GMAIL_APP_PASSWORD' : '',
+    !host ? 'SMTP_HOST' : '',
+  ].filter(Boolean);
+
+  if (missing.length > 0) {
+    throw new Error(`SMTP configuration is incomplete: ${missing.join(', ')}`);
+  }
+
+  return {
+    host,
+    port,
+    secure: port === 465,
+    user,
+    pass,
+    from: process.env.SMTP_FROM?.trim() || user,
+  };
+}
+
 async function ensurePasswordResetTokensTable() {
   if (!passwordResetTokensReady) {
     passwordResetTokensReady = pool.query(`
@@ -97,14 +122,7 @@ async function ensurePasswordResetTokensTable() {
 }
 
 async function createMailTransporter() {
-  const host = process.env.SMTP_HOST?.trim();
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER?.trim();
-  const pass = process.env.SMTP_PASSWORD;
-
-  if (!host || !user || !pass) {
-    throw new Error('SMTP configuration is incomplete');
-  }
+  const mailConfig = getMailConfig();
 
   let nodemailer;
   try {
@@ -114,22 +132,22 @@ async function createMailTransporter() {
   }
 
   return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
+    host: mailConfig.host,
+    port: mailConfig.port,
+    secure: mailConfig.secure,
+    auth: { user: mailConfig.user, pass: mailConfig.pass },
   });
 }
 
 async function sendPasswordResetEmail(email: string, displayName: string | null, resetLink: string) {
+  const mailConfig = getMailConfig();
   const transporter = await createMailTransporter();
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim();
   const recipientName = displayName || 'ผู้ใช้งาน';
   const safeRecipientName = escapeHtml(recipientName);
   const safeResetLink = escapeHtml(resetLink);
 
   await transporter.sendMail({
-    from,
+    from: mailConfig.from,
     to: email,
     subject: 'ลิงก์รีเซ็ตรหัสผ่านระบบสารสนเทศ สตท.8',
     text: [
@@ -1106,8 +1124,10 @@ app.post('/api/users/forgot-password/send-link', async (req, res) => {
     res.json({ message: 'ส่งลิงก์รีเซ็ตรหัสผ่านไปยังอีเมลเรียบร้อยแล้ว' });
   } catch (error) {
     console.error(error);
-    if (error instanceof Error && error.message === 'SMTP configuration is incomplete') {
-      return res.status(500).json({ error: 'ยังไม่ได้ตั้งค่า SMTP สำหรับส่งอีเมล' });
+    if (error instanceof Error && error.message.startsWith('SMTP configuration is incomplete')) {
+      return res.status(500).json({
+        error: `ยังไม่ได้ตั้งค่าอีเมลสำหรับส่งลิงก์รีเซ็ตรหัสผ่าน (${error.message.replace('SMTP configuration is incomplete: ', '')})`
+      });
     }
     if (error instanceof Error && error.message === 'Nodemailer package is not installed') {
       return res.status(500).json({ error: 'ยังไม่ได้ติดตั้งแพ็กเกจ nodemailer ในฝั่งเซิร์ฟเวอร์' });
