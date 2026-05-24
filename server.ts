@@ -1863,6 +1863,41 @@ function attachActivityConflicts(rows: any[], currentUserId: number) {
   });
 }
 
+const ACTIVITY_GOOGLE_RECONNECT_MESSAGE =
+  'การเชื่อม Google Calendar หมดอายุหรือใช้ไม่ได้แล้ว กรุณากด "Google Calendar" เพื่อเชื่อมใหม่อีกครั้ง';
+
+class ActivityGoogleReconnectRequiredError extends Error {
+  constructor(message = ACTIVITY_GOOGLE_RECONNECT_MESSAGE) {
+    super(message);
+    this.name = 'ActivityGoogleReconnectRequiredError';
+  }
+}
+
+function isActivityGoogleReconnectRequired(error: unknown) {
+  return error instanceof ActivityGoogleReconnectRequiredError;
+}
+
+function getGoogleApiErrorMessage(payload: any, fallback: string) {
+  return String(payload?.error?.message || payload?.error_description || payload?.error || fallback || '');
+}
+
+function isGoogleCalendarAuthFailure(status: number, payload: any) {
+  const message = getGoogleApiErrorMessage(payload, '').toLowerCase();
+  return (
+    status === 401 ||
+    message.includes('invalid authentication') ||
+    message.includes('invalid credentials') ||
+    message.includes('invalid_grant') ||
+    message.includes('invalid_client') ||
+    message.includes('unauthorized')
+  );
+}
+
+async function clearActivityGoogleConnection(userId: number) {
+  await pool.query("DELETE FROM activity_events WHERE created_by_user_id = ? AND source = 'google'", [userId]);
+  await pool.query('DELETE FROM activity_google_connections WHERE user_id = ?', [userId]);
+}
+
 async function getActivityGoogleAccessToken(connection: any, config: ReturnType<typeof getGoogleCalendarConfig>) {
   const now = Date.now();
   const expiresAt = connection.token_expires_at ? new Date(connection.token_expires_at).getTime() : 0;
@@ -1883,7 +1918,10 @@ async function getActivityGoogleAccessToken(connection: any, config: ReturnType<
   });
   const tokenData: any = await response.json();
   if (!response.ok || !tokenData.access_token) {
-    throw new Error(tokenData.error_description || tokenData.error || 'ไม่สามารถต่ออายุ Google Calendar token ได้');
+    if (isGoogleCalendarAuthFailure(response.status, tokenData)) {
+      throw new ActivityGoogleReconnectRequiredError();
+    }
+    throw new Error(getGoogleApiErrorMessage(tokenData, 'ไม่สามารถต่ออายุ Google Calendar token ได้'));
   }
 
   const expiresIn = Math.max(60, toInt(tokenData.expires_in, 3600));
@@ -2163,9 +2201,10 @@ app.get('/api/activity-calendar/google/callback', async (req, res) => {
 });
 
 app.post('/api/activity-calendar/google/sync', async (req, res) => {
+  let userId = 0;
   try {
     await ensureActivityCalendarTables();
-    const userId = toInt(req.body?.user_id);
+    userId = toInt(req.body?.user_id);
     if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
     const config = getGoogleCalendarConfig();
     const [connections]: any = await pool.query(
@@ -2184,7 +2223,10 @@ app.post('/api/activity-calendar/google/sync', async (req, res) => {
     });
     const calendarListData: any = await calendarListResponse.json();
     if (!calendarListResponse.ok) {
-      throw new Error(calendarListData.error?.message || 'ดึงรายการ Google Calendar ไม่สำเร็จ');
+      if (isGoogleCalendarAuthFailure(calendarListResponse.status, calendarListData)) {
+        throw new ActivityGoogleReconnectRequiredError();
+      }
+      throw new Error(getGoogleApiErrorMessage(calendarListData, 'ดึงรายการ Google Calendar ไม่สำเร็จ'));
     }
 
     const googleEmail = connections[0].google_email || 'Google Calendar';
@@ -2270,6 +2312,13 @@ app.post('/api/activity-calendar/google/sync', async (req, res) => {
     res.json({ message: 'ซิงก์ Google Calendar เรียบร้อยแล้ว', synced_count: inserted, calendar_count: calendars.length });
   } catch (error) {
     console.error(error);
+    if (isActivityGoogleReconnectRequired(error)) {
+      if (userId) await clearActivityGoogleConnection(userId);
+      return res.status(401).json({
+        error: error.message,
+        reconnect_required: true,
+      });
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : 'ซิงก์ Google Calendar ไม่สำเร็จ' });
   }
 });

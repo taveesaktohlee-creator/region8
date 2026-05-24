@@ -313,6 +313,41 @@ function attachActivityConflicts(rows: any[], currentUserId: number) {
   });
 }
 
+const ACTIVITY_GOOGLE_RECONNECT_MESSAGE =
+  'การเชื่อม Google Calendar หมดอายุหรือใช้ไม่ได้แล้ว กรุณากด "Google Calendar" เพื่อเชื่อมใหม่อีกครั้ง';
+
+class ActivityGoogleReconnectRequiredError extends Error {
+  constructor(message = ACTIVITY_GOOGLE_RECONNECT_MESSAGE) {
+    super(message);
+    this.name = 'ActivityGoogleReconnectRequiredError';
+  }
+}
+
+function isActivityGoogleReconnectRequired(error: unknown) {
+  return error instanceof ActivityGoogleReconnectRequiredError;
+}
+
+function getGoogleApiErrorMessage(payload: any, fallback: string) {
+  return String(payload?.error?.message || payload?.error_description || payload?.error || fallback || '');
+}
+
+function isGoogleCalendarAuthFailure(status: number, payload: any) {
+  const message = getGoogleApiErrorMessage(payload, '').toLowerCase();
+  return (
+    status === 401 ||
+    message.includes('invalid authentication') ||
+    message.includes('invalid credentials') ||
+    message.includes('invalid_grant') ||
+    message.includes('invalid_client') ||
+    message.includes('unauthorized')
+  );
+}
+
+async function clearActivityGoogleConnection(userId: number) {
+  await pool.query("DELETE FROM activity_events WHERE created_by_user_id = ? AND source = 'google'", [userId]);
+  await pool.query('DELETE FROM activity_google_connections WHERE user_id = ?', [userId]);
+}
+
 async function getActivityGoogleAccessToken(connection: any, config: ReturnType<typeof getGoogleCalendarConfig>) {
   const now = Date.now();
   const expiresAt = connection.token_expires_at ? new Date(connection.token_expires_at).getTime() : 0;
@@ -333,7 +368,10 @@ async function getActivityGoogleAccessToken(connection: any, config: ReturnType<
   });
   const tokenData: any = await response.json();
   if (!response.ok || !tokenData.access_token) {
-    throw new Error(tokenData.error_description || tokenData.error || 'ไม่สามารถต่ออายุ Google Calendar token ได้');
+    if (isGoogleCalendarAuthFailure(response.status, tokenData)) {
+      throw new ActivityGoogleReconnectRequiredError();
+    }
+    throw new Error(getGoogleApiErrorMessage(tokenData, 'ไม่สามารถต่ออายุ Google Calendar token ได้'));
   }
 
   const expiresIn = Math.max(60, toInt(tokenData.expires_in, 3600));
@@ -588,112 +626,127 @@ async function googleCallback(req: any, res: any) {
 }
 
 async function googleSync(req: any, res: any) {
-  await ensureActivityCalendarTables();
-  const body = await readBody(req);
-  const userId = toInt(body.user_id);
-  if (!userId) return sendJson(res, 400, { error: 'ไม่พบรหัสผู้ใช้งาน' });
-  const config = getGoogleCalendarConfig();
-  const [connections]: any = await pool.query(
-    `SELECT * FROM activity_google_connections WHERE user_id = ? AND sync_enabled = 1 LIMIT 1`,
-    [userId],
-  );
-  if (connections.length === 0) return sendJson(res, 404, { error: 'ยังไม่ได้เชื่อม Google Calendar' });
+  let userId = 0;
+  try {
+    await ensureActivityCalendarTables();
+    const body = await readBody(req);
+    userId = toInt(body.user_id);
+    if (!userId) return sendJson(res, 400, { error: 'ไม่พบรหัสผู้ใช้งาน' });
+    const config = getGoogleCalendarConfig();
+    const [connections]: any = await pool.query(
+      `SELECT * FROM activity_google_connections WHERE user_id = ? AND sync_enabled = 1 LIMIT 1`,
+      [userId],
+    );
+    if (connections.length === 0) return sendJson(res, 404, { error: 'ยังไม่ได้เชื่อม Google Calendar' });
 
-  const accessToken = await getActivityGoogleAccessToken(connections[0], config);
-  const lookbackDays = Math.max(0, toInt(process.env.GOOGLE_CALENDAR_SYNC_LOOKBACK_DAYS, 30));
-  const lookaheadDays = Math.max(1, toInt(process.env.GOOGLE_CALENDAR_SYNC_LOOKAHEAD_DAYS, 365));
-  const timeMinDate = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
-  const timeMaxDate = new Date(Date.now() + lookaheadDays * 24 * 60 * 60 * 1000);
-  const googleEmail = connections[0].google_email || 'Google Calendar';
+    const accessToken = await getActivityGoogleAccessToken(connections[0], config);
+    const lookbackDays = Math.max(0, toInt(process.env.GOOGLE_CALENDAR_SYNC_LOOKBACK_DAYS, 30));
+    const lookaheadDays = Math.max(1, toInt(process.env.GOOGLE_CALENDAR_SYNC_LOOKAHEAD_DAYS, 365));
+    const timeMinDate = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
+    const timeMaxDate = new Date(Date.now() + lookaheadDays * 24 * 60 * 60 * 1000);
+    const googleEmail = connections[0].google_email || 'Google Calendar';
 
-  const calendarListResponse = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const calendarListData: any = await calendarListResponse.json();
-  if (!calendarListResponse.ok) {
-    throw new Error(calendarListData.error?.message || 'ดึงรายการ Google Calendar ไม่สำเร็จ');
-  }
-
-  const calendars = (calendarListData.items || [])
-    .filter((calendar: any) => calendar.selected !== false && calendar.hidden !== true)
-    .map((calendar: any) => ({
-      id: String(calendar.id || 'primary'),
-      summary: String(calendar.summary || calendar.id || 'Google Calendar'),
-      color: normalizeGoogleCalendarColor(calendar.backgroundColor),
-      primary: Boolean(calendar.primary),
-    }));
-
-  if (!calendars.some((calendar: any) => calendar.primary || calendar.id === 'primary')) {
-    calendars.unshift({ id: 'primary', summary: googleEmail, color: '#22c55e', primary: true });
-  }
-
-  const startWindow = formatBangkokDateTime(timeMinDate);
-  const endWindow = formatBangkokDateTime(timeMaxDate);
-  await pool.query(
-    `DELETE FROM activity_events
-     WHERE created_by_user_id = ? AND source = 'google' AND start_at < ? AND end_at > ?`,
-    [userId, endWindow, startWindow],
-  );
-
-  let inserted = 0;
-  for (const calendar of calendars) {
-    const eventsUrl = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.id)}/events`);
-    eventsUrl.searchParams.set('timeMin', timeMinDate.toISOString());
-    eventsUrl.searchParams.set('timeMax', timeMaxDate.toISOString());
-    eventsUrl.searchParams.set('singleEvents', 'true');
-    eventsUrl.searchParams.set('orderBy', 'startTime');
-    eventsUrl.searchParams.set('maxResults', '2500');
-    const calendarResponse = await fetch(eventsUrl, {
+    const calendarListResponse = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    const calendarData: any = await calendarResponse.json();
-    if (!calendarResponse.ok) {
-      console.warn('Google Calendar sync skipped calendar', calendar.id, calendarData.error?.message || calendarData.error);
-      continue;
+    const calendarListData: any = await calendarListResponse.json();
+    if (!calendarListResponse.ok) {
+      if (isGoogleCalendarAuthFailure(calendarListResponse.status, calendarListData)) {
+        throw new ActivityGoogleReconnectRequiredError();
+      }
+      throw new Error(getGoogleApiErrorMessage(calendarListData, 'ดึงรายการ Google Calendar ไม่สำเร็จ'));
     }
 
-    for (const event of calendarData.items || []) {
-      if (event.status === 'cancelled') continue;
-      const { allDay, startAt, endAt } = buildGoogleEventRange(event);
-      if (!event.id || !startAt || !endAt) continue;
+    const calendars = (calendarListData.items || [])
+      .filter((calendar: any) => calendar.selected !== false && calendar.hidden !== true)
+      .map((calendar: any) => ({
+        id: String(calendar.id || 'primary'),
+        summary: String(calendar.summary || calendar.id || 'Google Calendar'),
+        color: normalizeGoogleCalendarColor(calendar.backgroundColor),
+        primary: Boolean(calendar.primary),
+      }));
 
-      await pool.query(
-        `INSERT INTO activity_events
-         (title, description, location, start_at, end_at, all_day, color,
-          source, visibility, created_by_user_id, created_by_name,
-          google_calendar_id, google_event_id, google_html_link)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'google', 'private', ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           title = VALUES(title),
-           description = VALUES(description),
-           location = VALUES(location),
-           start_at = VALUES(start_at),
-           end_at = VALUES(end_at),
-           all_day = VALUES(all_day),
-           color = VALUES(color),
-           created_by_name = VALUES(created_by_name),
-           google_html_link = VALUES(google_html_link)`,
-        [
-          String(event.summary || '(ไม่มีชื่อกิจกรรม)').trim(),
-          String(event.description || '').trim(),
-          String(event.location || '').trim(),
-          startAt,
-          endAt,
-          allDay ? 1 : 0,
-          calendar.color,
-          userId,
-          calendar.summary || googleEmail,
-          calendar.id,
-          String(event.id),
-          String(event.htmlLink || ''),
-        ],
-      );
-      inserted += 1;
+    if (!calendars.some((calendar: any) => calendar.primary || calendar.id === 'primary')) {
+      calendars.unshift({ id: 'primary', summary: googleEmail, color: '#22c55e', primary: true });
     }
+
+    const startWindow = formatBangkokDateTime(timeMinDate);
+    const endWindow = formatBangkokDateTime(timeMaxDate);
+    await pool.query(
+      `DELETE FROM activity_events
+       WHERE created_by_user_id = ? AND source = 'google' AND start_at < ? AND end_at > ?`,
+      [userId, endWindow, startWindow],
+    );
+
+    let inserted = 0;
+    for (const calendar of calendars) {
+      const eventsUrl = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.id)}/events`);
+      eventsUrl.searchParams.set('timeMin', timeMinDate.toISOString());
+      eventsUrl.searchParams.set('timeMax', timeMaxDate.toISOString());
+      eventsUrl.searchParams.set('singleEvents', 'true');
+      eventsUrl.searchParams.set('orderBy', 'startTime');
+      eventsUrl.searchParams.set('maxResults', '2500');
+      const calendarResponse = await fetch(eventsUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const calendarData: any = await calendarResponse.json();
+      if (!calendarResponse.ok) {
+        console.warn('Google Calendar sync skipped calendar', calendar.id, calendarData.error?.message || calendarData.error);
+        continue;
+      }
+
+      for (const event of calendarData.items || []) {
+        if (event.status === 'cancelled') continue;
+        const { allDay, startAt, endAt } = buildGoogleEventRange(event);
+        if (!event.id || !startAt || !endAt) continue;
+
+        await pool.query(
+          `INSERT INTO activity_events
+           (title, description, location, start_at, end_at, all_day, color,
+            source, visibility, created_by_user_id, created_by_name,
+            google_calendar_id, google_event_id, google_html_link)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'google', 'private', ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             title = VALUES(title),
+             description = VALUES(description),
+             location = VALUES(location),
+             start_at = VALUES(start_at),
+             end_at = VALUES(end_at),
+             all_day = VALUES(all_day),
+             color = VALUES(color),
+             created_by_name = VALUES(created_by_name),
+             google_html_link = VALUES(google_html_link)`,
+          [
+            String(event.summary || '(ไม่มีชื่อกิจกรรม)').trim(),
+            String(event.description || '').trim(),
+            String(event.location || '').trim(),
+            startAt,
+            endAt,
+            allDay ? 1 : 0,
+            calendar.color,
+            userId,
+            calendar.summary || googleEmail,
+            calendar.id,
+            String(event.id),
+            String(event.htmlLink || ''),
+          ],
+        );
+        inserted += 1;
+      }
+    }
+
+    await pool.query('UPDATE activity_google_connections SET last_synced_at = NOW() WHERE user_id = ?', [userId]);
+    return sendJson(res, 200, { message: 'ซิงก์ Google Calendar เรียบร้อยแล้ว', synced_count: inserted, calendar_count: calendars.length });
+  } catch (error) {
+    if (isActivityGoogleReconnectRequired(error)) {
+      if (userId) await clearActivityGoogleConnection(userId);
+      return sendJson(res, 401, {
+        error: error.message,
+        reconnect_required: true,
+      });
+    }
+    throw error;
   }
-
-  await pool.query('UPDATE activity_google_connections SET last_synced_at = NOW() WHERE user_id = ?', [userId]);
-  return sendJson(res, 200, { message: 'ซิงก์ Google Calendar เรียบร้อยแล้ว', synced_count: inserted, calendar_count: calendars.length });
 }
 
 async function googleDisconnect(req: any, res: any) {

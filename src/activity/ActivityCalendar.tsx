@@ -361,7 +361,15 @@ export default function ActivityCalendar() {
         body: JSON.stringify({ user_id: currentUserId }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'ซิงก์ Google Calendar ไม่สำเร็จ');
+      if (!response.ok) {
+        if (response.status === 401 || data.reconnect_required) {
+          setGoogle(null);
+          await loadEvents();
+          toast.error(data.error || 'การเชื่อม Google Calendar หมดอายุ กรุณาเชื่อมใหม่อีกครั้ง');
+          return;
+        }
+        throw new Error(data.error || 'ซิงก์ Google Calendar ไม่สำเร็จ');
+      }
       toast.success(data.message);
       await loadEvents();
     } catch (error) {
