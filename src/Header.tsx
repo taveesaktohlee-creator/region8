@@ -173,7 +173,7 @@ const Header: React.FC<HeaderProps> = ({ setIsSidebarOpen, handleRefresh, isRefr
                       key={notification.id}
                       type="button"
                       onClick={() => void handleNotificationClick(notification)}
-                      className="flex w-full gap-3 border-b border-slate-50 px-4 py-3 text-left transition hover:bg-blue-50/60"
+                      className="flex w-full cursor-pointer gap-3 border-b border-slate-50 px-4 py-3 text-left transition hover:bg-blue-50/60"
                     >
                       <span className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${isKnowledge ? 'bg-rose-50 text-rose-600' : 'bg-sky-50 text-sky-600'}`}>
                         {isKnowledge ? <BookOpen size={18} /> : <CalendarDays size={18} />}
