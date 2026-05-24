@@ -48,6 +48,13 @@ function toInt(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function toBooleanFlag(value: unknown) {
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'number') return value === 1 ? 1 : 0;
+  const text = String(value ?? '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(text) ? 1 : 0;
+}
+
 function pad2(value: number) {
   return String(value).padStart(2, '0');
 }
@@ -449,7 +456,7 @@ async function createEvent(req: any, res: any) {
   const title = String(body.title || '').trim();
   const startAt = toMysqlLocalDateTime(body.start_at);
   const endAt = toMysqlLocalDateTime(body.end_at);
-  const allDay = body.all_day ? 1 : 0;
+  const allDay = toBooleanFlag(body.all_day);
   if (!userId) return sendJson(res, 400, { error: 'ไม่พบรหัสผู้ใช้งาน' });
   if (!title) return sendJson(res, 400, { error: 'กรุณาระบุชื่อกิจกรรม' });
   if (!startAt || !endAt || Date.parse(`${endAt.replace(' ', 'T')}+07:00`) <= Date.parse(`${startAt.replace(' ', 'T')}+07:00`)) {
@@ -509,7 +516,7 @@ async function updateEvent(req: any, res: any, eventId: number) {
       String(body.location || '').trim(),
       startAt,
       endAt,
-      body.all_day ? 1 : 0,
+      toBooleanFlag(body.all_day),
       String(body.color || '#3b82f6').trim() || '#3b82f6',
       eventId,
     ],

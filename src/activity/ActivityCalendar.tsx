@@ -125,6 +125,21 @@ function parseEventDate(value: string) {
   return new Date(text);
 }
 
+function getEventDisplayEndDate(event: ActivityEvent) {
+  const start = parseEventDate(event.start_at);
+  const end = parseEventDate(event.end_at);
+  if (Number.isNaN(end.getTime())) return start;
+
+  const endIsExclusiveAllDay =
+    event.all_day &&
+    end.getHours() === 0 &&
+    end.getMinutes() === 0 &&
+    end.getSeconds() === 0 &&
+    formatDateKey(end) !== formatDateKey(start);
+
+  return endIsExclusiveAllDay ? addDays(end, -1) : end;
+}
+
 function formatThaiDay(date: Date) {
   return `${date.getDate()} ${MONTH_NAMES[date.getMonth()]} ${date.getFullYear() + 543}`;
 }
@@ -271,8 +286,8 @@ export default function ActivityCalendar() {
     const map = new Map<string, ActivityEvent[]>();
     filteredEvents.forEach((event) => {
       const start = parseEventDate(event.start_at);
-      const end = parseEventDate(event.end_at);
-      const lastDate = event.all_day ? addDays(end, -1) : end;
+      const lastDate = getEventDisplayEndDate(event);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(lastDate.getTime())) return;
       for (let cursor = startOfDay(start); cursor <= startOfDay(lastDate); cursor = addDays(cursor, 1)) {
         const key = formatDateKey(cursor);
         const list = map.get(key) || [];

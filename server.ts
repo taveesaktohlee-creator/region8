@@ -356,6 +356,13 @@ function toInt(value: unknown, fallback = 0) {
   return Number.isFinite(numberValue) ? Math.round(numberValue) : fallback;
 }
 
+function toBooleanFlag(value: unknown) {
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'number') return value === 1 ? 1 : 0;
+  const text = String(value ?? '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(text) ? 1 : 0;
+}
+
 function normalizeCourseType(value: unknown) {
   const text = String(value || '').trim();
   if (['online', 'zoom', 'onsite'].includes(text)) return text;
@@ -2010,7 +2017,7 @@ app.post('/api/activity-calendar/events', async (req, res) => {
     const title = String(body.title || '').trim();
     const startAt = toMysqlLocalDateTime(body.start_at);
     const endAt = toMysqlLocalDateTime(body.end_at);
-    const allDay = body.all_day ? 1 : 0;
+    const allDay = toBooleanFlag(body.all_day);
     if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
     if (!title) return res.status(400).json({ error: 'กรุณาระบุชื่อกิจกรรม' });
     if (!startAt || !endAt || Date.parse(`${endAt.replace(' ', 'T')}+07:00`) <= Date.parse(`${startAt.replace(' ', 'T')}+07:00`)) {
@@ -2076,7 +2083,7 @@ app.put('/api/activity-calendar/events/:id', async (req, res) => {
         String(body.location || '').trim(),
         startAt,
         endAt,
-        body.all_day ? 1 : 0,
+        toBooleanFlag(body.all_day),
         String(body.color || '#3b82f6').trim() || '#3b82f6',
         eventId,
       ],
