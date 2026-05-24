@@ -110,8 +110,19 @@ function formatDateTimeForInput(date: Date) {
 function parseEventDate(value: string) {
   const text = String(value || '').trim();
   if (!text) return new Date(Number.NaN);
-  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) return new Date(text);
-  return new Date(`${text.replace(' ', 'T')}+07:00`);
+  const localMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (localMatch) {
+    const [, year, month, day, hour = '0', minute = '0', second = '0'] = localMatch;
+    return new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    );
+  }
+  return new Date(text);
 }
 
 function formatThaiDay(date: Date) {
@@ -213,7 +224,6 @@ export default function ActivityCalendar() {
     if (!currentUserId) return;
     setIsLoading(true);
     try {
-      await fetch(`${API_BASE}/api/admin/setup-activity-calendar-tables`, { method: 'POST' }).catch(() => null);
       const needle = search.trim();
       const requestRange = rangeOverride || (needle
         ? {
@@ -561,10 +571,18 @@ function MonthView({
           const isOutside = date.getMonth() !== currentDate.getMonth();
           const isToday = key === todayKey;
           return (
-            <button
+            <div
+              role="button"
+              tabIndex={0}
               key={key}
               onClick={() => onDayClick(date)}
-              className="min-h-[150px] border-b border-r border-slate-100 p-2 text-left transition hover:bg-blue-50/40"
+              onKeyDown={(keyEvent) => {
+                if (keyEvent.key === 'Enter' || keyEvent.key === ' ') {
+                  keyEvent.preventDefault();
+                  onDayClick(date);
+                }
+              }}
+              className="min-h-[150px] cursor-pointer border-b border-r border-slate-100 p-2 text-left transition hover:bg-blue-50/40"
             >
               <div className={`ml-auto flex h-7 w-7 items-center justify-center rounded-full text-sm font-black ${isToday ? 'bg-red-500 text-white' : isOutside ? 'text-slate-300' : 'text-slate-700'}`}>
                 {date.getDate()}
@@ -575,7 +593,7 @@ function MonthView({
                 ))}
                 {dayEvents.length > 4 && <div className="px-2 text-xs font-bold text-slate-400">+{dayEvents.length - 4} รายการ</div>}
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
@@ -591,7 +609,19 @@ function WeekView({ startDate, eventsByDate, onDayClick, onEventClick }: { start
         const key = formatDateKey(date);
         const dayEvents = eventsByDate.get(key) || [];
         return (
-          <button key={key} onClick={() => onDayClick(date)} className="border-b border-r border-slate-100 p-4 text-left hover:bg-blue-50/40">
+          <div
+            key={key}
+            role="button"
+            tabIndex={0}
+            onClick={() => onDayClick(date)}
+            onKeyDown={(keyEvent) => {
+              if (keyEvent.key === 'Enter' || keyEvent.key === ' ') {
+                keyEvent.preventDefault();
+                onDayClick(date);
+              }
+            }}
+            className="cursor-pointer border-b border-r border-slate-100 p-4 text-left hover:bg-blue-50/40"
+          >
             <p className="text-xs font-black text-slate-400">{DAY_NAMES[date.getDay()]}</p>
             <p className="mt-1 text-2xl font-black text-slate-900">{date.getDate()}</p>
             <div className="mt-4 space-y-2">
@@ -599,7 +629,7 @@ function WeekView({ startDate, eventsByDate, onDayClick, onEventClick }: { start
                 <EventPill key={`${key}-${event.event_id}`} event={event} onClick={onEventClick} />
               ))}
             </div>
-          </button>
+          </div>
         );
       })}
     </div>
