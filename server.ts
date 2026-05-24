@@ -25,6 +25,7 @@ let monitorRecordsReady: Promise<void> | null = null;
 let trainingTablesReady: Promise<void> | null = null;
 let knowledgeTablesReady: Promise<void> | null = null;
 let activityCalendarTablesReady: Promise<void> | null = null;
+let notificationTablesReady: Promise<void> | null = null;
 let passwordResetTokensReady: Promise<void> | null = null;
 
 const DEFAULT_MENU_ITEMS = [
@@ -606,6 +607,31 @@ async function ensureKnowledgeTables() {
   }
 
   return knowledgeTablesReady;
+}
+
+async function ensureNotificationTables() {
+  if (!notificationTablesReady) {
+    notificationTablesReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_notification_reads (
+          read_id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          notification_type ENUM('knowledge','activity') NOT NULL,
+          source_id INT NOT NULL,
+          read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY uq_user_notification_read (user_id, notification_type, source_id),
+          INDEX idx_user_notification_user (user_id),
+          INDEX idx_user_notification_source (notification_type, source_id),
+          FOREIGN KEY (user_id) REFERENCES user(user_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+    })().catch((error) => {
+      notificationTablesReady = null;
+      throw error;
+    });
+  }
+
+  return notificationTablesReady;
 }
 
 async function seedTrainingSampleData() {
@@ -2354,6 +2380,108 @@ app.post('/api/admin/setup-knowledge-tables', async (_req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการสร้างตารางคลังความรู้' });
+  }
+});
+
+app.get('/api/notifications', async (req, res) => {
+  try {
+    await ensureKnowledgeTables();
+    await ensureActivityCalendarTables();
+    await ensureNotificationTables();
+
+    const userId = toInt(req.query.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+
+    const [rows]: any = await pool.query(
+      `SELECT notification_type, source_id, title, subtitle, href, created_at
+       FROM (
+         SELECT
+           'knowledge' AS notification_type,
+           i.item_id AS source_id,
+           i.title AS title,
+           COALESCE(NULLIF(i.category, ''), 'คลังความรู้') AS subtitle,
+           CONCAT('/knowledge/', i.item_id) AS href,
+           COALESCE(i.published_at, i.created_at) AS sort_at,
+           DATE_FORMAT(COALESCE(i.published_at, i.created_at), '%Y-%m-%dT%H:%i:%s') AS created_at
+         FROM knowledge_items i
+         LEFT JOIN user_notification_reads r
+           ON r.user_id = ?
+          AND r.notification_type = 'knowledge'
+          AND r.source_id = i.item_id
+         LEFT JOIN knowledge_reading_logs l
+           ON l.user_id = ?
+          AND l.item_id = i.item_id
+         WHERE i.status = 'published'
+           AND r.read_id IS NULL
+           AND l.log_id IS NULL
+
+         UNION ALL
+
+         SELECT
+           'activity' AS notification_type,
+           e.event_id AS source_id,
+           e.title AS title,
+           CONCAT(
+             CASE
+               WHEN e.all_day = 1 THEN 'ทั้งวัน'
+               ELSE DATE_FORMAT(e.start_at, '%H:%i')
+             END,
+             ' · เพิ่มโดย ',
+             COALESCE(NULLIF(e.created_by_name, ''), u.Name_Surnam, 'ไม่ระบุ')
+           ) AS subtitle,
+           CONCAT('/activity-calendar?date=', DATE_FORMAT(e.start_at, '%Y-%m-%d'), '&event=', e.event_id) AS href,
+           e.created_at AS sort_at,
+           DATE_FORMAT(e.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at
+         FROM activity_events e
+         LEFT JOIN user u ON u.user_id = e.created_by_user_id
+         LEFT JOIN user_notification_reads r
+           ON r.user_id = ?
+          AND r.notification_type = 'activity'
+          AND r.source_id = e.event_id
+         WHERE e.source = 'system'
+           AND e.visibility = 'org'
+           AND r.read_id IS NULL
+       ) notifications
+       ORDER BY sort_at DESC
+       LIMIT 40`,
+      [userId, userId, userId],
+    );
+
+    res.json(rows.map((row: any) => ({
+      id: `${row.notification_type}:${row.source_id}`,
+      type: row.notification_type,
+      source_id: Number(row.source_id),
+      title: row.title || '',
+      subtitle: row.subtitle || '',
+      href: row.href || '/index',
+      created_at: row.created_at || '',
+    })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงข้อมูลแจ้งเตือนได้' });
+  }
+});
+
+app.post('/api/notifications/read', async (req, res) => {
+  try {
+    await ensureNotificationTables();
+    const userId = toInt(req.body.user_id);
+    const sourceId = toInt(req.body.source_id);
+    const notificationType = String(req.body.notification_type || '').trim();
+    if (!userId || !sourceId || !['knowledge', 'activity'].includes(notificationType)) {
+      return res.status(400).json({ error: 'ข้อมูลแจ้งเตือนไม่ครบถ้วน' });
+    }
+
+    await pool.query(
+      `INSERT INTO user_notification_reads (user_id, notification_type, source_id)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE read_at = CURRENT_TIMESTAMP`,
+      [userId, notificationType, sourceId],
+    );
+    res.json({ message: 'อ่านแจ้งเตือนแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'บันทึกสถานะแจ้งเตือนไม่สำเร็จ' });
   }
 });
 

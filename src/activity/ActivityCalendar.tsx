@@ -170,6 +170,13 @@ function getInitialForm(date = new Date()): EventForm {
   };
 }
 
+function getInitialCalendarDate() {
+  const dateParam = new URLSearchParams(window.location.search).get('date');
+  if (!dateParam) return new Date();
+  const parsed = parseEventDate(dateParam);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
 function getVisibleRange(date: Date, viewMode: ViewMode) {
   if (viewMode === 'year') {
     return {
@@ -208,7 +215,7 @@ export default function ActivityCalendar() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('month');
-  const [currentDate, setCurrentDate] = useState(() => new Date());
+  const [currentDate, setCurrentDate] = useState(() => getInitialCalendarDate());
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [google, setGoogle] = useState<GoogleConnection | null>(null);
   const [search, setSearch] = useState('');
@@ -275,6 +282,21 @@ export default function ActivityCalendar() {
     if (params.get('google') === 'error') toast.error('เชื่อม Google Calendar ไม่สำเร็จ');
     if (params.has('google')) window.history.replaceState({}, '', '/activity-calendar');
   }, []);
+
+  useEffect(() => {
+    const eventId = Number(new URLSearchParams(window.location.search).get('event') || 0);
+    if (!currentUserId || !eventId) return;
+    fetch(`${API_BASE}/api/notifications/read`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: currentUserId,
+        notification_type: 'activity',
+        source_id: eventId,
+      }),
+      keepalive: true,
+    }).catch(() => undefined);
+  }, [currentUserId]);
 
   const filteredEvents = useMemo(() => {
     const needle = search.trim().toLowerCase();

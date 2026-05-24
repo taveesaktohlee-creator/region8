@@ -127,6 +127,16 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
   useEffect(() => {
     if (!item || !userData?.user_id || startedRef.current) return;
     startedRef.current = true;
+    fetch(`${API_BASE}/api/notifications/read`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userData.user_id,
+        notification_type: 'knowledge',
+        source_id: itemId,
+      }),
+      keepalive: true,
+    }).catch(() => undefined);
     fetch(`${API_BASE}/api/knowledge/items/${itemId}/read/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -1,5 +1,6 @@
-import React from 'react';
-import { PanelLeft, RefreshCcw, Bell, LogOut } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Bell, BookOpen, CalendarDays, Loader2, LogOut, PanelLeft, RefreshCcw } from 'lucide-react';
+import { API_BASE } from './lib/apiConfig';
 
 interface HeaderProps {
   setIsSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -8,7 +9,111 @@ interface HeaderProps {
   handleLogout: () => void;
 }
 
+type NotificationType = 'knowledge' | 'activity';
+
+interface AppNotification {
+  id: string;
+  type: NotificationType;
+  source_id: number;
+  title: string;
+  subtitle: string;
+  href: string;
+  created_at: string;
+}
+
+function getStoredUserId() {
+  try {
+    const savedUser = localStorage.getItem('user');
+    if (!savedUser || savedUser === 'undefined') return 0;
+    const parsed = JSON.parse(savedUser);
+    return Number(parsed?.user_id || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function formatNotificationDate(value: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('th-TH', {
+    day: '2-digit',
+    month: 'short',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 const Header: React.FC<HeaderProps> = ({ setIsSidebarOpen, handleRefresh, isRefreshing, handleLogout }) => {
+  const userId = useMemo(() => getStoredUserId(), []);
+  const notificationPanelRef = useRef<HTMLDivElement | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [isNotificationLoading, setIsNotificationLoading] = useState(false);
+
+  const loadNotifications = useCallback(async () => {
+    if (!userId) return;
+    setIsNotificationLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/notifications?user_id=${userId}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'โหลดแจ้งเตือนไม่สำเร็จ');
+      setNotifications(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsNotificationLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return undefined;
+    void loadNotifications();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadNotifications();
+    }, 60_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') void loadNotifications();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [loadNotifications, userId]);
+
+  useEffect(() => {
+    if (!isNotificationOpen) return undefined;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!notificationPanelRef.current?.contains(event.target as Node)) setIsNotificationOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [isNotificationOpen]);
+
+  const handleNotificationClick = async (notification: AppNotification) => {
+    setNotifications((current) => current.filter((item) => item.id !== notification.id));
+    setIsNotificationOpen(false);
+    try {
+      await fetch(`${API_BASE}/api/notifications/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          notification_type: notification.type,
+          source_id: notification.source_id,
+        }),
+        keepalive: true,
+      });
+    } catch {
+      // Navigate anyway; the target page also marks the notification as read.
+    }
+    window.location.assign(notification.href || '/index');
+  };
+
+  const unreadCount = notifications.length;
+
   return (
     <header className="flex items-center justify-between px-8 py-5 sticky top-0 z-30 bg-[#F6F6F6]/90 backdrop-blur-3xl border-b border-black/5 transition-all">
       <div className="flex items-center gap-4">
@@ -27,10 +132,67 @@ const Header: React.FC<HeaderProps> = ({ setIsSidebarOpen, handleRefresh, isRefr
         <button onClick={handleRefresh} className="p-2.5 bg-white/70 backdrop-blur-md text-slate-600 rounded-full shadow-sm border border-white/60 hover:bg-white hover:shadow-md transition-all group cursor-pointer">
           <RefreshCcw size={18} className={`${isRefreshing ? 'animate-spin text-blue-600' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
         </button>
-        <button className="p-2.5 bg-white/70 backdrop-blur-md text-slate-600 rounded-full shadow-sm border border-white/60 hover:bg-white hover:shadow-md transition-all relative cursor-pointer">
-          <Bell size={18} />
-          <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
-        </button>
+        <div ref={notificationPanelRef} className="relative">
+          <button
+            type="button"
+            onClick={() => {
+              setIsNotificationOpen((value) => !value);
+              void loadNotifications();
+            }}
+            className="p-2.5 bg-white/70 backdrop-blur-md text-slate-600 rounded-full shadow-sm border border-white/60 hover:bg-white hover:shadow-md transition-all relative cursor-pointer"
+            aria-label="แจ้งเตือน"
+          >
+            <Bell size={18} />
+            {unreadCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-red-500 px-1 text-[10px] font-black leading-none text-white">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+          </button>
+
+          {isNotificationOpen && (
+            <div className="absolute right-0 mt-3 w-[min(380px,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-2xl shadow-slate-900/15">
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                <div>
+                  <p className="text-sm font-black text-slate-900">แจ้งเตือน</p>
+                  <p className="text-xs font-bold text-slate-400">คลังความรู้และตารางกิจกรรมใหม่</p>
+                </div>
+                {isNotificationLoading && <Loader2 className="animate-spin text-blue-600" size={18} />}
+              </div>
+
+              <div className="max-h-[420px] overflow-y-auto">
+                {notifications.length === 0 ? (
+                  <div className="px-5 py-8 text-center">
+                    <Bell className="mx-auto mb-3 text-slate-200" size={34} />
+                    <p className="text-sm font-black text-slate-500">ไม่มีแจ้งเตือนใหม่</p>
+                  </div>
+                ) : notifications.map((notification) => {
+                  const isKnowledge = notification.type === 'knowledge';
+                  return (
+                    <button
+                      key={notification.id}
+                      type="button"
+                      onClick={() => void handleNotificationClick(notification)}
+                      className="flex w-full gap-3 border-b border-slate-50 px-4 py-3 text-left transition hover:bg-blue-50/60"
+                    >
+                      <span className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${isKnowledge ? 'bg-rose-50 text-rose-600' : 'bg-sky-50 text-sky-600'}`}>
+                        {isKnowledge ? <BookOpen size={18} /> : <CalendarDays size={18} />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-black text-blue-600">{isKnowledge ? 'คลังความรู้ใหม่' : 'กิจกรรมใหม่'}</span>
+                        <span className="mt-0.5 block truncate text-sm font-black text-slate-900">{notification.title}</span>
+                        <span className="mt-1 block truncate text-xs font-bold text-slate-500">{notification.subtitle}</span>
+                        {notification.created_at && (
+                          <span className="mt-1 block text-[11px] font-bold text-slate-400">{formatNotificationDate(notification.created_at)}</span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
         <button onClick={handleLogout} className="p-2.5 bg-white/70 backdrop-blur-md text-slate-600 rounded-full shadow-sm border border-white/60 hover:bg-white hover:shadow-md transition-all group cursor-pointer">
           <LogOut size={18} className="group-hover:translate-x-0.5 transition-transform" />
         </button>
