@@ -2392,60 +2392,68 @@ app.get('/api/notifications', async (req, res) => {
     const userId = toInt(req.query.user_id);
     if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
 
-    const [rows]: any = await pool.query(
-      `SELECT notification_type, source_id, title, subtitle, href, created_at
-       FROM (
-         SELECT
-           'knowledge' AS notification_type,
-           i.item_id AS source_id,
-           i.title AS title,
-           COALESCE(NULLIF(i.category, ''), 'คลังความรู้') AS subtitle,
-           CONCAT('/knowledge/', i.item_id) AS href,
-           COALESCE(i.published_at, i.created_at) AS sort_at,
-           DATE_FORMAT(COALESCE(i.published_at, i.created_at), '%Y-%m-%dT%H:%i:%s') AS created_at
-         FROM knowledge_items i
-         LEFT JOIN user_notification_reads r
-           ON r.user_id = ?
-          AND r.notification_type = 'knowledge'
-          AND r.source_id = i.item_id
-         LEFT JOIN knowledge_reading_logs l
-           ON l.user_id = ?
-          AND l.item_id = i.item_id
-         WHERE i.status = 'published'
-           AND r.read_id IS NULL
-           AND l.log_id IS NULL
-
-         UNION ALL
-
-         SELECT
-           'activity' AS notification_type,
-           e.event_id AS source_id,
-           e.title AS title,
-           CONCAT(
-             CASE
-               WHEN e.all_day = 1 THEN 'ทั้งวัน'
-               ELSE DATE_FORMAT(e.start_at, '%H:%i')
-             END,
-             ' · เพิ่มโดย ',
-             COALESCE(NULLIF(e.created_by_name, ''), u.Name_Surnam, 'ไม่ระบุ')
-           ) AS subtitle,
-           CONCAT('/activity-calendar?date=', DATE_FORMAT(e.start_at, '%Y-%m-%d'), '&event=', e.event_id) AS href,
-           e.created_at AS sort_at,
-           DATE_FORMAT(e.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at
-         FROM activity_events e
-         LEFT JOIN user u ON u.user_id = e.created_by_user_id
-         LEFT JOIN user_notification_reads r
-           ON r.user_id = ?
-          AND r.notification_type = 'activity'
-          AND r.source_id = e.event_id
-         WHERE e.source = 'system'
-           AND e.visibility = 'org'
-           AND r.read_id IS NULL
-       ) notifications
-       ORDER BY sort_at DESC
+    const [knowledgeRows]: any = await pool.query(
+      `SELECT
+         'knowledge' AS notification_type,
+         i.item_id AS source_id,
+         i.title AS title,
+         COALESCE(NULLIF(i.category, ''), 'คลังความรู้') AS subtitle,
+         CONCAT('/knowledge/', i.item_id) AS href,
+         DATE_FORMAT(COALESCE(i.published_at, i.created_at), '%Y-%m-%dT%H:%i:%s') AS sort_at,
+         DATE_FORMAT(COALESCE(i.published_at, i.created_at), '%Y-%m-%dT%H:%i:%s') AS created_at
+       FROM knowledge_items i
+       LEFT JOIN user_notification_reads r
+         ON r.user_id = ?
+        AND r.notification_type = 'knowledge'
+        AND r.source_id = i.item_id
+       LEFT JOIN knowledge_reading_logs l
+         ON l.user_id = ?
+        AND l.item_id = i.item_id
+       WHERE i.status = 'published'
+         AND r.read_id IS NULL
+         AND l.log_id IS NULL
+       ORDER BY COALESCE(i.published_at, i.created_at) DESC
        LIMIT 40`,
-      [userId, userId, userId],
+      [userId, userId],
     );
+
+    const [activityRows]: any = await pool.query(
+      `SELECT
+         'activity' AS notification_type,
+         e.event_id AS source_id,
+         e.title AS title,
+         CONCAT(
+           CASE
+             WHEN e.all_day = 1 THEN 'ทั้งวัน'
+             ELSE DATE_FORMAT(e.start_at, '%H:%i')
+           END,
+           ' · เพิ่มโดย ',
+           COALESCE(NULLIF(e.created_by_name, ''), u.Name_Surnam, 'ไม่ระบุ')
+         ) AS subtitle,
+         CONCAT('/activity-calendar?date=', DATE_FORMAT(e.start_at, '%Y-%m-%d'), '&event=', e.event_id) AS href,
+         DATE_FORMAT(e.created_at, '%Y-%m-%dT%H:%i:%s') AS sort_at,
+         DATE_FORMAT(e.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at
+       FROM activity_events e
+       LEFT JOIN user u ON u.user_id = e.created_by_user_id
+       LEFT JOIN user_notification_reads r
+         ON r.user_id = ?
+        AND r.notification_type = 'activity'
+        AND r.source_id = e.event_id
+       WHERE e.source = 'system'
+         AND e.visibility = 'org'
+         AND r.read_id IS NULL
+       ORDER BY e.created_at DESC
+       LIMIT 40`,
+      [userId],
+    );
+
+    const rows = [...knowledgeRows, ...activityRows]
+      .sort((a: any, b: any) => {
+        const aTime = Date.parse(String(a.sort_at || a.created_at || '').replace(' ', 'T'));
+        const bTime = Date.parse(String(b.sort_at || b.created_at || '').replace(' ', 'T'));
+        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
+      })
+      .slice(0, 40);
 
     res.json(rows.map((row: any) => ({
       id: `${row.notification_type}:${row.source_id}`,

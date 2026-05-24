@@ -13,6 +13,10 @@
       "destination": "/api/activity-calendar?path=:path*"
     },
     {
+      "source": "/api/notifications/:path*",
+      "destination": "/api/notifications?path=:path*"
+    },
+    {
       "source": "/api/admin/setup-activity-calendar-tables",
       "destination": "/api/activity-calendar?path=setup"
     },
