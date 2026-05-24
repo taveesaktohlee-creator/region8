@@ -419,6 +419,26 @@ function addDaysToDateString(dateText: string, days: number) {
   return formatBangkokDateTime(date).slice(0, 10);
 }
 
+function normalizeGoogleCalendarColor(value: unknown) {
+  const color = String(value || '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#22c55e';
+}
+
+function buildGoogleEventRange(event: any) {
+  const startDate = event.start?.date;
+  const endDate = event.end?.date;
+  const startDateTime = event.start?.dateTime;
+  const endDateTime = event.end?.dateTime;
+  const allDay = Boolean(startDate && endDate);
+  const startAt = allDay
+    ? `${startDate} 00:00:00`
+    : formatBangkokDateTime(new Date(startDateTime));
+  const endAt = allDay
+    ? `${endDate || addDaysToDateString(startDate, 1)} 00:00:00`
+    : formatBangkokDateTime(new Date(endDateTime || startDateTime));
+  return { allDay, startAt, endAt };
+}
+
 function getGoogleCalendarConfig() {
   const clientId = process.env.GOOGLE_CALENDAR_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_CALENDAR_CLIENT_SECRET?.trim();
@@ -2159,21 +2179,26 @@ app.post('/api/activity-calendar/google/sync', async (req, res) => {
     const lookaheadDays = Math.max(1, toInt(process.env.GOOGLE_CALENDAR_SYNC_LOOKAHEAD_DAYS, 365));
     const timeMinDate = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
     const timeMaxDate = new Date(Date.now() + lookaheadDays * 24 * 60 * 60 * 1000);
-    const timeMin = timeMinDate.toISOString();
-    const timeMax = timeMaxDate.toISOString();
-
-    const eventsUrl = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
-    eventsUrl.searchParams.set('timeMin', timeMin);
-    eventsUrl.searchParams.set('timeMax', timeMax);
-    eventsUrl.searchParams.set('singleEvents', 'true');
-    eventsUrl.searchParams.set('orderBy', 'startTime');
-    eventsUrl.searchParams.set('maxResults', '2500');
-    const calendarResponse = await fetch(eventsUrl, {
+    const calendarListResponse = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    const calendarData: any = await calendarResponse.json();
-    if (!calendarResponse.ok) {
-      throw new Error(calendarData.error?.message || 'ดึงข้อมูล Google Calendar ไม่สำเร็จ');
+    const calendarListData: any = await calendarListResponse.json();
+    if (!calendarListResponse.ok) {
+      throw new Error(calendarListData.error?.message || 'ดึงรายการ Google Calendar ไม่สำเร็จ');
+    }
+
+    const googleEmail = connections[0].google_email || 'Google Calendar';
+    const calendars = (calendarListData.items || [])
+      .filter((calendar: any) => calendar.selected !== false && calendar.hidden !== true)
+      .map((calendar: any) => ({
+        id: String(calendar.id || 'primary'),
+        summary: String(calendar.summary || calendar.id || 'Google Calendar'),
+        color: normalizeGoogleCalendarColor(calendar.backgroundColor),
+        primary: Boolean(calendar.primary),
+      }));
+
+    if (!calendars.some((calendar: any) => calendar.primary || calendar.id === 'primary')) {
+      calendars.unshift({ id: 'primary', summary: googleEmail, color: '#22c55e', primary: true });
     }
 
     const startWindow = formatBangkokDateTime(timeMinDate);
@@ -2184,48 +2209,65 @@ app.post('/api/activity-calendar/google/sync', async (req, res) => {
       [userId, endWindow, startWindow],
     );
 
-    const googleEmail = connections[0].google_email || 'Google Calendar';
     let inserted = 0;
-    for (const event of calendarData.items || []) {
-      if (event.status === 'cancelled') continue;
-      const startDate = event.start?.date;
-      const endDate = event.end?.date;
-      const startDateTime = event.start?.dateTime;
-      const endDateTime = event.end?.dateTime;
-      const allDay = Boolean(startDate && endDate);
-      const startAt = allDay
-        ? `${startDate} 00:00:00`
-        : formatBangkokDateTime(new Date(startDateTime));
-      const endAt = allDay
-        ? `${endDate || addDaysToDateString(startDate, 1)} 00:00:00`
-        : formatBangkokDateTime(new Date(endDateTime || startDateTime));
-      if (!event.id || !startAt || !endAt) continue;
+    for (const calendar of calendars) {
+      const eventsUrl = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.id)}/events`);
+      eventsUrl.searchParams.set('timeMin', timeMinDate.toISOString());
+      eventsUrl.searchParams.set('timeMax', timeMaxDate.toISOString());
+      eventsUrl.searchParams.set('singleEvents', 'true');
+      eventsUrl.searchParams.set('orderBy', 'startTime');
+      eventsUrl.searchParams.set('maxResults', '2500');
+      const calendarResponse = await fetch(eventsUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const calendarData: any = await calendarResponse.json();
+      if (!calendarResponse.ok) {
+        console.warn('Google Calendar sync skipped calendar', calendar.id, calendarData.error?.message || calendarData.error);
+        continue;
+      }
 
-      await pool.query(
-        `INSERT INTO activity_events
-         (title, description, location, start_at, end_at, all_day, color,
-          source, visibility, created_by_user_id, created_by_name,
-          google_calendar_id, google_event_id, google_html_link)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'google', 'private', ?, ?, 'primary', ?, ?)`,
-        [
-          String(event.summary || '(ไม่มีชื่อกิจกรรม)').trim(),
-          String(event.description || '').trim(),
-          String(event.location || '').trim(),
-          startAt,
-          endAt,
-          allDay ? 1 : 0,
-          '#22c55e',
-          userId,
-          googleEmail,
-          String(event.id),
-          String(event.htmlLink || ''),
-        ],
-      );
-      inserted += 1;
+      for (const event of calendarData.items || []) {
+        if (event.status === 'cancelled') continue;
+        const { allDay, startAt, endAt } = buildGoogleEventRange(event);
+        if (!event.id || !startAt || !endAt) continue;
+
+        await pool.query(
+          `INSERT INTO activity_events
+           (title, description, location, start_at, end_at, all_day, color,
+            source, visibility, created_by_user_id, created_by_name,
+            google_calendar_id, google_event_id, google_html_link)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'google', 'private', ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             title = VALUES(title),
+             description = VALUES(description),
+             location = VALUES(location),
+             start_at = VALUES(start_at),
+             end_at = VALUES(end_at),
+             all_day = VALUES(all_day),
+             color = VALUES(color),
+             created_by_name = VALUES(created_by_name),
+             google_html_link = VALUES(google_html_link)`,
+          [
+            String(event.summary || '(ไม่มีชื่อกิจกรรม)').trim(),
+            String(event.description || '').trim(),
+            String(event.location || '').trim(),
+            startAt,
+            endAt,
+            allDay ? 1 : 0,
+            calendar.color,
+            userId,
+            calendar.summary || googleEmail,
+            calendar.id,
+            String(event.id),
+            String(event.htmlLink || ''),
+          ],
+        );
+        inserted += 1;
+      }
     }
 
     await pool.query('UPDATE activity_google_connections SET last_synced_at = NOW() WHERE user_id = ?', [userId]);
-    res.json({ message: 'ซิงก์ Google Calendar เรียบร้อยแล้ว', synced_count: inserted });
+    res.json({ message: 'ซิงก์ Google Calendar เรียบร้อยแล้ว', synced_count: inserted, calendar_count: calendars.length });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'ซิงก์ Google Calendar ไม่สำเร็จ' });

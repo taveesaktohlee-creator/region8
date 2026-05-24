@@ -9,6 +9,14 @@
       "destination": "/api/training-evaluation"
     },
     {
+      "source": "/api/activity-calendar/:path*",
+      "destination": "/api/activity-calendar?path=:path*"
+    },
+    {
+      "source": "/api/admin/setup-activity-calendar-tables",
+      "destination": "/api/activity-calendar?path=setup"
+    },
+    {
       "source": "/api/users/forgot-password/check-email",
       "destination": "/api/forgot-password-check-email"
     },
