@@ -108,7 +108,10 @@ function formatDateTimeForInput(date: Date) {
 }
 
 function parseEventDate(value: string) {
-  return new Date(`${value}+07:00`);
+  const text = String(value || '').trim();
+  if (!text) return new Date(Number.NaN);
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) return new Date(text);
+  return new Date(`${text.replace(' ', 'T')}+07:00`);
 }
 
 function formatThaiDay(date: Date) {
@@ -139,6 +142,27 @@ function getInitialForm(date = new Date()): EventForm {
     all_day: false,
     color: EVENT_COLORS[0],
   };
+}
+
+function getVisibleRange(date: Date, viewMode: ViewMode) {
+  if (viewMode === 'year') {
+    return {
+      start: new Date(date.getFullYear(), 0, 1),
+      end: new Date(date.getFullYear() + 1, 0, 1),
+    };
+  }
+  if (viewMode === 'month') {
+    const first = startOfMonth(date);
+    const start = startOfWeek(first);
+    const end = addDays(start, 42);
+    return { start, end };
+  }
+  if (viewMode === 'week') {
+    const start = startOfWeek(date);
+    return { start, end: addDays(start, 7) };
+  }
+  const start = startOfDay(date);
+  return { start, end: addDays(start, 1) };
 }
 
 function eventToForm(event: ActivityEvent): EventForm {
@@ -180,36 +204,27 @@ export default function ActivityCalendar() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const visibleRange = useMemo(() => {
-    if (viewMode === 'year') {
-      return {
-        start: new Date(currentDate.getFullYear(), 0, 1),
-        end: new Date(currentDate.getFullYear() + 1, 0, 1),
-      };
-    }
-    if (viewMode === 'month') {
-      const first = startOfMonth(currentDate);
-      const start = startOfWeek(first);
-      const end = addDays(start, 42);
-      return { start, end };
-    }
-    if (viewMode === 'week') {
-      const start = startOfWeek(currentDate);
-      return { start, end: addDays(start, 7) };
-    }
-    const start = startOfDay(currentDate);
-    return { start, end: addDays(start, 1) };
-  }, [currentDate, viewMode]);
+  const visibleRange = useMemo(() => getVisibleRange(currentDate, viewMode), [currentDate, viewMode]);
 
-  const loadEvents = useCallback(async (showToast = false) => {
+  const loadEvents = useCallback(async (
+    showToast = false,
+    rangeOverride?: { start: Date; end: Date },
+  ) => {
     if (!currentUserId) return;
     setIsLoading(true);
     try {
       await fetch(`${API_BASE}/api/admin/setup-activity-calendar-tables`, { method: 'POST' }).catch(() => null);
+      const needle = search.trim();
+      const requestRange = rangeOverride || (needle
+        ? {
+            start: new Date(currentDate.getFullYear(), 0, 1),
+            end: new Date(currentDate.getFullYear() + 1, 0, 1),
+          }
+        : visibleRange);
       const params = new URLSearchParams({
         user_id: String(currentUserId),
-        start: formatDateKey(visibleRange.start),
-        end: formatDateKey(visibleRange.end),
+        start: formatDateKey(requestRange.start),
+        end: formatDateKey(requestRange.end),
       });
       const response = await fetch(`${API_BASE}/api/activity-calendar/events?${params.toString()}`);
       const data = await response.json();
@@ -223,7 +238,7 @@ export default function ActivityCalendar() {
     } finally {
       setIsLoading(false);
     }
-  }, [currentUserId, visibleRange]);
+  }, [currentDate, currentUserId, search, visibleRange]);
 
   useEffect(() => {
     void loadEvents();
@@ -313,7 +328,13 @@ export default function ActivityCalendar() {
       if (!response.ok) throw new Error(data.error || 'บันทึกกิจกรรมไม่สำเร็จ');
       toast.success(data.message);
       setModalOpen(false);
-      await loadEvents();
+      const savedDate = parseEventDate(form.start_at);
+      if (!Number.isNaN(savedDate.getTime())) {
+        setCurrentDate(savedDate);
+        await loadEvents(false, getVisibleRange(savedDate, viewMode));
+      } else {
+        await loadEvents();
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'บันทึกกิจกรรมไม่สำเร็จ');
     } finally {
