@@ -27,15 +27,6 @@ export default function App() {
     try {
       return text ? JSON.parse(text) : {};
     } catch {
-      const looksLikeHtml = /<!doctype|<html|<body|service temporarily unavailable/i.test(text);
-      if (looksLikeHtml) {
-        return {
-          error: res.status === 503
-            ? 'เซิร์ฟเวอร์ API ปลายทางไม่พร้อมให้บริการชั่วคราว กรุณาลองใหม่อีกครั้ง'
-            : 'เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง'
-        };
-      }
-
       return {
         error: res.status === 404
           ? 'ไม่พบ API นี้บนเซิร์ฟเวอร์ กรุณาอัปเดต backend เป็นเวอร์ชันล่าสุด'
