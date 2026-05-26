@@ -33,6 +33,10 @@
       "destination": "/api/reset-password"
     },
     {
+      "source": "/api/users/login",
+      "destination": "/api/users-login"
+    },
+    {
       "source": "/api/:path*",
       "destination": "http://region8.duckdns.org/api/:path*"
     },
