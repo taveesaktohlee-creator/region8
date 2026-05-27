@@ -112,6 +112,9 @@ const MENU_MAP: Record<string, { menu_key: string; menu_name: string }> = {
   '/activity-calendar':      { menu_key: 'activity_calendar', menu_name: 'ตารางกิจกรรม' },
   '/system-usage-report':    { menu_key: 'report_usage', menu_name: 'รายงานการใช้งานระบบ' },
   '/office-security-report': { menu_key: 'report_security', menu_name: 'รายงานความปลอดภัย' },
+  '/meeting-reports/office': { menu_key: 'meeting_reports_office', menu_name: 'รายงานการประชุมสำนักงาน' },
+  '/meeting-reports/area':   { menu_key: 'meeting_reports_area', menu_name: 'รายงานการประชุมสำนักงานในพื้นที่' },
+  '/meeting-reports-admin':  { menu_key: 'meeting_reports_admin', menu_name: 'จัดการรายงานการประชุม' },
 };
 
 let activeStartTime: number | null = null;

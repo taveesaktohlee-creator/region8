@@ -19,6 +19,9 @@ import ProgramMonitoring from './monitor/ProgramMonitoring'
 import MonitorData from './user/monitor_data'
 import SystemUsageReport from './user/SystemUsageReport'
 import OfficeSecurityReport from './security_report/OfficeSecurityReport'
+import MeetingReportList from './meeting_reports/MeetingReportList'
+import MeetingReportDetail from './meeting_reports/MeetingReportDetail'
+import MeetingReportAdmin from './meeting_reports/MeetingReportAdmin'
 import PermissionGuard from './lib/PermissionGuard'
 import { createSession, startHeartbeat, startPageTracking, getSessionId } from './lib/activityTracker'
 import './index.css'
@@ -55,6 +58,7 @@ const PROTECTED_ROUTES: Record<string, { component: React.ReactNode; menuKey: st
   '/monitor-data':         { component: <MonitorData />,          menuKey: 'monitor_data' },
   '/training-admin':       { component: <TrainingAdmin />,        menuKey: 'training_admin' },
   '/knowledge-admin':      { component: <KnowledgeAdmin />,       menuKey: 'knowledge_admin' },
+  '/meeting-reports-admin': { component: <MeetingReportAdmin />,   menuKey: 'meeting_reports_admin' },
   '/training-history':     { component: <TrainingHistory />,      menuKey: 'training' },
   '/training-courses':     { component: <TrainingCourses />,      menuKey: 'report_course' },
   '/knowledge':            { component: <KnowledgeList />,        menuKey: 'knowledge' },
@@ -62,6 +66,8 @@ const PROTECTED_ROUTES: Record<string, { component: React.ReactNode; menuKey: st
   '/program-monitoring':   { component: <ProgramMonitoring />,    menuKey: 'report_monitor' },
   '/system-usage-report':  { component: <SystemUsageReport />,    menuKey: 'report_usage' },
   '/office-security-report': { component: <OfficeSecurityReport />, menuKey: 'report_security' },
+  '/meeting-reports/office': { component: <MeetingReportList section="office" />, menuKey: 'meeting_reports_office' },
+  '/meeting-reports/area': { component: <MeetingReportList section="area" />, menuKey: 'meeting_reports_area' },
 };
 
 function AppRouter() {
@@ -86,6 +92,14 @@ function AppRouter() {
         <KnowledgeDetail itemId={itemId} />
       </PermissionGuard>
     );
+  }
+
+  if (path.startsWith('/meeting-reports/')) {
+    const segment = path.split('/').filter(Boolean)[1];
+    const reportId = Number(segment);
+    if (Number.isFinite(reportId) && reportId > 0) {
+      return <MeetingReportDetail reportId={reportId} />;
+    }
   }
 
   // หน้าที่ต้องตรวจสอบสิทธิ์

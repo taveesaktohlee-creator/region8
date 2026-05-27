@@ -41,6 +41,7 @@ let profileAvatarReady: Promise<void> | null = null;
 let monitorRecordsReady: Promise<void> | null = null;
 let trainingTablesReady: Promise<void> | null = null;
 let knowledgeTablesReady: Promise<void> | null = null;
+let meetingReportTablesReady: Promise<void> | null = null;
 let activityCalendarTablesReady: Promise<void> | null = null;
 let notificationTablesReady: Promise<void> | null = null;
 let passwordResetTokensReady: Promise<void> | null = null;
@@ -54,12 +55,15 @@ const DEFAULT_MENU_ITEMS = [
   ['monitor_data', 'บันทึกกำกับติดตามกลุ่มเทคฯ', 'sidebar', 'ClipboardEdit', '/monitor-data', 6],
   ['training_admin', 'จัดการระบบอบรม', 'sidebar', 'GraduationCap', '/training-admin', 7],
   ['knowledge_admin', 'จัดการคลังความรู้', 'sidebar', 'LibraryBig', '/knowledge-admin', 8],
+  ['meeting_reports_admin', 'จัดการรายงานการประชุม', 'sidebar', 'FileStack', '/meeting-reports-admin', 9],
   ['report_monitor', 'รายงานการกำกับติดตามฯ', 'content', 'Monitor', '/program-monitoring', 10],
   ['report_course', 'หลักสูตรการอบรม', 'content', 'BookOpen', '/training-courses', 11],
   ['report_usage', 'รายงานการใช้งานระบบ', 'content', 'Users', '/system-usage-report', 12],
   ['report_security', 'รายงานการรักษาความปลอดภัย', 'content', 'ShieldCheck', '/office-security-report', 13],
   ['knowledge', 'คลังความรู้', 'content', 'LibraryBig', '/knowledge', 14],
   ['activity_calendar', 'ตารางกิจกรรม', 'content', 'CalendarDays', '/activity-calendar', 15],
+  ['meeting_reports_office', 'รายงานการประชุมสำนักงาน', 'content', 'ClipboardList', '/meeting-reports/office', 16],
+  ['meeting_reports_area', 'รายงานการประชุมสำนักงานในพื้นที่', 'content', 'MapPinned', '/meeting-reports/area', 17],
 ];
 const GOOGLE_DRIVE_AVATAR_FOLDER_ID = '1aaQIZ3nUcr0iDLOq8xENFpM_halgcndE';
 const GOOGLE_AVATAR_UPLOAD_SCRIPT_URL = process.env.GOOGLE_AVATAR_UPLOAD_SCRIPT_URL || GOOGLE_MONITOR_SCRIPT_URL;
@@ -350,6 +354,21 @@ async function ensureDefaultMenuItems() {
     LEFT JOIN group_permissions gp ON gp.group_id = g.group_id AND gp.menu_id = m.menu_id
     WHERE gp.perm_id IS NULL
   `);
+
+  await pool.query(`
+    INSERT INTO group_permissions (group_id, menu_id, can_view)
+    SELECT source.group_id, admin_menu.menu_id, 1
+    FROM (
+      SELECT DISTINCT gp.group_id
+      FROM group_permissions gp
+      INNER JOIN menu_items m ON m.menu_id = gp.menu_id
+      WHERE m.menu_key = 'user_settings' AND gp.can_view = 1
+    ) source
+    JOIN menu_items admin_menu ON admin_menu.menu_key = 'meeting_reports_admin'
+    LEFT JOIN group_permissions existing
+      ON existing.group_id = source.group_id AND existing.menu_id = admin_menu.menu_id
+    WHERE existing.perm_id IS NULL
+  `);
 }
 
 async function ensureMonitorRecordsTable() {
@@ -628,6 +647,148 @@ async function ensureKnowledgeTables() {
   }
 
   return knowledgeTablesReady;
+}
+
+type MeetingReportSection = 'office' | 'area';
+
+const MEETING_REPORT_SECTION_LABELS: Record<MeetingReportSection, string> = {
+  office: 'สำนักงาน',
+  area: 'สำนักงานในพื้นที่',
+};
+
+const MEETING_REPORT_SECTION_MENU_KEYS: Record<MeetingReportSection, string> = {
+  office: 'meeting_reports_office',
+  area: 'meeting_reports_area',
+};
+
+function normalizeMeetingReportSection(value: unknown): MeetingReportSection {
+  return String(value || '').trim() === 'area' ? 'area' : 'office';
+}
+
+function normalizeMeetingReportStatus(value: unknown) {
+  const text = String(value || '').trim();
+  if (['draft', 'published', 'archived'].includes(text)) return text;
+  return 'published';
+}
+
+async function userCanAccessMenu(userId: number, menuKey: string) {
+  if (!userId || !menuKey) return false;
+  await ensureDefaultMenuItems();
+
+  const [userRows]: any = await pool.query('SELECT user_status FROM user WHERE user_id = ? LIMIT 1', [userId]);
+  if (userRows.length === 0) return false;
+  const groupId = toInt(userRows[0].user_status);
+  if (!groupId) return true;
+
+  const [rows]: any = await pool.query(
+    `SELECT gp.perm_id
+     FROM group_permissions gp
+     INNER JOIN menu_items m ON m.menu_id = gp.menu_id
+     WHERE gp.group_id = ? AND gp.can_view = 1 AND m.menu_key = ? AND m.is_active = 1
+     LIMIT 1`,
+    [groupId, menuKey],
+  );
+  return rows.length > 0;
+}
+
+async function requireMeetingReportAccess(res: ExpressResponse, userId: number, section: MeetingReportSection) {
+  const allowed = await userCanAccessMenu(userId, MEETING_REPORT_SECTION_MENU_KEYS[section]);
+  if (!allowed) {
+    res.status(403).json({ error: 'ไม่มีสิทธิ์เข้าถึงรายงานการประชุมส่วนนี้' });
+    return false;
+  }
+  return true;
+}
+
+async function requireMeetingReportAdmin(res: ExpressResponse, userId: number) {
+  const allowed = await userCanAccessMenu(userId, 'meeting_reports_admin');
+  if (!allowed) {
+    res.status(403).json({ error: 'ไม่มีสิทธิ์จัดการรายงานการประชุม' });
+    return false;
+  }
+  return true;
+}
+
+async function ensureMeetingReportTables() {
+  if (!meetingReportTablesReady) {
+    meetingReportTablesReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS meeting_reports (
+          report_id INT AUTO_INCREMENT PRIMARY KEY,
+          section ENUM('office','area') NOT NULL DEFAULT 'office',
+          title VARCHAR(255) NOT NULL,
+          meeting_date DATE NULL,
+          description TEXT NULL,
+          status ENUM('draft','published','archived') NOT NULL DEFAULT 'published',
+          pdf_url TEXT NULL,
+          pdf_file_id VARCHAR(255) DEFAULT '',
+          published_at DATETIME NULL,
+          view_count INT DEFAULT 0,
+          sort_order INT DEFAULT 0,
+          created_by_user_id INT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_meeting_report_section_status (section, status),
+          INDEX idx_meeting_report_published (published_at),
+          INDEX idx_meeting_report_sort (sort_order)
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS meeting_report_read_logs (
+          log_id INT AUTO_INCREMENT PRIMARY KEY,
+          report_id INT NOT NULL,
+          user_id INT NOT NULL,
+          session_id INT NULL,
+          start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+          end_time DATETIME NULL,
+          active_seconds INT DEFAULT 0,
+          created_date DATE GENERATED ALWAYS AS (DATE(start_time)) STORED,
+          INDEX idx_meeting_read_report (report_id),
+          INDEX idx_meeting_read_user (user_id),
+          INDEX idx_meeting_read_date (created_date),
+          INDEX idx_meeting_read_session (session_id),
+          FOREIGN KEY (report_id) REFERENCES meeting_reports(report_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS meeting_report_acknowledgements (
+          ack_id INT AUTO_INCREMENT PRIMARY KEY,
+          report_id INT NOT NULL,
+          user_id INT NOT NULL,
+          acknowledged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY uq_meeting_ack_user_report (report_id, user_id),
+          INDEX idx_meeting_ack_report (report_id),
+          INDEX idx_meeting_ack_user (user_id),
+          FOREIGN KEY (report_id) REFERENCES meeting_reports(report_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS meeting_report_comments (
+          comment_id INT AUTO_INCREMENT PRIMARY KEY,
+          report_id INT NOT NULL,
+          user_id INT NOT NULL,
+          page_number INT NOT NULL DEFAULT 1,
+          x_percent DECIMAL(6,3) NOT NULL DEFAULT 50,
+          y_percent DECIMAL(6,3) NOT NULL DEFAULT 20,
+          comment_text TEXT NOT NULL,
+          status ENUM('open','resolved') NOT NULL DEFAULT 'open',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_meeting_comment_report (report_id),
+          INDEX idx_meeting_comment_user (user_id),
+          FOREIGN KEY (report_id) REFERENCES meeting_reports(report_id) ON DELETE CASCADE
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+    })().catch((error) => {
+      meetingReportTablesReady = null;
+      throw error;
+    });
+  }
+
+  return meetingReportTablesReady;
 }
 
 async function ensureNotificationTables() {
@@ -2858,6 +3019,442 @@ app.get('/api/admin/knowledge/report', async (_req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'ไม่สามารถดึงรายงานคลังความรู้ได้' });
+  }
+});
+
+// ====== MEETING REPORT CIRCULATION ======
+
+app.post('/api/admin/setup-meeting-report-tables', async (_req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    await ensureDefaultMenuItems();
+    res.json({ message: 'ตารางรายงานการประชุมถูกสร้างเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการสร้างตารางรายงานการประชุม' });
+  }
+});
+
+app.get('/api/meeting-reports', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const userId = toInt(req.query.user_id);
+    const section = normalizeMeetingReportSection(req.query.section);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!(await requireMeetingReportAccess(res, userId, section))) return;
+
+    const [rows]: any = await pool.query(
+      `SELECT
+         r.report_id, r.section, r.title, r.meeting_date, r.description, r.status,
+         r.pdf_url, r.pdf_file_id, r.published_at, r.view_count, r.sort_order, r.updated_at,
+         CASE WHEN a.ack_id IS NULL THEN 0 ELSE 1 END AS acknowledged,
+         DATE_FORMAT(a.acknowledged_at, '%Y-%m-%dT%H:%i:%s') AS acknowledged_at,
+         (SELECT COUNT(*) FROM meeting_report_comments c WHERE c.report_id = r.report_id) AS comment_count
+       FROM meeting_reports r
+       LEFT JOIN meeting_report_acknowledgements a
+         ON a.report_id = r.report_id AND a.user_id = ?
+       WHERE r.section = ? AND r.status = 'published'
+       ORDER BY r.sort_order ASC, COALESCE(r.published_at, r.updated_at) DESC, r.report_id DESC`,
+      [userId, section],
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายงานการประชุมได้' });
+  }
+});
+
+app.get('/api/meeting-reports/:id', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const reportId = toInt(req.params.id);
+    const userId = toInt(req.query.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+
+    const [rows]: any = await pool.query(
+      `SELECT
+         r.*,
+         CASE WHEN a.ack_id IS NULL THEN 0 ELSE 1 END AS acknowledged,
+         DATE_FORMAT(a.acknowledged_at, '%Y-%m-%dT%H:%i:%s') AS acknowledged_at
+       FROM meeting_reports r
+       LEFT JOIN meeting_report_acknowledgements a
+         ON a.report_id = r.report_id AND a.user_id = ?
+       WHERE r.report_id = ? AND r.status = 'published'
+       LIMIT 1`,
+      [userId, reportId],
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'ไม่พบรายงานการประชุม' });
+    const report = rows[0];
+    const section = normalizeMeetingReportSection(report.section);
+    if (!(await requireMeetingReportAccess(res, userId, section))) return;
+
+    const [commentRows]: any = await pool.query(
+      `SELECT
+         c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+         c.comment_text, c.status,
+         DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
+         u.Name_Surnam AS Name_Surname,
+         u.position,
+         u.Division_Province,
+         u.Department
+       FROM meeting_report_comments c
+       INNER JOIN user u ON u.user_id = c.user_id
+       WHERE c.report_id = ?
+       ORDER BY c.page_number ASC, c.created_at ASC, c.comment_id ASC`,
+      [reportId],
+    );
+
+    res.json({
+      ...report,
+      section_label: MEETING_REPORT_SECTION_LABELS[section],
+      pdf_proxy_url: report.pdf_file_id ? buildDriveProxyPath(report.pdf_file_id) : '',
+      comments: commentRows,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายละเอียดรายงานการประชุมได้' });
+  }
+});
+
+app.post('/api/meeting-reports/:id/read/start', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const reportId = toInt(req.params.id);
+    const userId = toInt(req.body.user_id);
+    const sessionId = toInt(req.body.session_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+
+    const [reports]: any = await pool.query(
+      'SELECT report_id, section FROM meeting_reports WHERE report_id = ? AND status = "published" LIMIT 1',
+      [reportId],
+    );
+    if (reports.length === 0) return res.status(404).json({ error: 'ไม่พบรายงานการประชุม' });
+    const section = normalizeMeetingReportSection(reports[0].section);
+    if (!(await requireMeetingReportAccess(res, userId, section))) return;
+
+    const [result]: any = await pool.query(
+      'INSERT INTO meeting_report_read_logs (report_id, user_id, session_id, start_time) VALUES (?, ?, ?, NOW())',
+      [reportId, userId, sessionId || null],
+    );
+    await pool.query('UPDATE meeting_reports SET view_count = view_count + 1 WHERE report_id = ?', [reportId]);
+    res.json({ message: 'เริ่มบันทึกการอ่านแล้ว', log_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เริ่มบันทึกเวลาอ่านไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/meeting-reports/read-logs/:logId/time', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const logId = toInt(req.params.logId);
+    const userId = toInt(req.body.user_id);
+    const seconds = Math.max(0, Math.min(toInt(req.body.seconds), 60));
+    if (!logId || seconds <= 0) return res.json({ message: 'ไม่มีเวลาที่ต้องบันทึก' });
+
+    const params = userId ? [seconds, logId, userId] : [seconds, logId];
+    const userClause = userId ? 'AND user_id = ?' : '';
+    await pool.query(
+      `UPDATE meeting_report_read_logs
+       SET active_seconds = active_seconds + ?, end_time = NOW()
+       WHERE log_id = ? ${userClause}`,
+      params,
+    );
+    res.json({ message: 'บันทึกเวลาอ่านเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'บันทึกเวลาอ่านไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/meeting-reports/:id/acknowledge', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const reportId = toInt(req.params.id);
+    const userId = toInt(req.body.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+
+    const [reports]: any = await pool.query(
+      'SELECT report_id, section FROM meeting_reports WHERE report_id = ? AND status = "published" LIMIT 1',
+      [reportId],
+    );
+    if (reports.length === 0) return res.status(404).json({ error: 'ไม่พบรายงานการประชุม' });
+    const section = normalizeMeetingReportSection(reports[0].section);
+    if (!(await requireMeetingReportAccess(res, userId, section))) return;
+
+    await pool.query(
+      `INSERT INTO meeting_report_acknowledgements (report_id, user_id)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE acknowledged_at = acknowledged_at`,
+      [reportId, userId],
+    );
+    res.json({ message: 'รับทราบรายงานการประชุมเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'บันทึกรับทราบไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/meeting-reports/:id/comments', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const reportId = toInt(req.params.id);
+    const userId = toInt(req.body.user_id);
+    const pageNumber = Math.max(1, toInt(req.body.page_number, 1));
+    const xPercent = Math.max(0, Math.min(Number(req.body.x_percent ?? 50), 100));
+    const yPercent = Math.max(0, Math.min(Number(req.body.y_percent ?? 20), 100));
+    const commentText = String(req.body.comment_text || '').trim();
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!commentText) return res.status(400).json({ error: 'กรุณากรอกข้อความแจ้งแก้ไข' });
+
+    const [reports]: any = await pool.query(
+      'SELECT report_id, section FROM meeting_reports WHERE report_id = ? AND status = "published" LIMIT 1',
+      [reportId],
+    );
+    if (reports.length === 0) return res.status(404).json({ error: 'ไม่พบรายงานการประชุม' });
+    const section = normalizeMeetingReportSection(reports[0].section);
+    if (!(await requireMeetingReportAccess(res, userId, section))) return;
+
+    const [result]: any = await pool.query(
+      `INSERT INTO meeting_report_comments
+       (report_id, user_id, page_number, x_percent, y_percent, comment_text)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [reportId, userId, pageNumber, xPercent, yPercent, commentText],
+    );
+    const [rows]: any = await pool.query(
+      `SELECT
+         c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+         c.comment_text, c.status,
+         DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
+         u.Name_Surnam AS Name_Surname,
+         u.position,
+         u.Division_Province,
+         u.Department
+       FROM meeting_report_comments c
+       INNER JOIN user u ON u.user_id = c.user_id
+       WHERE c.comment_id = ?
+       LIMIT 1`,
+      [result.insertId],
+    );
+    res.json({ message: 'บันทึกข้อความแจ้งแก้ไขเรียบร้อยแล้ว', comment: rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'บันทึกข้อความแจ้งแก้ไขไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/admin/meeting-reports', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const userId = toInt(req.query.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!(await requireMeetingReportAdmin(res, userId))) return;
+
+    const [rows]: any = await pool.query(`
+      SELECT
+        r.*,
+        (SELECT COUNT(*) FROM meeting_report_read_logs l WHERE l.report_id = r.report_id) AS read_count,
+        (SELECT COUNT(DISTINCT l.user_id) FROM meeting_report_read_logs l WHERE l.report_id = r.report_id) AS reader_count,
+        (SELECT COUNT(*) FROM meeting_report_acknowledgements a WHERE a.report_id = r.report_id) AS acknowledgement_count,
+        (SELECT COUNT(*) FROM meeting_report_comments c WHERE c.report_id = r.report_id) AS comment_count
+      FROM meeting_reports r
+      ORDER BY r.section ASC, r.sort_order ASC, COALESCE(r.published_at, r.updated_at) DESC, r.report_id DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายการรายงานการประชุมได้' });
+  }
+});
+
+app.post('/api/admin/meeting-reports', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const body = req.body || {};
+    const userId = toInt(body.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!(await requireMeetingReportAdmin(res, userId))) return;
+
+    const title = String(body.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'กรุณาระบุชื่อรายงานการประชุม' });
+    const section = normalizeMeetingReportSection(body.section);
+    const status = normalizeMeetingReportStatus(body.status);
+    const pdfUrl = String(body.pdf_url || '').trim();
+    const meetingDate = DATE_ONLY_RE.test(String(body.meeting_date || '')) ? String(body.meeting_date) : null;
+
+    const [result]: any = await pool.query(
+      `INSERT INTO meeting_reports
+       (section, title, meeting_date, description, status, pdf_url, pdf_file_id,
+        published_at, sort_order, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ${status === 'published' ? 'NOW()' : 'NULL'}, ?, ?)`,
+      [
+        section,
+        title,
+        meetingDate,
+        String(body.description || '').trim(),
+        status,
+        pdfUrl,
+        String(body.pdf_file_id || extractGoogleDriveFileId(pdfUrl) || '').trim(),
+        toInt(body.sort_order),
+        userId,
+      ],
+    );
+    res.json({ message: 'เพิ่มรายงานการประชุมเรียบร้อยแล้ว', report_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'เพิ่มรายงานการประชุมไม่สำเร็จ' });
+  }
+});
+
+app.put('/api/admin/meeting-reports/:id', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const reportId = toInt(req.params.id);
+    const body = req.body || {};
+    const userId = toInt(body.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!(await requireMeetingReportAdmin(res, userId))) return;
+
+    const title = String(body.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'กรุณาระบุชื่อรายงานการประชุม' });
+    const section = normalizeMeetingReportSection(body.section);
+    const status = normalizeMeetingReportStatus(body.status);
+    const pdfUrl = String(body.pdf_url || '').trim();
+    const meetingDate = DATE_ONLY_RE.test(String(body.meeting_date || '')) ? String(body.meeting_date) : null;
+
+    await pool.query(
+      `UPDATE meeting_reports SET
+         section = ?, title = ?, meeting_date = ?, description = ?, status = ?,
+         pdf_url = ?, pdf_file_id = ?, sort_order = ?,
+         published_at = CASE WHEN ? = 'published' THEN COALESCE(published_at, NOW()) ELSE published_at END
+       WHERE report_id = ?`,
+      [
+        section,
+        title,
+        meetingDate,
+        String(body.description || '').trim(),
+        status,
+        pdfUrl,
+        String(body.pdf_file_id || extractGoogleDriveFileId(pdfUrl) || '').trim(),
+        toInt(body.sort_order),
+        status,
+        reportId,
+      ],
+    );
+    res.json({ message: 'แก้ไขรายงานการประชุมเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'แก้ไขรายงานการประชุมไม่สำเร็จ' });
+  }
+});
+
+app.delete('/api/admin/meeting-reports/:id', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const userId = toInt(req.query.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!(await requireMeetingReportAdmin(res, userId))) return;
+    await pool.query('DELETE FROM meeting_reports WHERE report_id = ?', [toInt(req.params.id)]);
+    res.json({ message: 'ลบรายงานการประชุมเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ลบรายงานการประชุมไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/admin/meeting-reports/pdf-drive', async (req, res) => {
+  try {
+    const { user_id, report_title, file_name, mime_type, base64 } = req.body || {};
+    const userId = toInt(user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!(await requireMeetingReportAdmin(res, userId))) return;
+    if (!base64 || typeof base64 !== 'string') {
+      return res.status(400).json({ error: 'ไม่พบไฟล์ PDF ที่ต้องการอัปโหลด' });
+    }
+    const safeMimeType = String(mime_type || 'application/pdf');
+    if (safeMimeType !== 'application/pdf' && !String(file_name || '').toLowerCase().endsWith('.pdf')) {
+      return res.status(400).json({ error: 'รายงานการประชุมต้องเป็นไฟล์ PDF เท่านั้น' });
+    }
+
+    const safeReportName = sanitizeAvatarFileName(report_title || 'meeting-report', 'meeting-report');
+    const safeFileName = sanitizeAvatarFileName(file_name || `${safeReportName}.pdf`, 'meeting-report.pdf');
+    const parsed = await postToDriveScript({
+      action: 'uploadAvatar',
+      folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
+      userId: 'meeting-report-pdf',
+      displayName: safeReportName,
+      fileName: `${Date.now()}-meeting-report-${safeFileName}`,
+      mimeType: 'application/pdf',
+      base64,
+    });
+
+    if (parsed?.ok === false) {
+      throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลด PDF ไป Google Drive ไม่สำเร็จ'));
+    }
+
+    const uploadPayload = buildDriveUploadPayload(parsed);
+    if (!uploadPayload.fileId && !uploadPayload.fileProxyPath && !uploadPayload.webViewLink) {
+      throw new Error('Google Apps Script อัปโหลดสำเร็จไม่สมบูรณ์: ไม่พบรหัสไฟล์หรือ URL จาก Google Drive กรุณา Deploy Apps Script เวอร์ชันล่าสุด');
+    }
+
+    res.json(uploadPayload);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      error: error instanceof Error
+        ? error.message
+        : 'ไม่สามารถอัปโหลด PDF รายงานการประชุมไปยัง Google Drive ได้',
+    });
+  }
+});
+
+app.get('/api/admin/meeting-reports/report', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const userId = toInt(req.query.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!(await requireMeetingReportAdmin(res, userId))) return;
+
+    const [reads]: any = await pool.query(`
+      SELECT
+        l.report_id, l.user_id, r.section, r.title, r.meeting_date,
+        u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department,
+        COUNT(l.log_id) AS read_count,
+        COALESCE(SUM(l.active_seconds), 0) AS total_active_seconds,
+        MIN(l.start_time) AS first_read_at,
+        MAX(COALESCE(l.end_time, l.start_time)) AS last_read_at
+      FROM meeting_report_read_logs l
+      INNER JOIN meeting_reports r ON r.report_id = l.report_id
+      INNER JOIN user u ON u.user_id = l.user_id
+      GROUP BY l.report_id, l.user_id, r.section, r.title, r.meeting_date, u.Name_Surnam, u.position, u.Division_Province, u.Department
+      ORDER BY last_read_at DESC
+    `);
+    const [acknowledgements]: any = await pool.query(`
+      SELECT
+        a.report_id, a.user_id, r.section, r.title, r.meeting_date,
+        u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department,
+        DATE_FORMAT(a.acknowledged_at, '%Y-%m-%dT%H:%i:%s') AS acknowledged_at
+      FROM meeting_report_acknowledgements a
+      INNER JOIN meeting_reports r ON r.report_id = a.report_id
+      INNER JOIN user u ON u.user_id = a.user_id
+      ORDER BY a.acknowledged_at DESC
+    `);
+    const [comments]: any = await pool.query(`
+      SELECT
+        c.comment_id, c.report_id, c.user_id, r.section, r.title, r.meeting_date,
+        c.page_number, c.x_percent, c.y_percent, c.comment_text, c.status,
+        DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
+        u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department
+      FROM meeting_report_comments c
+      INNER JOIN meeting_reports r ON r.report_id = c.report_id
+      INNER JOIN user u ON u.user_id = c.user_id
+      ORDER BY c.created_at DESC
+    `);
+
+    res.json({ reads, acknowledgements, comments });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายงานหลังบ้านได้' });
   }
 });
 
