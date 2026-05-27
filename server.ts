@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type NextFunction, type Request, type Response as ExpressResponse } from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
@@ -7,6 +7,23 @@ import { pool } from './src/lib/dbconnect.js';
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
+app.use((err: unknown, _req: Request, res: ExpressResponse, next: NextFunction) => {
+  const bodyError = err as { status?: number; type?: string; body?: unknown } | undefined;
+
+  if (bodyError?.type === 'entity.too.large' || bodyError?.status === 413) {
+    return res.status(413).json({
+      error: 'ไฟล์หรือข้อมูลที่ส่งมามีขนาดใหญ่เกินไป กรุณาลดขนาดไฟล์แล้วลองใหม่',
+    });
+  }
+
+  if (err instanceof SyntaxError && bodyError && 'body' in bodyError) {
+    return res.status(400).json({
+      error: 'รูปแบบ JSON ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง',
+    });
+  }
+
+  return next(err);
+});
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const GOOGLE_MONITOR_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwiK32Dwn80oGfbG4yElZQmKW0IwblvPO85yCW_1ex7LfcCzwd0FtgWMfG45aSqUd3H/exec';
@@ -47,6 +64,10 @@ const DEFAULT_MENU_ITEMS = [
 const GOOGLE_DRIVE_AVATAR_FOLDER_ID = '1aaQIZ3nUcr0iDLOq8xENFpM_halgcndE';
 const GOOGLE_AVATAR_UPLOAD_SCRIPT_URL = process.env.GOOGLE_AVATAR_UPLOAD_SCRIPT_URL || GOOGLE_MONITOR_SCRIPT_URL;
 const GOOGLE_PASSWORD_RESET_SCRIPT_URL = process.env.GOOGLE_PASSWORD_RESET_SCRIPT_URL || GOOGLE_AVATAR_UPLOAD_SCRIPT_URL;
+const DRIVE_SCRIPT_TIMEOUT_MS = 45_000;
+const PROFILE_AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
+const PROFILE_AVATAR_UPLOAD_MAX_BASE64_LENGTH = Math.ceil((PROFILE_AVATAR_UPLOAD_MAX_BYTES * 4) / 3) + 128;
+const SUPPORTED_AVATAR_MIME_RE = /^image\/(jpeg|jpg|png|webp|gif|avif|bmp|svg\+xml|tiff|heic|heif)$/i;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_RESET_TOKEN_TTL_MINUTES = 30;
@@ -943,10 +964,43 @@ function getYouTubeEmbedUrl(url?: string | null) {
   return id ? `https://www.youtube.com/embed/${id}` : raw;
 }
 
+function truncateExternalMessage(value: unknown, fallback = 'ไม่สามารถเชื่อมต่อบริการภายนอกได้') {
+  const raw = typeof value === 'string' ? value : value instanceof Error ? value.message : '';
+  const withoutHtml = raw
+    .replace(/<!doctype[\s\S]*$/i, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return (withoutHtml || fallback).slice(0, 240);
+}
+
+function normalizeBase64Payload(value: string) {
+  const raw = value.includes(',') ? value.split(',').pop() || '' : value;
+  return raw.replace(/\s+/g, '');
+}
+
+function getBase64DecodedByteLength(value: string) {
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = DRIVE_SCRIPT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function isValidAvatarDataUrl(value: unknown) {
   if (value === null || value === undefined || value === '') return true;
   if (typeof value !== 'string') return false;
   if (/^https:\/\/(drive\.google\.com|lh3\.googleusercontent\.com|googleusercontent\.com)\//i.test(value)) return true;
+  if (/^\/api\/google-drive\/files\/[a-zA-Z0-9_-]+/i.test(value)) return true;
   return /^data:image\/(jpeg|jpg|png|webp|gif|avif|bmp|svg\+xml|tiff|heic|heif);base64,[A-Za-z0-9+/=\s]+$/i.test(value);
 }
 
@@ -959,6 +1013,8 @@ function extractGoogleDriveFileId(value: unknown) {
   if (typeof value !== 'string' || !value.trim()) return '';
 
   const raw = value.trim();
+  const proxyMatch = raw.match(/\/api\/google-drive\/files\/([^/?#]+)/);
+  if (proxyMatch?.[1]) return decodeURIComponent(proxyMatch[1]);
 
   try {
     const url = new URL(raw);
@@ -993,28 +1049,10 @@ async function deleteAvatarFromGoogleDrive(avatarUrlOrFileId: unknown) {
   const fileId = extractGoogleDriveFileId(avatarUrlOrFileId);
   if (!fileId) return { skipped: true, reason: 'ไม่พบ Google Drive fileId' };
 
-  const response = await fetch(GOOGLE_AVATAR_UPLOAD_SCRIPT_URL, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      action: 'deleteAvatar',
-      fileId,
-    }),
+  const parsed = await postToDriveScript({
+    action: 'deleteAvatar',
+    fileId,
   });
-
-  const text = await response.text();
-  if (!response.ok) throw new Error(text || 'Cannot delete avatar from Google Drive');
-  if (/script function not found|<!doctype|<html/i.test(text)) {
-    throw new Error('Google Apps Script ยังไม่รองรับการลบรูปจาก Google Drive');
-  }
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error('Google Apps Script ส่งผลลัพธ์การลบรูปกลับมาไม่ถูกต้อง');
-  }
 
   if (parsed?.ok === false) {
     throw new Error(getAvatarUploadErrorMessage(parsed.error || 'ลบรูปจาก Google Drive ไม่สำเร็จ'));
@@ -1094,15 +1132,26 @@ function buildDriveUploadPayload(parsed: any) {
 }
 
 async function postToDriveScript(payload: Record<string, unknown>) {
-  const response = await fetch(GOOGLE_AVATAR_UPLOAD_SCRIPT_URL, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(payload),
-  });
+  let response: globalThis.Response;
+
+  try {
+    response = await fetchWithTimeout(GOOGLE_AVATAR_UPLOAD_SCRIPT_URL, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Google Apps Script ใช้เวลาตอบกลับนานเกินไป กรุณาลองใหม่อีกครั้ง', { cause: error });
+    }
+    throw error;
+  }
 
   const text = await response.text();
-  if (!response.ok) throw new Error(text || 'Cannot call Google Apps Script');
+  if (!response.ok) {
+    throw new Error(truncateExternalMessage(text, 'Cannot call Google Apps Script'));
+  }
   if (/script function not found|<!doctype|<html/i.test(text)) {
     throw new Error('Google Apps Script ยังไม่รองรับคำสั่งนี้ โปรดอัปเดต Apps Script แล้ว Deploy เป็น New version');
   }
@@ -1502,51 +1551,64 @@ app.post('/api/users/profile/avatar-drive', async (req, res) => {
       return res.status(400).json({ error: 'ไม่พบไฟล์รูปภาพที่ต้องการอัปโหลด' });
     }
 
-    if (!mime_type || typeof mime_type !== 'string' || !mime_type.startsWith('image/')) {
-      return res.status(400).json({ error: 'ไฟล์ที่อัปโหลดต้องเป็นรูปภาพเท่านั้น' });
+    if (!mime_type || typeof mime_type !== 'string' || !SUPPORTED_AVATAR_MIME_RE.test(mime_type)) {
+      return res.status(400).json({ error: 'ไฟล์ที่อัปโหลดต้องเป็นรูปภาพที่รองรับเท่านั้น' });
+    }
+
+    const normalizedBase64 = normalizeBase64Payload(base64);
+    if (!normalizedBase64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalizedBase64)) {
+      return res.status(400).json({ error: 'ข้อมูลรูปภาพไม่ถูกต้อง กรุณาเลือกรูปใหม่' });
+    }
+
+    const decodedBytes = getBase64DecodedByteLength(normalizedBase64);
+    if (
+      normalizedBase64.length > PROFILE_AVATAR_UPLOAD_MAX_BASE64_LENGTH ||
+      decodedBytes > PROFILE_AVATAR_UPLOAD_MAX_BYTES
+    ) {
+      return res.status(413).json({ error: 'รูปประจำตัวมีขนาดใหญ่เกินไป กรุณาเลือกรูปใหม่หรือครอปรูปให้เล็กลง' });
     }
 
     const safeName = sanitizeAvatarFileName(display_name || user_id || 'user');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeName}-avatar.webp`);
-    const response = await fetch(GOOGLE_AVATAR_UPLOAD_SCRIPT_URL, {
-      method: 'POST',
-      redirect: 'follow',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action: 'uploadAvatar',
-        folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
-        userId: user_id || '',
-        displayName: display_name || '',
-        fileName: `${Date.now()}-${safeFileName}`,
-        mimeType: mime_type,
-        base64,
-      }),
+    const parsed = await postToDriveScript({
+      action: 'uploadAvatar',
+      folderId: GOOGLE_DRIVE_AVATAR_FOLDER_ID,
+      userId: user_id || '',
+      displayName: display_name || '',
+      fileName: `${Date.now()}-${safeFileName}`,
+      mimeType: mime_type,
+      base64: normalizedBase64,
     });
-
-    const text = await response.text();
-    if (!response.ok) throw new Error(text || 'Cannot upload avatar to Google Drive');
-    if (/script function not found|<!doctype|<html/i.test(text)) {
-      throw new Error('Google Apps Script ยังไม่รองรับการอัปโหลดรูปไป Google Drive');
-    }
-
-    let parsed: any;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error('Google Apps Script ส่งผลลัพธ์กลับมาไม่ถูกต้อง');
-    }
 
     if (parsed?.ok === false) {
       throw new Error(getAvatarUploadErrorMessage(parsed.error || 'อัปโหลดรูปไป Google Drive ไม่สำเร็จ'));
     }
 
-    res.json(parsed);
+    const uploadPayload = buildDriveUploadPayload(parsed);
+    const avatarUrl =
+      uploadPayload.fileProxyPath ||
+      uploadPayload.thumbnailUrl ||
+      uploadPayload.url ||
+      uploadPayload.webViewLink ||
+      uploadPayload.webContentLink;
+
+    if (!avatarUrl && !uploadPayload.fileId) {
+      throw new Error('Google Drive อัปโหลดสำเร็จไม่สมบูรณ์: ไม่พบ URL หรือรหัสไฟล์รูปประจำตัวกลับมา');
+    }
+
+    res.json({
+      ok: true,
+      ...uploadPayload,
+      thumbnailUrl: avatarUrl || uploadPayload.thumbnailUrl || '',
+      url: avatarUrl || uploadPayload.url || '',
+    });
   } catch (error) {
-    console.error(error);
+    console.error('Upload avatar to Google Drive failed:', error);
+    const message = error instanceof Error
+      ? error.message
+      : 'ไม่สามารถอัปโหลดรูปประจำตัวไปยัง Google Drive ได้';
     res.status(500).json({
-      error: error instanceof Error
-        ? error.message
-        : 'ไม่สามารถอัปโหลดรูปประจำตัวไปยัง Google Drive ได้',
+      error: getAvatarUploadErrorMessage(truncateExternalMessage(message)),
     });
   }
 });

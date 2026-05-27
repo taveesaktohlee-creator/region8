@@ -71,6 +71,27 @@ function dataUrlToBase64(dataUrl: string) {
   return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
 }
 
+type ApiJsonResponse = Record<string, any>;
+
+async function readJsonResponse(response: Response): Promise<ApiJsonResponse> {
+  const text = await response.text();
+  if (!text) return {};
+
+  try {
+    return JSON.parse(text) as ApiJsonResponse;
+  } catch {
+    const plain = text
+      .replace(/<!doctype[\s\S]*$/i, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return {
+      error: plain || 'เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง',
+    };
+  }
+}
+
 function encodeCanvasToWebp(canvas: HTMLCanvasElement, quality: number) {
   return new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, 'image/webp', quality);
@@ -230,14 +251,14 @@ export default function Profile() {
     try {
       setIsLoading(true);
       const res = await fetch(`${API_BASE}/api/users/profile/${id}`);
-      if (!res.ok) throw new Error('Failed to fetch');
-      const data = await res.json();
+      const data = await readJsonResponse(res);
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch');
       setProfileData(data);
       setEditForm(data);
       resetPendingAvatarState(data.avatar_data_url || '');
     } catch (err) {
       console.error(err);
-      toast.error('ไม่สามารถโหลดข้อมูลได้');
+      toast.error(err instanceof Error ? err.message : 'ไม่สามารถโหลดข้อมูลได้');
     } finally {
       setIsLoading(false);
     }
@@ -423,7 +444,7 @@ export default function Profile() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ avatar_url: previousAvatarUrl }),
       });
-      const deleteResult = await deleteRes.json().catch(() => ({}));
+      const deleteResult = await readJsonResponse(deleteRes);
 
       if (!deleteRes.ok || deleteResult?.ok === false) {
         throw new Error(deleteResult.error || 'ไม่สามารถลบรูปเดิมจาก Google Drive ได้');
@@ -460,11 +481,22 @@ export default function Profile() {
             base64: avatarToUpload.base64,
           }),
         });
-        const uploadResult = await uploadRes.json();
+        const uploadResult = await readJsonResponse(uploadRes);
         if (!uploadRes.ok || uploadResult?.ok === false) {
           throw new Error(uploadResult.error || 'ไม่สามารถอัปโหลดรูปไป Google Drive ได้');
         }
-        avatarUrl = uploadResult.thumbnailUrl || uploadResult.url || uploadResult.webViewLink;
+        const uploadedAvatarUrl =
+          uploadResult.fileProxyPath ||
+          uploadResult.thumbnailUrl ||
+          uploadResult.url ||
+          uploadResult.webViewLink ||
+          uploadResult.webContentLink;
+
+        if (!uploadedAvatarUrl) {
+          throw new Error('Google Drive ไม่ส่ง URL รูปประจำตัวกลับมา กรุณาลองใหม่อีกครั้ง');
+        }
+
+        avatarUrl = String(uploadedAvatarUrl);
       }
 
       const payload = {
@@ -477,12 +509,12 @@ export default function Profile() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const result = await res.json();
+      const result = await readJsonResponse(res);
       if (!res.ok) throw new Error(result.error || 'Update failed');
 
       await deletePreviousAvatarIfChanged(previousAvatarUrl, payload.avatar_data_url || null);
 
-      toast.success(result.message);
+      toast.success(result.message || 'บันทึกข้อมูลเรียบร้อย');
       setProfileData(payload);
       const updatedUser = {
         ...userData,

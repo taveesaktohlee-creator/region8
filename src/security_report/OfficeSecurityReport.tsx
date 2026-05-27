@@ -183,26 +183,17 @@ export default function OfficeSecurityReport() {
     return `${d} ${thaiMonths[parseInt(m) - 1]} ${yearThai}`;
   };
 
-  // จัดกลุ่มข้อมูลตามวัน (นับ 19:00 - 05:00 เป็นวันเดียวกัน)
+  // จัดกลุ่มข้อมูลตามวันที่จริง (หลังเที่ยงคืนเป็นของวันใหม่)
   const groupedData: { [key: string]: any[] } = {};
   filteredData.forEach(item => {
     const timeStr = item["ประทับเวลา"] || item["วันที่"] || "";
     if (!timeStr) return;
 
-    const [datePart, timePart] = timeStr.split(', ');
+    const [datePart] = timeStr.split(', ');
     const [d, m, y] = datePart.split('/').map(Number);
-    const [hh, mm] = (timePart || "00:00").split(':').map(Number);
 
-    // สร้าง Date object สำหรับคำนวณ (ใช้ ค.ศ.)
-    const entryDate = new Date(y, m - 1, d, hh, mm);
-    
-    // ถ้าเวลาอยู่ระหว่าง 00:00 - 05:59 น. ให้ถือเป็นข้อมูลของเมื่อวาน (กะกลางคืน)
-    const reportDate = new Date(entryDate);
-    if (hh < 6) { // ปรับเป็นก่อน 6 โมงเช้า (ครอบคลุมตี 5 ตามที่ผู้ใช้แจ้ง)
-      reportDate.setDate(reportDate.getDate() - 1);
-    }
-
-    const reportDateStr = `${reportDate.getDate()}/${reportDate.getMonth() + 1}/${reportDate.getFullYear()}`;
+    // ใช้วันที่ตามจริงจากประทับเวลา (หลังเที่ยงคืนนับเป็นวันใหม่)
+    const reportDateStr = `${d}/${m}/${y}`;
 
     if (!groupedData[reportDateStr]) {
       groupedData[reportDateStr] = [];
