@@ -16,6 +16,7 @@ import {
   formatMeetingReportDate,
   getDriveFileIdFromUrl,
   getStoredUser,
+  readApiResponse,
   readPdfFileAsBase64,
   sectionLabels,
   uploadMeetingReportPdf,
@@ -54,14 +55,14 @@ export default function MeetingReportAdmin() {
 
   const loadItems = useCallback(async (userId: number) => {
     const res = await fetch(`${API_BASE}/api/admin/meeting-reports?user_id=${userId}`);
-    const data = await res.json();
+    const data = await readApiResponse(res);
     if (!res.ok) throw new Error(data.error || 'Cannot load meeting reports');
     setItems(Array.isArray(data) ? data : []);
   }, []);
 
   const loadReport = useCallback(async (userId: number) => {
     const res = await fetch(`${API_BASE}/api/admin/meeting-reports/report?user_id=${userId}`);
-    const data = await res.json();
+    const data = await readApiResponse(res);
     if (!res.ok) throw new Error(data.error || 'Cannot load meeting report dashboard');
     setReportData({
       reads: Array.isArray(data.reads) ? data.reads : [],
@@ -79,8 +80,12 @@ export default function MeetingReportAdmin() {
     if (parsedUser) {
       setUserData(parsedUser);
       fetch(`${API_BASE}/api/admin/setup-meeting-report-tables`, { method: 'POST' })
-        .then(() => refreshAll(Number(parsedUser.user_id || 0)))
-        .catch(() => toast.error('โหลดข้อมูลรายงานการประชุมไม่สำเร็จ'));
+        .then(async (response) => {
+          const data = await readApiResponse(response);
+          if (!response.ok) throw new Error(data.error || 'ตั้งค่าตารางรายงานการประชุมไม่สำเร็จ');
+          await refreshAll(Number(parsedUser.user_id || 0));
+        })
+        .catch((error) => toast.error(error instanceof Error ? error.message : 'โหลดข้อมูลรายงานการประชุมไม่สำเร็จ'));
     }
     const handleResize = () => setIsSidebarOpen(window.innerWidth >= 1024);
     handleResize();
@@ -149,7 +154,7 @@ export default function MeetingReportAdmin() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...form, user_id: userData.user_id }),
     });
-    const data = await res.json().catch(() => ({}));
+    const data = await readApiResponse(res);
     if (!res.ok) {
       toast.error(data.error || 'บันทึกรายงานการประชุมไม่สำเร็จ');
       return;
@@ -162,7 +167,7 @@ export default function MeetingReportAdmin() {
   const deleteItem = async (reportId?: number) => {
     if (!reportId || !userData?.user_id || !window.confirm('ต้องการลบรายงานการประชุมนี้หรือไม่')) return;
     const res = await fetch(`${API_BASE}/api/admin/meeting-reports/${reportId}?user_id=${userData.user_id}`, { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
+    const data = await readApiResponse(res);
     if (!res.ok) {
       toast.error(data.error || 'ลบรายงานการประชุมไม่สำเร็จ');
       return;

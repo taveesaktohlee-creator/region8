@@ -113,6 +113,21 @@ export const emptyMeetingReport: MeetingReportItem = {
   sort_order: 0,
 };
 
+export async function readApiResponse(response: Response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    const message = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return {
+      error: message
+        ? message.slice(0, 240)
+        : `API ตอบกลับไม่ถูกต้อง (${response.status})`,
+    };
+  }
+}
+
 export function getStoredUser() {
   try {
     const savedUser = localStorage.getItem('user');
@@ -159,9 +174,9 @@ export async function uploadMeetingReportPdf(params: {
       base64: params.base64,
     }),
   });
-  const data = await response.json().catch(() => ({}));
+  const data = await readApiResponse(response);
   if (!response.ok || data?.ok === false) {
-    throw new Error(data?.error || 'อัปโหลด PDF รายงานการประชุมไม่สำเร็จ');
+    throw new Error(data?.error || `อัปโหลด PDF รายงานการประชุมไม่สำเร็จ (${response.status})`);
   }
   const upload = resolveDriveUploadResult(data);
   if (!upload.url) throw new Error('Google Drive ไม่ส่ง URL PDF กลับมา');

@@ -17,6 +17,22 @@
       "destination": "/api/notifications?path=:path*"
     },
     {
+      "source": "/api/admin/setup-meeting-report-tables",
+      "destination": "/api/meeting-reports?path=setup"
+    },
+    {
+      "source": "/api/admin/meeting-reports/:path*",
+      "destination": "/api/meeting-reports?path=admin/:path*"
+    },
+    {
+      "source": "/api/admin/meeting-reports",
+      "destination": "/api/meeting-reports?path=admin"
+    },
+    {
+      "source": "/api/meeting-reports/:path*",
+      "destination": "/api/meeting-reports?path=:path*"
+    },
+    {
       "source": "/api/admin/setup-activity-calendar-tables",
       "destination": "/api/activity-calendar?path=setup"
     },
