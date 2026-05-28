@@ -3243,6 +3243,59 @@ app.post('/api/meeting-reports/:id/comments', async (req, res) => {
   }
 });
 
+app.put('/api/meeting-reports/comments/:commentId', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const commentId = toInt(req.params.commentId);
+    const userId = toInt(req.body.user_id);
+    const commentText = String(req.body.comment_text || '').trim();
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!commentId) return res.status(400).json({ error: 'ไม่พบรหัสข้อความแจ้งแก้ไข' });
+    if (!commentText) return res.status(400).json({ error: 'กรุณากรอกข้อความแจ้งแก้ไข' });
+
+    const [comments]: any = await pool.query(
+      `SELECT c.comment_id, c.user_id, c.report_id, r.section
+       FROM meeting_report_comments c
+       INNER JOIN meeting_reports r ON r.report_id = c.report_id
+       WHERE c.comment_id = ?
+       LIMIT 1`,
+      [commentId],
+    );
+    if (comments.length === 0) return res.status(404).json({ error: 'ไม่พบข้อความแจ้งแก้ไข' });
+
+    const section = normalizeMeetingReportSection(comments[0].section);
+    const isOwner = Number(comments[0].user_id) === userId;
+    const isAdmin = await userCanAccessMenu(userId, 'meeting_reports_admin');
+    if (!isOwner && !isAdmin) return res.status(403).json({ error: 'แก้ไขได้เฉพาะข้อความของตนเอง' });
+    if (!isAdmin && !(await requireMeetingReportAccess(res, userId, section))) return;
+
+    await pool.query(
+      'UPDATE meeting_report_comments SET comment_text = ?, updated_at = CURRENT_TIMESTAMP WHERE comment_id = ?',
+      [commentText, commentId],
+    );
+
+    const [rows]: any = await pool.query(
+      `SELECT
+         c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+         c.comment_text, c.status,
+         DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
+         u.Name_Surnam AS Name_Surname,
+         u.position,
+         u.Division_Province,
+         u.Department
+       FROM meeting_report_comments c
+       INNER JOIN user u ON u.user_id = c.user_id
+       WHERE c.comment_id = ?
+       LIMIT 1`,
+      [commentId],
+    );
+    res.json({ message: 'แก้ไขข้อความแจ้งแก้ไขเรียบร้อยแล้ว', comment: rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'แก้ไขข้อความแจ้งแก้ไขไม่สำเร็จ' });
+  }
+});
+
 app.get('/api/admin/meeting-reports', async (req, res) => {
   try {
     await ensureMeetingReportTables();

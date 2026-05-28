@@ -500,6 +500,50 @@ async function addComment(body: any, res: any, reportId: number) {
   sendJson(res, 200, { message: 'บันทึกข้อความแจ้งแก้ไขเรียบร้อยแล้ว', comment: rows[0] });
 }
 
+async function updateComment(body: any, res: any, commentId: number) {
+  await setup();
+  const userId = toInt(body.user_id);
+  const commentText = String(body.comment_text || '').trim();
+  if (!userId) return sendJson(res, 400, { error: 'ไม่พบรหัสผู้ใช้งาน' });
+  if (!commentId) return sendJson(res, 400, { error: 'ไม่พบรหัสข้อความแจ้งแก้ไข' });
+  if (!commentText) return sendJson(res, 400, { error: 'กรุณากรอกข้อความแจ้งแก้ไข' });
+
+  const [comments]: any = await pool.query(
+    `SELECT c.comment_id, c.user_id, c.report_id, r.section
+     FROM meeting_report_comments c
+     INNER JOIN meeting_reports r ON r.report_id = c.report_id
+     WHERE c.comment_id = ?
+     LIMIT 1`,
+    [commentId],
+  );
+  if (comments.length === 0) return sendJson(res, 404, { error: 'ไม่พบข้อความแจ้งแก้ไข' });
+
+  const section = normalizeSection(comments[0].section);
+  const isOwner = Number(comments[0].user_id) === userId;
+  const isAdmin = await userCanAccessMenu(userId, 'meeting_reports_admin');
+  if (!isOwner && !isAdmin) return sendJson(res, 403, { error: 'แก้ไขได้เฉพาะข้อความของตนเอง' });
+  if (!isAdmin && !(await requireAccess(res, userId, section))) return;
+
+  await pool.query(
+    'UPDATE meeting_report_comments SET comment_text = ?, updated_at = CURRENT_TIMESTAMP WHERE comment_id = ?',
+    [commentText, commentId],
+  );
+
+  const [rows]: any = await pool.query(
+    `SELECT
+       c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+       c.comment_text, c.status,
+       DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
+       u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department
+     FROM meeting_report_comments c
+     INNER JOIN user u ON u.user_id = c.user_id
+     WHERE c.comment_id = ?
+     LIMIT 1`,
+    [commentId],
+  );
+  sendJson(res, 200, { message: 'แก้ไขข้อความแจ้งแก้ไขเรียบร้อยแล้ว', comment: rows[0] });
+}
+
 async function listAdminReports(req: any, res: any) {
   await setup();
   const userId = toInt(req.query?.user_id);
@@ -680,6 +724,9 @@ export default async function handler(req: any, res: any) {
 
     const commentMatch = path.match(/^(\d+)\/comments$/);
     if (commentMatch && req.method === 'POST') return addComment(body, res, toInt(commentMatch[1]));
+
+    const updateCommentMatch = path.match(/^comments\/(\d+)$/);
+    if (updateCommentMatch && req.method === 'PUT') return updateComment(body, res, toInt(updateCommentMatch[1]));
 
     return sendJson(res, 404, { error: 'ไม่พบ API รายงานการประชุมนี้' });
   } catch (error) {

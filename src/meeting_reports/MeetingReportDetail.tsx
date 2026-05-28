@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { ArrowLeft, CheckCircle2, FileText, Loader2, MessageSquare, MousePointer2, Timer } from 'lucide-react';
@@ -17,6 +17,7 @@ import {
   getMeetingReportPdfOpenUrl,
   getMeetingReportPdfPreviewUrl,
   getStoredUser,
+  readApiResponse,
   sectionLabels,
   type MeetingReportComment,
   type MeetingReportItem,
@@ -26,6 +27,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const READING_FLUSH_INTERVAL_MS = 15_000;
 const MAX_READING_CHUNK_SECONDS = 60;
+
+type DraftComment = {
+  pageNumber: number;
+  xPercent: number;
+  yPercent: number;
+};
 
 export default function MeetingReportDetail({ reportId }: { reportId: number }) {
   const [userData, setUserData] = useState<any>(null);
@@ -38,6 +45,7 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
   const [isPdfLoading, setIsPdfLoading] = useState(false);
   const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
   const [isCommentMode, setIsCommentMode] = useState(false);
+  const [draftComment, setDraftComment] = useState<DraftComment | null>(null);
   const [readLogId, setReadLogId] = useState<number | null>(null);
   const [readingSeconds, setReadingSeconds] = useState(0);
   const viewerRef = useRef<HTMLDivElement | null>(null);
@@ -270,22 +278,26 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
     setReport((current) => current ? { ...current, acknowledged: 1, acknowledged_at: current.acknowledged_at || new Date().toISOString() } : current);
   };
 
-  const handleAddComment = async (pageNumber: number, xPercent: number, yPercent: number) => {
+  const handleStartComment = (pageNumber: number, xPercent: number, yPercent: number) => {
+    setDraftComment({ pageNumber, xPercent, yPercent });
+  };
+
+  const handleSaveNewComment = async (commentText: string) => {
+    if (!draftComment) return;
     if (!userData?.user_id || !report?.report_id) return;
-    const commentText = window.prompt('ข้อความแจ้งแก้ไขรายงานการประชุม');
     if (!commentText?.trim()) return;
     const res = await fetch(`${API_BASE}/api/meeting-reports/${report.report_id}/comments`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         user_id: userData.user_id,
-        page_number: pageNumber,
-        x_percent: xPercent,
-        y_percent: yPercent,
+        page_number: draftComment.pageNumber,
+        x_percent: draftComment.xPercent,
+        y_percent: draftComment.yPercent,
         comment_text: commentText.trim(),
       }),
     });
-    const data = await res.json().catch(() => ({}));
+    const data = await readApiResponse(res);
     if (!res.ok) {
       toast.error(data.error || 'บันทึกข้อความแจ้งแก้ไขไม่สำเร็จ');
       return;
@@ -294,7 +306,42 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
     if (comment) {
       setReport((current) => current ? { ...current, comments: [...(current.comments || []), comment] } : current);
     }
+    setDraftComment(null);
     toast.success(data.message || 'เพิ่มคอมเมนต์แล้ว');
+  };
+
+  const handleUpdateComment = async (commentId: number, commentText: string) => {
+    if (!userData?.user_id) return false;
+    if (!commentText?.trim()) {
+      toast.warning('กรุณากรอกข้อความแจ้งแก้ไข');
+      return false;
+    }
+
+    const res = await fetch(`${API_BASE}/api/meeting-reports/comments/${commentId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userData.user_id,
+        comment_text: commentText.trim(),
+      }),
+    });
+    const data = await readApiResponse(res);
+    if (!res.ok) {
+      toast.error(data.error || 'แก้ไขข้อความแจ้งแก้ไขไม่สำเร็จ');
+      return false;
+    }
+
+    const updatedComment = data.comment as MeetingReportComment | undefined;
+    if (updatedComment) {
+      setReport((current) => current ? {
+        ...current,
+        comments: (current.comments || []).map((comment) => (
+          Number(comment.comment_id) === Number(commentId) ? updatedComment : comment
+        )),
+      } : current);
+    }
+    toast.success(data.message || 'แก้ไขข้อความแล้ว');
+    return true;
   };
 
   const handleLogout = async () => {
@@ -401,8 +448,13 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
                     pdfDoc={pdfDoc}
                     pageNumber={index + 1}
                     comments={comments.filter((comment) => Number(comment.page_number) === index + 1)}
+                    draftComment={draftComment?.pageNumber === index + 1 ? draftComment : null}
+                    currentUserId={Number(userData?.user_id || 0)}
                     isCommentMode={isCommentMode}
-                    onAddComment={handleAddComment}
+                    onStartComment={handleStartComment}
+                    onSaveNewComment={handleSaveNewComment}
+                    onCancelDraft={() => setDraftComment(null)}
+                    onUpdateComment={handleUpdateComment}
                   />
                 ))}
               </div>
@@ -411,8 +463,13 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
                 title={report.title}
                 previewUrl={pdfDrivePreviewUrl}
                 comments={comments}
+                draftComment={draftComment?.pageNumber === 1 ? draftComment : null}
+                currentUserId={Number(userData?.user_id || 0)}
                 isCommentMode={isCommentMode}
-                onAddComment={handleAddComment}
+                onStartComment={handleStartComment}
+                onSaveNewComment={handleSaveNewComment}
+                onCancelDraft={() => setDraftComment(null)}
+                onUpdateComment={handleUpdateComment}
               />
             ) : (
               <div className="flex min-h-[420px] flex-col items-center justify-center p-8 text-center text-slate-400">
@@ -433,14 +490,24 @@ function DrivePreviewFallback({
   title,
   previewUrl,
   comments,
+  draftComment,
+  currentUserId,
   isCommentMode,
-  onAddComment,
+  onStartComment,
+  onSaveNewComment,
+  onCancelDraft,
+  onUpdateComment,
 }: {
   title: string;
   previewUrl: string;
   comments: MeetingReportComment[];
+  draftComment: DraftComment | null;
+  currentUserId: number;
   isCommentMode: boolean;
-  onAddComment: (pageNumber: number, xPercent: number, yPercent: number) => void;
+  onStartComment: (pageNumber: number, xPercent: number, yPercent: number) => void;
+  onSaveNewComment: (commentText: string) => Promise<void>;
+  onCancelDraft: () => void;
+  onUpdateComment: (commentId: number, commentText: string) => Promise<boolean>;
 }) {
   const visibleComments = comments.filter((comment) => Number(comment.page_number || 1) === 1);
 
@@ -449,7 +516,7 @@ function DrivePreviewFallback({
     const rect = event.currentTarget.getBoundingClientRect();
     const xPercent = ((event.clientX - rect.left) / rect.width) * 100;
     const yPercent = ((event.clientY - rect.top) / rect.height) * 100;
-    onAddComment(1, xPercent, yPercent);
+    onStartComment(1, xPercent, yPercent);
   };
 
   return (
@@ -462,18 +529,28 @@ function DrivePreviewFallback({
       />
 
       {visibleComments.map((comment) => (
-        <div
+        <EditableCommentBubble
           key={comment.comment_id}
-          className="pointer-events-none absolute z-20 max-w-[260px] -translate-x-3 -translate-y-3 rounded-2xl border border-amber-200 bg-amber-50/95 p-3 text-left shadow-lg backdrop-blur"
+          comment={comment}
+          currentUserId={currentUserId}
+          onUpdateComment={onUpdateComment}
           style={{
             left: `${Number(comment.x_percent || 0)}%`,
             top: `${Number(comment.y_percent || 0)}%`,
           }}
-        >
-          <p className="text-xs font-black text-amber-800">{comment.Name_Surname || 'ผู้ใช้งาน'}</p>
-          <p className="mt-1 whitespace-pre-line break-words text-xs font-semibold leading-5 text-slate-700">{comment.comment_text}</p>
-        </div>
+        />
       ))}
+
+      {draftComment && (
+        <DraftCommentBubble
+          style={{
+            left: `${draftComment.xPercent}%`,
+            top: `${draftComment.yPercent}%`,
+          }}
+          onSave={onSaveNewComment}
+          onCancel={onCancelDraft}
+        />
+      )}
 
       {isCommentMode && (
         <div
@@ -494,14 +571,24 @@ function PdfPage({
   pdfDoc,
   pageNumber,
   comments,
+  draftComment,
+  currentUserId,
   isCommentMode,
-  onAddComment,
+  onStartComment,
+  onSaveNewComment,
+  onCancelDraft,
+  onUpdateComment,
 }: {
   pdfDoc: any;
   pageNumber: number;
   comments: MeetingReportComment[];
+  draftComment: DraftComment | null;
+  currentUserId: number;
   isCommentMode: boolean;
-  onAddComment: (pageNumber: number, xPercent: number, yPercent: number) => void;
+  onStartComment: (pageNumber: number, xPercent: number, yPercent: number) => void;
+  onSaveNewComment: (commentText: string) => Promise<void>;
+  onCancelDraft: () => void;
+  onUpdateComment: (commentId: number, commentText: string) => Promise<boolean>;
 }) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -559,7 +646,7 @@ function PdfPage({
     const rect = event.currentTarget.getBoundingClientRect();
     const xPercent = ((event.clientX - rect.left) / rect.width) * 100;
     const yPercent = ((event.clientY - rect.top) / rect.height) * 100;
-    onAddComment(pageNumber, xPercent, yPercent);
+    onStartComment(pageNumber, xPercent, yPercent);
   };
 
   return (
@@ -572,18 +659,197 @@ function PdfPage({
       >
         <canvas ref={canvasRef} className="block max-w-full" />
         {comments.map((comment) => (
-          <div
+          <EditableCommentBubble
             key={comment.comment_id}
-            className="absolute z-10 max-w-[260px] -translate-x-3 -translate-y-3 rounded-2xl border border-amber-200 bg-amber-50/95 p-3 text-left shadow-lg backdrop-blur"
+            comment={comment}
+            currentUserId={currentUserId}
+            onUpdateComment={onUpdateComment}
             style={{
               left: `${Number(comment.x_percent || 0)}%`,
               top: `${Number(comment.y_percent || 0)}%`,
             }}
-          >
-            <p className="text-xs font-black text-amber-800">{comment.Name_Surname || 'ผู้ใช้งาน'}</p>
-            <p className="mt-1 whitespace-pre-line break-words text-xs font-semibold leading-5 text-slate-700">{comment.comment_text}</p>
-          </div>
+          />
         ))}
+        {draftComment && (
+          <DraftCommentBubble
+            style={{
+              left: `${draftComment.xPercent}%`,
+              top: `${draftComment.yPercent}%`,
+            }}
+            onSave={onSaveNewComment}
+            onCancel={onCancelDraft}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EditableCommentBubble({
+  comment,
+  currentUserId,
+  style,
+  onUpdateComment,
+}: {
+  comment: MeetingReportComment;
+  currentUserId: number;
+  style: CSSProperties;
+  onUpdateComment: (commentId: number, commentText: string) => Promise<boolean>;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [text, setText] = useState(comment.comment_text);
+  const [isSaving, setIsSaving] = useState(false);
+  const canEdit = Number(comment.user_id) === currentUserId;
+
+  useEffect(() => {
+    setText(comment.comment_text);
+  }, [comment.comment_text]);
+
+  const save = async () => {
+    if (!canEdit || isSaving) return;
+    const nextText = text.trim();
+    if (!nextText) return;
+    if (nextText === comment.comment_text.trim()) {
+      setIsEditing(false);
+      return;
+    }
+    setIsSaving(true);
+    const ok = await onUpdateComment(comment.comment_id, nextText);
+    setIsSaving(false);
+    if (ok) setIsEditing(false);
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault();
+      void save();
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setText(comment.comment_text);
+      setIsEditing(false);
+    }
+  };
+
+  return (
+    <div
+      className={`absolute z-30 max-w-[300px] -translate-x-3 -translate-y-3 rounded-2xl border border-amber-200 bg-amber-50/95 p-3 text-left shadow-lg backdrop-blur ${canEdit ? 'cursor-text' : 'cursor-default'}`}
+      style={style}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (canEdit) setIsEditing(true);
+      }}
+      title={canEdit ? 'คลิกเพื่อแก้ไขข้อความนี้' : 'ข้อความแจ้งแก้ไข'}
+    >
+      <p className="text-xs font-black text-amber-800">{comment.Name_Surname || 'ผู้ใช้งาน'}</p>
+      {isEditing ? (
+        <div className="mt-2 grid gap-2">
+          <textarea
+            autoFocus
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={handleKeyDown}
+            rows={4}
+            className="w-[260px] resize-none rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-semibold leading-5 text-slate-800 outline-none focus:ring-2 focus:ring-amber-300"
+          />
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setText(comment.comment_text);
+                setIsEditing(false);
+              }}
+              className="rounded-lg px-3 py-1.5 text-xs font-black text-slate-500 hover:bg-slate-100"
+            >
+              ยกเลิก
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                void save();
+              }}
+              disabled={isSaving || !text.trim()}
+              className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-black text-white disabled:opacity-50"
+            >
+              {isSaving ? 'กำลังบันทึก...' : 'บันทึก'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="mt-1 whitespace-pre-line break-words text-xs font-semibold leading-5 text-slate-700">{comment.comment_text}</p>
+          {canEdit && <p className="mt-2 text-[10px] font-black text-amber-600">คลิกเพื่อแก้ไข</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function DraftCommentBubble({
+  style,
+  onSave,
+  onCancel,
+}: {
+  style: CSSProperties;
+  onSave: (commentText: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const save = async () => {
+    if (!text.trim() || isSaving) return;
+    setIsSaving(true);
+    await onSave(text);
+    setIsSaving(false);
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault();
+      void save();
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onCancel();
+    }
+  };
+
+  return (
+    <div
+      className="absolute z-40 w-[300px] -translate-x-3 -translate-y-3 rounded-2xl border border-blue-200 bg-white p-3 text-left shadow-xl shadow-blue-900/10"
+      style={style}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <p className="text-xs font-black text-blue-700">ข้อความแจ้งแก้ไขใหม่</p>
+      <textarea
+        autoFocus
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={handleKeyDown}
+        rows={4}
+        placeholder="พิมพ์ข้อความเหมือนคอมเมนต์ใน Word..."
+        className="mt-2 w-full resize-none rounded-xl border border-blue-100 bg-blue-50/40 px-3 py-2 text-xs font-semibold leading-5 text-slate-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-300"
+      />
+      <div className="mt-2 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg px-3 py-1.5 text-xs font-black text-slate-500 hover:bg-slate-100"
+        >
+          ยกเลิก
+        </button>
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={isSaving || !text.trim()}
+          className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-black text-white disabled:opacity-50"
+        >
+          {isSaving ? 'กำลังบันทึก...' : 'บันทึก'}
+        </button>
       </div>
     </div>
   );
