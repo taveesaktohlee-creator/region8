@@ -407,11 +407,12 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
                 ))}
               </div>
             ) : pdfDrivePreviewUrl ? (
-              <iframe
+              <DrivePreviewFallback
                 title={report.title}
-                src={pdfDrivePreviewUrl}
-                className="h-[78vh] min-h-[620px] w-full bg-slate-100"
-                allow="autoplay"
+                previewUrl={pdfDrivePreviewUrl}
+                comments={comments}
+                isCommentMode={isCommentMode}
+                onAddComment={handleAddComment}
               />
             ) : (
               <div className="flex min-h-[420px] flex-col items-center justify-center p-8 text-center text-slate-400">
@@ -424,6 +425,67 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
 
         <Footer />
       </main>
+    </div>
+  );
+}
+
+function DrivePreviewFallback({
+  title,
+  previewUrl,
+  comments,
+  isCommentMode,
+  onAddComment,
+}: {
+  title: string;
+  previewUrl: string;
+  comments: MeetingReportComment[];
+  isCommentMode: boolean;
+  onAddComment: (pageNumber: number, xPercent: number, yPercent: number) => void;
+}) {
+  const visibleComments = comments.filter((comment) => Number(comment.page_number || 1) === 1);
+
+  const handleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!isCommentMode) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const xPercent = ((event.clientX - rect.left) / rect.width) * 100;
+    const yPercent = ((event.clientY - rect.top) / rect.height) * 100;
+    onAddComment(1, xPercent, yPercent);
+  };
+
+  return (
+    <div className="relative h-[78vh] min-h-[620px] w-full bg-slate-100">
+      <iframe
+        title={title}
+        src={previewUrl}
+        className={`h-full w-full bg-slate-100 ${isCommentMode ? 'pointer-events-none' : ''}`}
+        allow="autoplay"
+      />
+
+      {visibleComments.map((comment) => (
+        <div
+          key={comment.comment_id}
+          className="pointer-events-none absolute z-20 max-w-[260px] -translate-x-3 -translate-y-3 rounded-2xl border border-amber-200 bg-amber-50/95 p-3 text-left shadow-lg backdrop-blur"
+          style={{
+            left: `${Number(comment.x_percent || 0)}%`,
+            top: `${Number(comment.y_percent || 0)}%`,
+          }}
+        >
+          <p className="text-xs font-black text-amber-800">{comment.Name_Surname || 'ผู้ใช้งาน'}</p>
+          <p className="mt-1 whitespace-pre-line break-words text-xs font-semibold leading-5 text-slate-700">{comment.comment_text}</p>
+        </div>
+      ))}
+
+      {isCommentMode && (
+        <div
+          onClick={handleClick}
+          className="absolute inset-0 z-10 cursor-crosshair bg-amber-200/10"
+          title="คลิกตำแหน่งที่ต้องการแจ้งแก้ไข"
+        >
+          <div className="absolute right-4 top-4 rounded-2xl border border-amber-200 bg-white/95 px-4 py-2 text-xs font-black text-amber-700 shadow-lg">
+            คลิกบนเอกสารเพื่อเพิ่มข้อความแจ้งแก้ไข
+          </div>
+        </div>
+      )}
     </div>
   );
 }
