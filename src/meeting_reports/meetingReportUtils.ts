@@ -6,6 +6,7 @@ import {
   formatThaiDate,
   getDriveFileIdFromUrl,
   getDrivePreviewUrl,
+  getDriveThumbnailUrl,
   getDriveWebViewUrl,
   readBlobAsDataUrl,
   resolveDriveUploadResult,
@@ -154,6 +155,11 @@ export function getMeetingReportDrivePreviewUrl(report?: Pick<MeetingReportItem,
   const fileId = getDriveFileIdFromUrl(report?.pdf_file_id || report?.pdf_url || report?.pdf_proxy_url || '');
   if (fileId) return getDrivePreviewUrl(fileId);
   return report?.pdf_url || '';
+}
+
+export function getMeetingReportPdfThumbnailUrl(report?: Pick<MeetingReportItem, 'pdf_file_id' | 'pdf_url' | 'pdf_proxy_url'> | null) {
+  const fileId = getDriveFileIdFromUrl(report?.pdf_file_id || report?.pdf_url || report?.pdf_proxy_url || '');
+  return fileId ? getDriveThumbnailUrl(fileId) : '';
 }
 
 export async function uploadMeetingReportPdf(params: {

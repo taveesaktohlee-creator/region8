@@ -13,6 +13,7 @@ import { closeSession, getSessionId, stopHeartbeat } from '../lib/activityTracke
 import {
   formatDuration,
   formatMeetingReportDate,
+  getMeetingReportDrivePreviewUrl,
   getMeetingReportPdfOpenUrl,
   getMeetingReportPdfPreviewUrl,
   getStoredUser,
@@ -35,6 +36,7 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [pageCount, setPageCount] = useState(0);
   const [isPdfLoading, setIsPdfLoading] = useState(false);
+  const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
   const [isCommentMode, setIsCommentMode] = useState(false);
   const [readLogId, setReadLogId] = useState<number | null>(null);
   const [readingSeconds, setReadingSeconds] = useState(0);
@@ -77,8 +79,10 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
 
   const pdfUrl = useMemo(() => getMeetingReportPdfPreviewUrl(report), [report]);
   const pdfOpenUrl = useMemo(() => getMeetingReportPdfOpenUrl(report), [report]);
+  const pdfDrivePreviewUrl = useMemo(() => getMeetingReportDrivePreviewUrl(report), [report]);
 
   useEffect(() => {
+    setPdfLoadFailed(false);
     if (!pdfUrl) {
       setPdfDoc(null);
       setPageCount(0);
@@ -98,7 +102,12 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
       })
       .catch((error) => {
         console.error(error);
-        if (!cancelled) toast.error('ไม่สามารถแสดง PDF ได้');
+        if (!cancelled) {
+          setPdfDoc(null);
+          setPageCount(0);
+          setPdfLoadFailed(true);
+          if (!pdfDrivePreviewUrl) toast.error('ไม่สามารถแสดง PDF ได้');
+        }
       })
       .finally(() => {
         if (!cancelled) setIsPdfLoading(false);
@@ -107,7 +116,9 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
       cancelled = true;
       void loadingTask.destroy();
     };
-  }, [pdfUrl]);
+  }, [pdfDrivePreviewUrl, pdfUrl]);
+
+  const viewerReady = Boolean(pdfDoc || (pdfLoadFailed && pdfDrivePreviewUrl));
 
   const shouldTrackReading = useCallback(() => {
     return (
@@ -180,7 +191,7 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
   }, [report, reportId, userData?.user_id]);
 
   useEffect(() => {
-    if (!readLogId || !pdfDoc) return;
+    if (!readLogId || !viewerReady) return;
     const viewer = viewerRef.current;
     if (!viewer) return;
 
@@ -241,7 +252,7 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
       viewerVisibleRef.current = false;
       isPageFocusedRef.current = false;
     };
-  }, [pauseTracking, pdfDoc, readLogId, sendReadingTime, shouldTrackReading, syncTracking]);
+  }, [pauseTracking, readLogId, sendReadingTime, shouldTrackReading, syncTracking, viewerReady]);
 
   const handleAcknowledge = async () => {
     if (!userData?.user_id || !report?.report_id) return;
@@ -330,7 +341,7 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
         <Header setIsSidebarOpen={setIsSidebarOpen} handleRefresh={handleRefresh} isRefreshing={isRefreshing} handleLogout={handleLogout} />
 
         <div className="mx-auto flex w-full max-w-[1540px] flex-col gap-6 px-4 py-8 sm:px-8">
-          <a href={`/meeting-reports/${section}`} className="inline-flex w-fit items-center gap-2 text-sm font-bold text-blue-600 hover:underline">
+          <a href={`/meeting-reports/${section}`} className="inline-flex w-fit cursor-pointer items-center gap-2 text-sm font-bold text-blue-600 hover:underline">
             <ArrowLeft size={16} /> กลับไปรายการรายงาน
           </a>
 
@@ -349,7 +360,7 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
               <button
                 type="button"
                 onClick={() => void handleAcknowledge()}
-                className={`rounded-2xl px-4 py-4 text-left shadow-sm transition ${Number(report.acknowledged || 0) === 1 ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                className={`cursor-pointer rounded-2xl px-4 py-4 text-left shadow-sm transition ${Number(report.acknowledged || 0) === 1 ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
               >
                 <CheckCircle2 size={20} />
                 <p className="mt-2 text-xs font-black opacity-80">สถานะ</p>
@@ -367,12 +378,12 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
                 <button
                   type="button"
                   onClick={() => setIsCommentMode((value) => !value)}
-                  className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm font-black transition ${isCommentMode ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+                  className={`inline-flex cursor-pointer items-center gap-2 rounded-2xl px-4 py-2 text-sm font-black transition ${isCommentMode ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
                 >
                   <MousePointer2 size={16} /> {isCommentMode ? 'กำลังคอมเมนต์' : 'คอมเมนต์บน PDF'}
                 </button>
                 {pdfOpenUrl && (
-                  <a href={pdfOpenUrl} target="_blank" rel="noreferrer" className="rounded-2xl bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
+                  <a href={pdfOpenUrl} target="_blank" rel="noreferrer" className="cursor-pointer rounded-2xl bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
                     เปิดใน Google Drive
                   </a>
                 )}
@@ -395,6 +406,13 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
                   />
                 ))}
               </div>
+            ) : pdfDrivePreviewUrl ? (
+              <iframe
+                title={report.title}
+                src={pdfDrivePreviewUrl}
+                className="h-[78vh] min-h-[620px] w-full bg-slate-100"
+                allow="autoplay"
+              />
             ) : (
               <div className="flex min-h-[420px] flex-col items-center justify-center p-8 text-center text-slate-400">
                 <FileText size={52} className="mb-4 text-slate-300" />

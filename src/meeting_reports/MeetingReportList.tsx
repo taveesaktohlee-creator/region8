@@ -7,6 +7,7 @@ import { API_BASE } from '../lib/apiConfig';
 import { closeSession, stopHeartbeat } from '../lib/activityTracker';
 import {
   formatMeetingReportDate,
+  getMeetingReportPdfThumbnailUrl,
   getStoredUser,
   sectionLabels,
   type MeetingReportItem,
@@ -119,24 +120,29 @@ export default function MeetingReportList({ section }: { section: MeetingReportS
               <a
                 key={report.report_id}
                 href={`/meeting-reports/${report.report_id}`}
-                className="group flex min-h-56 flex-col rounded-3xl border border-slate-100 bg-white p-6 shadow-[0_18px_45px_rgba(15,23,42,0.07)] transition hover:-translate-y-1 hover:shadow-[0_24px_60px_rgba(37,99,235,0.16)]"
+                className="group grid min-h-60 cursor-pointer overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.07)] transition hover:-translate-y-1 hover:shadow-[0_24px_60px_rgba(37,99,235,0.16)] md:grid-cols-[220px_minmax(0,1fr)]"
               >
-                <div className="flex items-start justify-between gap-4">
-                  <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                    <FileText size={28} />
-                  </span>
-                  {Number(report.acknowledged || 0) === 1 && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
-                      <CheckCircle2 size={14} /> รับทราบแล้ว
-                    </span>
-                  )}
+                <div className="relative min-h-52 overflow-hidden bg-slate-100 md:min-h-full">
+                  <PdfThumbnail report={report} />
                 </div>
-                <h2 className="mt-5 line-clamp-2 text-xl font-black leading-snug text-slate-900">{report.title}</h2>
-                {report.description && <p className="mt-3 line-clamp-2 text-sm font-semibold leading-6 text-slate-500">{report.description}</p>}
-                <div className="mt-auto grid gap-3 pt-6 text-sm font-bold text-slate-400 sm:grid-cols-3">
-                  <span>{formatMeetingReportDate(report.meeting_date || report.published_at || report.updated_at)}</span>
-                  <span className="inline-flex items-center gap-2"><Eye size={16} /> {Number(report.view_count || 0).toLocaleString('th-TH')} ครั้ง</span>
-                  <span className="inline-flex items-center gap-2"><MessageSquare size={16} /> {Number(report.comment_count || 0).toLocaleString('th-TH')} คอมเมนต์</span>
+                <div className="flex min-w-0 flex-col p-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                      <FileText size={24} />
+                    </span>
+                    {Number(report.acknowledged || 0) === 1 && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
+                        <CheckCircle2 size={14} /> รับทราบแล้ว
+                      </span>
+                    )}
+                  </div>
+                  <h2 className="mt-5 line-clamp-2 text-xl font-black leading-snug text-slate-900">{report.title}</h2>
+                  {report.description && <p className="mt-3 line-clamp-2 text-sm font-semibold leading-6 text-slate-500">{report.description}</p>}
+                  <div className="mt-auto grid gap-3 pt-6 text-sm font-bold text-slate-400 sm:grid-cols-3">
+                    <span>{formatMeetingReportDate(report.meeting_date || report.published_at || report.updated_at)}</span>
+                    <span className="inline-flex items-center gap-2"><Eye size={16} /> {Number(report.view_count || 0).toLocaleString('th-TH')} ครั้ง</span>
+                    <span className="inline-flex items-center gap-2"><MessageSquare size={16} /> {Number(report.comment_count || 0).toLocaleString('th-TH')} คอมเมนต์</span>
+                  </div>
                 </div>
               </a>
             ))}
@@ -146,5 +152,28 @@ export default function MeetingReportList({ section }: { section: MeetingReportS
         <Footer />
       </main>
     </div>
+  );
+}
+
+function PdfThumbnail({ report }: { report: MeetingReportItem }) {
+  const thumbnailUrl = getMeetingReportPdfThumbnailUrl(report);
+  const [hasError, setHasError] = useState(false);
+
+  if (!thumbnailUrl || hasError) {
+    return (
+      <div className="flex h-full min-h-52 w-full flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-slate-100 text-blue-500">
+        <FileText size={48} strokeWidth={1.6} />
+        <span className="mt-3 text-xs font-black text-slate-400">PDF</span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={thumbnailUrl}
+      alt={`ตัวอย่าง ${report.title}`}
+      onError={() => setHasError(true)}
+      className="h-full min-h-52 w-full bg-white object-cover object-top transition duration-500 group-hover:scale-105"
+    />
   );
 }
