@@ -3,6 +3,15 @@ import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { pool } from './src/lib/dbconnect.js';
+import {
+  assertLineGroupId,
+  ensureLineNotificationTables,
+  getLineMessagingConfigStatus,
+  seedLineNotificationTopics,
+  sendLineTestToGroup,
+  sendLineTopicNotification,
+  verifyLineGroup,
+} from './src/lib/lineGroupNotifications.js';
 
 const app = express();
 app.use(cors());
@@ -46,6 +55,7 @@ let activityCalendarTablesReady: Promise<void> | null = null;
 let notificationTablesReady: Promise<void> | null = null;
 let passwordResetTokensReady: Promise<void> | null = null;
 let lineLoginSchemaReady: Promise<void> | null = null;
+let lineNotificationSchemaReady: Promise<void> | null = null;
 
 const DEFAULT_MENU_ITEMS = [
   ['home', 'หน้าหลัก', 'sidebar', 'Home', '/index', 1],
@@ -335,6 +345,20 @@ async function ensureLineLoginSchema() {
   }
 
   return lineLoginSchemaReady;
+}
+
+async function ensureLineNotificationSchema() {
+  if (!lineNotificationSchemaReady) {
+    lineNotificationSchemaReady = (async () => {
+      await ensureLineNotificationTables(pool);
+      await seedLineNotificationTopics(pool);
+    })().catch((error) => {
+      lineNotificationSchemaReady = null;
+      throw error;
+    });
+  }
+
+  return lineNotificationSchemaReady;
 }
 
 async function ensureDefaultMenuItems() {
@@ -1937,6 +1961,218 @@ app.get('/api/line/callback', async (req, res) => {
   }
 });
 
+app.get('/api/admin/line-notification-settings', async (_req, res) => {
+  try {
+    await ensureDefaultMenuItems();
+    await ensureLineNotificationSchema();
+
+    const [topicRows]: any = await pool.query(`
+      SELECT
+        m.menu_id, m.menu_key, m.menu_name, m.menu_icon, m.menu_href, m.sort_order, m.is_active,
+        t.topic_id,
+        COALESCE(t.is_enabled, 0) AS is_enabled,
+        DATE_FORMAT(t.updated_at, '%Y-%m-%dT%H:%i:%s') AS updated_at
+      FROM menu_items m
+      LEFT JOIN line_notification_topics t ON t.menu_key = m.menu_key
+      WHERE m.menu_type = 'content'
+      ORDER BY m.sort_order ASC, m.menu_name ASC
+    `);
+    const [groups]: any = await pool.query(`
+      SELECT group_ref_id, group_name, group_id, is_active,
+             DATE_FORMAT(last_verified_at, '%Y-%m-%dT%H:%i:%s') AS last_verified_at,
+             last_error
+      FROM line_notification_groups
+      ORDER BY is_active DESC, group_name ASC
+    `);
+    const [links]: any = await pool.query(`
+      SELECT t.menu_key, tg.group_ref_id
+      FROM line_notification_topic_groups tg
+      INNER JOIN line_notification_topics t ON t.topic_id = tg.topic_id
+    `);
+
+    const groupIdsByTopic = new Map<string, number[]>();
+    for (const link of links) {
+      const key = String(link.menu_key || '');
+      const next = groupIdsByTopic.get(key) || [];
+      next.push(Number(link.group_ref_id));
+      groupIdsByTopic.set(key, next);
+    }
+
+    res.json({
+      line_config: getLineMessagingConfigStatus(),
+      topics: topicRows.map((topic: any) => ({
+        ...topic,
+        is_enabled: Number(topic.is_enabled) === 1,
+        group_ref_ids: groupIdsByTopic.get(String(topic.menu_key)) || [],
+      })),
+      groups: groups.map((group: any) => ({
+        ...group,
+        is_active: Number(group.is_active) === 1,
+      })),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'ไม่สามารถดึงตั้งค่าแจ้งเตือน LINE ได้' });
+  }
+});
+
+app.put('/api/admin/line-notification-settings', async (req, res) => {
+  try {
+    await ensureDefaultMenuItems();
+    await ensureLineNotificationSchema();
+    const topics = Array.isArray(req.body?.topics) ? req.body.topics : [];
+    const userId = Number(req.body?.user_id) || null;
+
+    const [menus]: any = await pool.query(
+      "SELECT menu_key FROM menu_items WHERE menu_type = 'content' AND is_active = 1",
+    );
+    const allowedKeys = new Set(menus.map((menu: any) => String(menu.menu_key)));
+
+    for (const topic of topics) {
+      const menuKey = String(topic?.menu_key || '').trim();
+      if (!allowedKeys.has(menuKey)) continue;
+
+      await pool.query(
+        `INSERT INTO line_notification_topics (menu_key, is_enabled, updated_by_user_id)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           is_enabled = VALUES(is_enabled),
+           updated_by_user_id = VALUES(updated_by_user_id)`,
+        [menuKey, topic?.is_enabled ? 1 : 0, userId],
+      );
+
+      const [topicRows]: any = await pool.query(
+        'SELECT topic_id FROM line_notification_topics WHERE menu_key = ? LIMIT 1',
+        [menuKey],
+      );
+      const topicId = Number(topicRows[0]?.topic_id);
+      if (!topicId) continue;
+
+      await pool.query('DELETE FROM line_notification_topic_groups WHERE topic_id = ?', [topicId]);
+      const groupIds = Array.isArray(topic?.group_ref_ids)
+        ? [...new Set(topic.group_ref_ids.map((value: unknown) => Number(value)).filter((value: number) => Number.isFinite(value) && value > 0))]
+        : [];
+      if (groupIds.length > 0) {
+        const [validGroups]: any = await pool.query(
+          'SELECT group_ref_id FROM line_notification_groups WHERE group_ref_id IN (?)',
+          [groupIds],
+        );
+        const values = validGroups.map((group: any) => [topicId, Number(group.group_ref_id)]);
+        if (values.length > 0) {
+          await pool.query(
+            'INSERT IGNORE INTO line_notification_topic_groups (topic_id, group_ref_id) VALUES ?',
+            [values],
+          );
+        }
+      }
+    }
+
+    res.json({ message: 'บันทึกตั้งค่าแจ้งเตือน LINE เรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'บันทึกตั้งค่าแจ้งเตือน LINE ไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/admin/line-notification-groups', async (req, res) => {
+  try {
+    await ensureLineNotificationSchema();
+    const groupId = assertLineGroupId(req.body?.group_id);
+    const verified = await verifyLineGroup(groupId);
+    const groupName = String(req.body?.group_name || verified.groupName || groupId).trim();
+
+    const [result]: any = await pool.query(
+      `INSERT INTO line_notification_groups
+         (group_name, group_id, is_active, last_verified_at, last_error)
+       VALUES (?, ?, 1, NOW(), NULL)
+       ON DUPLICATE KEY UPDATE
+         group_name = VALUES(group_name),
+         is_active = 1,
+         last_verified_at = NOW(),
+         last_error = NULL`,
+      [groupName, verified.groupId],
+    );
+
+    res.json({
+      message: 'เพิ่ม LINE group เรียบร้อยแล้ว',
+      group_ref_id: result.insertId || null,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'เพิ่ม LINE group ไม่สำเร็จ' });
+  }
+});
+
+app.put('/api/admin/line-notification-groups/:id', async (req, res) => {
+  try {
+    await ensureLineNotificationSchema();
+    const groupRefId = toInt(req.params.id);
+    if (!groupRefId) return res.status(400).json({ error: 'ไม่พบรหัส LINE group' });
+
+    const groupId = req.body?.group_id ? assertLineGroupId(req.body.group_id) : '';
+    let verified: { groupId: string; groupName: string } | null = null;
+    if (groupId) verified = await verifyLineGroup(groupId);
+
+    const groupName = String(req.body?.group_name || verified?.groupName || '').trim();
+    const isActive = toBooleanFlag(req.body?.is_active);
+
+    if (groupId) {
+      await pool.query(
+        `UPDATE line_notification_groups
+         SET group_name = COALESCE(NULLIF(?, ''), group_name),
+             group_id = ?,
+             is_active = ?,
+             last_verified_at = NOW(),
+             last_error = NULL
+         WHERE group_ref_id = ?`,
+        [groupName, verified?.groupId || groupId, isActive, groupRefId],
+      );
+    } else {
+      await pool.query(
+        `UPDATE line_notification_groups
+         SET group_name = COALESCE(NULLIF(?, ''), group_name),
+             is_active = ?
+         WHERE group_ref_id = ?`,
+        [groupName, isActive, groupRefId],
+      );
+    }
+
+    res.json({ message: 'บันทึก LINE group เรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'บันทึก LINE group ไม่สำเร็จ' });
+  }
+});
+
+app.delete('/api/admin/line-notification-groups/:id', async (req, res) => {
+  try {
+    await ensureLineNotificationSchema();
+    const groupRefId = toInt(req.params.id);
+    if (!groupRefId) return res.status(400).json({ error: 'ไม่พบรหัส LINE group' });
+    await pool.query('DELETE FROM line_notification_groups WHERE group_ref_id = ?', [groupRefId]);
+    res.json({ message: 'ลบ LINE group เรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ลบ LINE group ไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/admin/line-notifications/test', async (req, res) => {
+  try {
+    const groupRefId = toInt(req.body?.group_ref_id);
+    if (!groupRefId) return res.status(400).json({ error: 'กรุณาเลือก LINE group ที่ต้องการทดสอบ' });
+    const result = await sendLineTestToGroup(pool, {
+      groupRefId,
+      menuKey: String(req.body?.menu_key || 'line_test').trim(),
+      message: String(req.body?.message || '').trim(),
+    });
+    res.json({ message: `ส่งข้อความทดสอบไปยัง ${result.group_name} เรียบร้อยแล้ว` });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'ส่งข้อความทดสอบ LINE ไม่สำเร็จ' });
+  }
+});
+
 // ตรวจสอบอีเมลสำหรับขอรีเซ็ตรหัสผ่าน
 app.post('/api/users/forgot-password/check-email', async (req, res) => {
   try {
@@ -2680,6 +2916,14 @@ app.post('/api/activity-calendar/events', async (req, res) => {
         String(users[0].Name_Surnam || '').trim(),
       ],
     );
+    await sendLineTopicNotification(pool, {
+      menuKey: 'activity_calendar',
+      sourceType: 'activity_event',
+      sourceId: result.insertId,
+      title,
+      description: String(body.description || '').trim(),
+      href: `/activity-calendar?date=${startAt.slice(0, 10)}&event=${result.insertId}`,
+    });
     res.json({ message: 'เพิ่มกิจกรรมเรียบร้อยแล้ว', event_id: result.insertId });
   } catch (error) {
     console.error(error);
@@ -3272,6 +3516,16 @@ app.post('/api/admin/knowledge/items', async (req, res) => {
         toInt(body.sort_order),
       ],
     );
+    if (status === 'published') {
+      await sendLineTopicNotification(pool, {
+        menuKey: 'knowledge',
+        sourceType: 'knowledge_item',
+        sourceId: result.insertId,
+        title,
+        description: String(body.description || '').trim(),
+        href: `/knowledge/${result.insertId}`,
+      });
+    }
     res.json({ message: 'เพิ่มเรื่องในคลังความรู้เรียบร้อยแล้ว', item_id: result.insertId });
   } catch (error) {
     console.error(error);
@@ -3289,6 +3543,12 @@ app.put('/api/admin/knowledge/items/:id', async (req, res) => {
     const status = normalizeKnowledgeStatus(body.status);
     const coverUrl = String(body.cover_url || '').trim();
     const pdfUrl = String(body.pdf_url || '').trim();
+
+    const [existing]: any = await pool.query(
+      'SELECT status FROM knowledge_items WHERE item_id = ? LIMIT 1',
+      [itemId],
+    );
+    const wasPublished = existing[0]?.status === 'published';
 
     await pool.query(
       `UPDATE knowledge_items SET
@@ -3311,6 +3571,16 @@ app.put('/api/admin/knowledge/items/:id', async (req, res) => {
         itemId,
       ],
     );
+    if (!wasPublished && status === 'published') {
+      await sendLineTopicNotification(pool, {
+        menuKey: 'knowledge',
+        sourceType: 'knowledge_item',
+        sourceId: itemId,
+        title,
+        description: String(body.description || '').trim(),
+        href: `/knowledge/${itemId}`,
+      });
+    }
     res.json({ message: 'แก้ไขเรื่องในคลังความรู้เรียบร้อยแล้ว' });
   } catch (error) {
     console.error(error);
@@ -3836,6 +4106,16 @@ app.post('/api/admin/meeting-reports', async (req, res) => {
         userId,
       ],
     );
+    if (status === 'published') {
+      await sendLineTopicNotification(pool, {
+        menuKey: section === 'area' ? 'meeting_reports_area' : 'meeting_reports_office',
+        sourceType: 'meeting_report',
+        sourceId: result.insertId,
+        title,
+        description: String(body.description || '').trim(),
+        href: `/meeting-reports/${result.insertId}`,
+      });
+    }
     res.json({ message: 'เพิ่มรายงานการประชุมเรียบร้อยแล้ว', report_id: result.insertId });
   } catch (error) {
     console.error(error);
@@ -3859,6 +4139,12 @@ app.put('/api/admin/meeting-reports/:id', async (req, res) => {
     const pdfUrl = String(body.pdf_url || '').trim();
     const meetingDate = DATE_ONLY_RE.test(String(body.meeting_date || '')) ? String(body.meeting_date) : null;
 
+    const [existing]: any = await pool.query(
+      'SELECT status FROM meeting_reports WHERE report_id = ? LIMIT 1',
+      [reportId],
+    );
+    const wasPublished = existing[0]?.status === 'published';
+
     await pool.query(
       `UPDATE meeting_reports SET
          section = ?, title = ?, meeting_date = ?, description = ?, status = ?,
@@ -3878,6 +4164,16 @@ app.put('/api/admin/meeting-reports/:id', async (req, res) => {
         reportId,
       ],
     );
+    if (!wasPublished && status === 'published') {
+      await sendLineTopicNotification(pool, {
+        menuKey: section === 'area' ? 'meeting_reports_area' : 'meeting_reports_office',
+        sourceType: 'meeting_report',
+        sourceId: reportId,
+        title,
+        description: String(body.description || '').trim(),
+        href: `/meeting-reports/${reportId}`,
+      });
+    }
     res.json({ message: 'แก้ไขรายงานการประชุมเรียบร้อยแล้ว' });
   } catch (error) {
     console.error(error);
@@ -4460,6 +4756,8 @@ app.post('/api/admin/training/courses', async (req, res) => {
     await ensureTrainingTables();
     const body = req.body || {};
     if (!String(body.title || '').trim()) return res.status(400).json({ error: 'กรุณาระบุชื่อหลักสูตร' });
+    const title = String(body.title || '').trim();
+    const status = normalizeTrainingStatus(body.status);
 
     const [result]: any = await pool.query(
       `INSERT INTO training_courses
@@ -4468,10 +4766,10 @@ app.post('/api/admin/training/courses', async (req, res) => {
         duration_minutes, zoom_url, location, pass_score, certificate_enabled)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        String(body.title || '').trim(),
+        title,
         String(body.category || '').trim(),
         normalizeCourseType(body.course_type),
-        normalizeTrainingStatus(body.status),
+        status,
         String(body.thumbnail_url || '').trim(),
         String(body.instructor || '').trim(),
         String(body.target_group || '').trim(),
@@ -4487,6 +4785,16 @@ app.post('/api/admin/training/courses', async (req, res) => {
         body.certificate_enabled === false ? 0 : 1,
       ],
     );
+    if (status === 'open') {
+      await sendLineTopicNotification(pool, {
+        menuKey: 'report_course',
+        sourceType: 'training_course',
+        sourceId: result.insertId,
+        title,
+        description: String(body.description || body.content_summary || '').trim(),
+        href: `/training-courses/${result.insertId}`,
+      });
+    }
     res.json({ message: 'เพิ่มหลักสูตรเรียบร้อยแล้ว', course_id: result.insertId });
   } catch (error) {
     console.error(error);
@@ -4499,6 +4807,13 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
     await ensureTrainingTables();
     const courseId = toInt(req.params.id);
     const body = req.body || {};
+    const title = String(body.title || '').trim();
+    const status = normalizeTrainingStatus(body.status);
+    const [existing]: any = await pool.query(
+      'SELECT status FROM training_courses WHERE course_id = ? LIMIT 1',
+      [courseId],
+    );
+    const wasOpen = existing[0]?.status === 'open';
     await pool.query(
       `UPDATE training_courses SET
        title=?, category=?, course_type=?, status=?, thumbnail_url=?, instructor=?, target_group=?,
@@ -4506,10 +4821,10 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
        duration_minutes=?, zoom_url=?, location=?, pass_score=?, certificate_enabled=?
        WHERE course_id=?`,
       [
-        String(body.title || '').trim(),
+        title,
         String(body.category || '').trim(),
         normalizeCourseType(body.course_type),
-        normalizeTrainingStatus(body.status),
+        status,
         String(body.thumbnail_url || '').trim(),
         String(body.instructor || '').trim(),
         String(body.target_group || '').trim(),
@@ -4526,6 +4841,16 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
         courseId,
       ],
     );
+    if (!wasOpen && status === 'open') {
+      await sendLineTopicNotification(pool, {
+        menuKey: 'report_course',
+        sourceType: 'training_course',
+        sourceId: courseId,
+        title,
+        description: String(body.description || body.content_summary || '').trim(),
+        href: `/training-courses/${courseId}`,
+      });
+    }
     res.json({ message: 'แก้ไขหลักสูตรเรียบร้อยแล้ว' });
   } catch (error) {
     console.error(error);

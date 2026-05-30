@@ -254,8 +254,20 @@ export default function Profile() {
       const res = await fetch(`${API_BASE}/api/users/profile/${id}`);
       const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Failed to fetch');
-      setProfileData(data);
-      setEditForm(data);
+      let nextProfile = data;
+
+      try {
+        const lineRes = await fetch(`${API_BASE}/api/line/status?user_id=${encodeURIComponent(String(id))}`);
+        const lineData = await readJsonResponse(lineRes);
+        if (lineRes.ok) {
+          nextProfile = { ...data, ...lineData };
+        }
+      } catch (lineError) {
+        console.warn('Load LINE status failed:', lineError);
+      }
+
+      setProfileData(nextProfile);
+      setEditForm(nextProfile);
       resetPendingAvatarState(data.avatar_data_url || '');
     } catch (err) {
       console.error(err);

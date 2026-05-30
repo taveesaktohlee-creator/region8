@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import mysql from 'mysql2/promise';
+import { sendLineTopicNotification } from '../src/lib/lineGroupNotifications.js';
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || '157.85.98.50',
@@ -483,6 +484,14 @@ async function createEvent(req: any, res: any) {
       String(users[0].Name_Surnam || '').trim(),
     ],
   );
+  await sendLineTopicNotification(pool, {
+    menuKey: 'activity_calendar',
+    sourceType: 'activity_event',
+    sourceId: result.insertId,
+    title,
+    description: String(body.description || '').trim(),
+    href: `/activity-calendar?date=${startAt.slice(0, 10)}&event=${result.insertId}`,
+  });
   return sendJson(res, 200, { message: 'เพิ่มกิจกรรมเรียบร้อยแล้ว', event_id: result.insertId });
 }
 

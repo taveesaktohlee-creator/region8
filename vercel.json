@@ -57,6 +57,26 @@
       "destination": "/api/line-callback"
     },
     {
+      "source": "/api/line/status",
+      "destination": "/api/line-status"
+    },
+    {
+      "source": "/api/admin/line-notification-settings",
+      "destination": "/api/line-notifications?path=settings"
+    },
+    {
+      "source": "/api/admin/line-notification-groups/:path*",
+      "destination": "/api/line-notifications?path=groups/:path*"
+    },
+    {
+      "source": "/api/admin/line-notification-groups",
+      "destination": "/api/line-notifications?path=groups"
+    },
+    {
+      "source": "/api/admin/line-notifications/test",
+      "destination": "/api/line-notifications?path=test"
+    },
+    {
       "source": "/api/:path*",
       "destination": "http://region8.duckdns.org/api/:path*"
     },

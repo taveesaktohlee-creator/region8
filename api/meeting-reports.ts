@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise';
+import { sendLineTopicNotification } from '../src/lib/lineGroupNotifications.js';
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || '157.85.98.50',
@@ -657,6 +658,16 @@ async function createAdminReport(body: any, res: any) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ${status === 'published' ? 'NOW()' : 'NULL'}, ?, ?)`,
     [section, title, meetingDate, String(body.description || '').trim(), status, pdfUrl, String(body.pdf_file_id || extractGoogleDriveFileId(pdfUrl) || '').trim(), toInt(body.sort_order), userId],
   );
+  if (status === 'published') {
+    await sendLineTopicNotification(pool, {
+      menuKey: section === 'area' ? 'meeting_reports_area' : 'meeting_reports_office',
+      sourceType: 'meeting_report',
+      sourceId: result.insertId,
+      title,
+      description: String(body.description || '').trim(),
+      href: `/meeting-reports/${result.insertId}`,
+    });
+  }
   sendJson(res, 200, { message: 'เพิ่มรายงานการประชุมเรียบร้อยแล้ว', report_id: result.insertId });
 }
 
@@ -671,6 +682,8 @@ async function updateAdminReport(body: any, res: any, reportId: number) {
   const status = normalizeStatus(body.status);
   const pdfUrl = String(body.pdf_url || '').trim();
   const meetingDate = DATE_ONLY_RE.test(String(body.meeting_date || '')) ? String(body.meeting_date) : null;
+  const [existing]: any = await pool.query('SELECT status FROM meeting_reports WHERE report_id = ? LIMIT 1', [reportId]);
+  const wasPublished = existing[0]?.status === 'published';
   await pool.query(
     `UPDATE meeting_reports SET
        section = ?, title = ?, meeting_date = ?, description = ?, status = ?,
@@ -679,6 +692,16 @@ async function updateAdminReport(body: any, res: any, reportId: number) {
      WHERE report_id = ?`,
     [section, title, meetingDate, String(body.description || '').trim(), status, pdfUrl, String(body.pdf_file_id || extractGoogleDriveFileId(pdfUrl) || '').trim(), toInt(body.sort_order), status, reportId],
   );
+  if (!wasPublished && status === 'published') {
+    await sendLineTopicNotification(pool, {
+      menuKey: section === 'area' ? 'meeting_reports_area' : 'meeting_reports_office',
+      sourceType: 'meeting_report',
+      sourceId: reportId,
+      title,
+      description: String(body.description || '').trim(),
+      href: `/meeting-reports/${reportId}`,
+    });
+  }
   sendJson(res, 200, { message: 'แก้ไขรายงานการประชุมเรียบร้อยแล้ว' });
 }
 

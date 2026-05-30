@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Settings, Users, Menu, ChevronRight, ArrowLeft } from 'lucide-react';
+import { Settings, Users, Menu, ChevronRight, ArrowLeft, BellRing } from 'lucide-react';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import Header from '../Header';
@@ -8,18 +8,20 @@ import Footer from '../Footer';
 import { GroupsTab, type Group, type MenuItem } from './components/GroupsTab';
 import { MenusTab } from './components/MenusTab';
 import { UsersTab } from './components/UsersTab';
+import { LineNotificationsTab } from './components/LineNotificationsTab';
 import { API_BASE } from '../lib/apiConfig';
 import { clearMenuAccessCache } from '../lib/menuAccess';
 
 const API = `${API_BASE}/api/admin`;
 
-type TabKey = 'groups' | 'menus' | 'users';
+type TabKey = 'groups' | 'menus' | 'users' | 'line_notifications';
 interface UserRow { user_id: number; Name_Surname: string; username: string; email: string; position: string; Division_Province: string; user_status: number|null; group_name: string|null; avatar_data_url?: string | null; }
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: 'groups', label: 'กลุ่มผู้ใช้งาน', icon: <Settings size={16}/> },
   { key: 'menus',  label: 'รายการเมนู',     icon: <Menu size={16}/> },
   { key: 'users',  label: 'จัดการผู้ใช้',   icon: <Users size={16}/> },
+  { key: 'line_notifications', label: 'แจ้งเตือน LINE', icon: <BellRing size={16}/> },
 ];
 
 export default function UserSettings() {
@@ -84,8 +86,9 @@ export default function UserSettings() {
       case 'groups': return <GroupsTab groups={groups} onRefresh={loadGroups}/>;
       case 'menus':  return <MenusTab  menus={menus}   onRefresh={loadMenus}/>;
       case 'users':  return <UsersTab  groups={groups} users={users} onRefresh={loadUsers}/>;
+      case 'line_notifications': return <LineNotificationsTab userId={userData?.user_id}/>;
     }
-  }, [activeTab, groups, menus, users, loadGroups, loadMenus, loadUsers]);
+  }, [activeTab, groups, menus, users, loadGroups, loadMenus, loadUsers, userData?.user_id]);
 
   if (isPageLoading) {
     return (
@@ -118,7 +121,7 @@ export default function UserSettings() {
             <h2 className="text-1xl font-black text-slate-800 flex items-center gap-2">
               <Settings size={20} className="text-blue-600"/> ตั้งค่าผู้ใช้งาน
             </h2>
-            <p className="text-slate-500 text-sm mt-1">จัดการกลุ่ม สิทธิ์เมนู และผู้ใช้งานในระบบ</p>
+            <p className="text-slate-500 text-sm mt-1">จัดการกลุ่ม สิทธิ์เมนู ผู้ใช้งาน และแจ้งเตือน LINE</p>
           </div>
 
           {/* Tabs */}

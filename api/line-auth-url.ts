@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { pool } from '../src/lib/dbconnect';
+import { pool } from '../src/lib/dbconnect.js';
 
 const LINE_OAUTH_STATE_TTL_MINUTES = 10;
 
@@ -39,7 +39,11 @@ async function ensureColumn(tableName: string, columnName: string, definition: s
   );
 
   if (rows.length === 0) {
-    await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+    try {
+      await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+    } catch (error: any) {
+      if (error?.code !== 'ER_DUP_FIELDNAME') throw error;
+    }
   }
 }
 
