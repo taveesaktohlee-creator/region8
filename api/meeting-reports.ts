@@ -20,6 +20,7 @@ const GOOGLE_AVATAR_UPLOAD_SCRIPT_URL = process.env.GOOGLE_AVATAR_UPLOAD_SCRIPT_
 const DRIVE_SCRIPT_TIMEOUT_MS = 45_000;
 
 type MeetingReportSection = 'office' | 'area';
+type MeetingReportMarkerType = 'point' | 'circle' | 'rect';
 
 const DEFAULT_MEETING_MENU_ITEMS = [
   ['meeting_reports_admin', 'จัดการรายงานการประชุม', 'sidebar', 'FileStack', '/meeting-reports-admin', 9],
@@ -79,6 +80,12 @@ function normalizeSection(value: unknown): MeetingReportSection {
 function normalizeStatus(value: unknown) {
   const text = String(value || '').trim();
   return ['draft', 'published', 'archived'].includes(text) ? text : 'published';
+}
+
+function normalizeMarkerType(value: unknown): MeetingReportMarkerType {
+  const text = String(value || '').trim();
+  if (text === 'circle' || text === 'rect') return text;
+  return 'point';
 }
 
 function sanitizeFileName(value: unknown, fallbackName = 'meeting-report') {
@@ -192,7 +199,7 @@ async function postToDriveScript(payload: Record<string, unknown>) {
     });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Google Apps Script ใช้เวลาตอบกลับนานเกินไป กรุณาลองใหม่อีกครั้ง');
+      throw new Error('Google Apps Script ใช้เวลาตอบกลับนานเกินไป กรุณาลองใหม่อีกครั้ง', { cause: error });
     }
     throw error;
   }
@@ -302,6 +309,9 @@ async function ensureMeetingReportTables() {
       page_number INT NOT NULL DEFAULT 1,
       x_percent DECIMAL(6,3) NOT NULL DEFAULT 50,
       y_percent DECIMAL(6,3) NOT NULL DEFAULT 20,
+      marker_type ENUM('point','circle','rect') NOT NULL DEFAULT 'point',
+      width_percent DECIMAL(6,3) NOT NULL DEFAULT 0,
+      height_percent DECIMAL(6,3) NOT NULL DEFAULT 0,
       comment_text TEXT NOT NULL,
       status ENUM('open','resolved') NOT NULL DEFAULT 'open',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -311,6 +321,18 @@ async function ensureMeetingReportTables() {
       FOREIGN KEY (report_id) REFERENCES meeting_reports(report_id) ON DELETE CASCADE
     ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
   `);
+  for (const statement of [
+    `ALTER TABLE meeting_report_comments ADD COLUMN marker_type ENUM('point','circle','rect') NOT NULL DEFAULT 'point' AFTER y_percent`,
+    `ALTER TABLE meeting_report_comments ADD COLUMN width_percent DECIMAL(6,3) NOT NULL DEFAULT 0 AFTER marker_type`,
+    `ALTER TABLE meeting_report_comments ADD COLUMN height_percent DECIMAL(6,3) NOT NULL DEFAULT 0 AFTER width_percent`,
+  ]) {
+    try {
+      await pool.query(statement);
+    } catch (error: any) {
+      if (error?.code !== 'ER_DUP_FIELDNAME') throw error;
+    }
+  }
+  await pool.query(`ALTER TABLE meeting_report_comments MODIFY marker_type ENUM('point','circle','rect') NOT NULL DEFAULT 'point'`);
 }
 
 async function setup() {
@@ -400,6 +422,7 @@ async function getUserReport(req: any, res: any, reportId: number) {
   const [comments]: any = await pool.query(
     `SELECT
        c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+       c.marker_type, c.width_percent, c.height_percent,
        c.comment_text, c.status,
        DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
        u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department
@@ -473,6 +496,9 @@ async function addComment(body: any, res: any, reportId: number) {
   const pageNumber = Math.max(1, toInt(body.page_number, 1));
   const xPercent = Math.max(0, Math.min(Number(body.x_percent ?? 50), 100));
   const yPercent = Math.max(0, Math.min(Number(body.y_percent ?? 20), 100));
+  const markerType = normalizeMarkerType(body.marker_type);
+  const widthPercent = markerType !== 'point' ? Math.max(1, Math.min(Number(body.width_percent ?? 12), 100)) : 0;
+  const heightPercent = markerType !== 'point' ? Math.max(1, Math.min(Number(body.height_percent ?? 8), 100)) : 0;
   const commentText = String(body.comment_text || '').trim();
   if (!userId) return sendJson(res, 400, { error: 'ไม่พบรหัสผู้ใช้งาน' });
   if (!commentText) return sendJson(res, 400, { error: 'กรุณากรอกข้อความแจ้งแก้ไข' });
@@ -481,13 +507,14 @@ async function addComment(body: any, res: any, reportId: number) {
   const section = normalizeSection(reports[0].section);
   if (!(await requireAccess(res, userId, section))) return;
   const [result]: any = await pool.query(
-    `INSERT INTO meeting_report_comments (report_id, user_id, page_number, x_percent, y_percent, comment_text)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [reportId, userId, pageNumber, xPercent, yPercent, commentText],
+    `INSERT INTO meeting_report_comments (report_id, user_id, page_number, x_percent, y_percent, marker_type, width_percent, height_percent, comment_text)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [reportId, userId, pageNumber, xPercent, yPercent, markerType, widthPercent, heightPercent, commentText],
   );
   const [rows]: any = await pool.query(
     `SELECT
        c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+       c.marker_type, c.width_percent, c.height_percent,
        c.comment_text, c.status,
        DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
        u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department
@@ -503,13 +530,22 @@ async function addComment(body: any, res: any, reportId: number) {
 async function updateComment(body: any, res: any, commentId: number) {
   await setup();
   const userId = toInt(body.user_id);
+  const hasCommentText = Object.prototype.hasOwnProperty.call(body, 'comment_text');
+  const hasPageNumber = Object.prototype.hasOwnProperty.call(body, 'page_number');
+  const hasXPercent = Object.prototype.hasOwnProperty.call(body, 'x_percent');
+  const hasYPercent = Object.prototype.hasOwnProperty.call(body, 'y_percent');
+  const hasMarkerType = Object.prototype.hasOwnProperty.call(body, 'marker_type');
+  const hasWidthPercent = Object.prototype.hasOwnProperty.call(body, 'width_percent');
+  const hasHeightPercent = Object.prototype.hasOwnProperty.call(body, 'height_percent');
   const commentText = String(body.comment_text || '').trim();
   if (!userId) return sendJson(res, 400, { error: 'ไม่พบรหัสผู้ใช้งาน' });
   if (!commentId) return sendJson(res, 400, { error: 'ไม่พบรหัสข้อความแจ้งแก้ไข' });
-  if (!commentText) return sendJson(res, 400, { error: 'กรุณากรอกข้อความแจ้งแก้ไข' });
+  if (!hasCommentText && !hasPageNumber && !hasXPercent && !hasYPercent && !hasMarkerType && !hasWidthPercent && !hasHeightPercent) return sendJson(res, 400, { error: 'ไม่พบข้อมูลที่ต้องการแก้ไข' });
+  if (hasCommentText && !commentText) return sendJson(res, 400, { error: 'กรุณากรอกข้อความแจ้งแก้ไข' });
 
   const [comments]: any = await pool.query(
-    `SELECT c.comment_id, c.user_id, c.report_id, r.section
+    `SELECT c.comment_id, c.user_id, c.report_id, c.page_number, c.x_percent, c.y_percent,
+            c.marker_type, c.width_percent, c.height_percent, c.comment_text, r.section
      FROM meeting_report_comments c
      INNER JOIN meeting_reports r ON r.report_id = c.report_id
      WHERE c.comment_id = ?
@@ -524,14 +560,30 @@ async function updateComment(body: any, res: any, commentId: number) {
   if (!isOwner && !isAdmin) return sendJson(res, 403, { error: 'แก้ไขได้เฉพาะข้อความของตนเอง' });
   if (!isAdmin && !(await requireAccess(res, userId, section))) return;
 
+  const nextText = hasCommentText ? commentText : comments[0].comment_text;
+  const nextPageNumber = hasPageNumber ? Math.max(1, toInt(body.page_number, 1)) : Number(comments[0].page_number || 1);
+  const nextXPercent = hasXPercent ? Math.max(0, Math.min(Number(body.x_percent ?? 50), 100)) : Number(comments[0].x_percent || 0);
+  const nextYPercent = hasYPercent ? Math.max(0, Math.min(Number(body.y_percent ?? 20), 100)) : Number(comments[0].y_percent || 0);
+  const nextMarkerType = hasMarkerType ? normalizeMarkerType(body.marker_type) : normalizeMarkerType(comments[0].marker_type || 'point');
+  const nextWidthPercent = nextMarkerType !== 'point'
+    ? (hasWidthPercent ? Math.max(1, Math.min(Number(body.width_percent ?? 12), 100)) : Number(comments[0].width_percent || 12))
+    : 0;
+  const nextHeightPercent = nextMarkerType !== 'point'
+    ? (hasHeightPercent ? Math.max(1, Math.min(Number(body.height_percent ?? 8), 100)) : Number(comments[0].height_percent || 8))
+    : 0;
+
   await pool.query(
-    'UPDATE meeting_report_comments SET comment_text = ?, updated_at = CURRENT_TIMESTAMP WHERE comment_id = ?',
-    [commentText, commentId],
+    `UPDATE meeting_report_comments
+     SET comment_text = ?, page_number = ?, x_percent = ?, y_percent = ?,
+         marker_type = ?, width_percent = ?, height_percent = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE comment_id = ?`,
+    [nextText, nextPageNumber, nextXPercent, nextYPercent, nextMarkerType, nextWidthPercent, nextHeightPercent, commentId],
   );
 
   const [rows]: any = await pool.query(
     `SELECT
        c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+       c.marker_type, c.width_percent, c.height_percent,
        c.comment_text, c.status,
        DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
        u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department
@@ -541,7 +593,33 @@ async function updateComment(body: any, res: any, commentId: number) {
      LIMIT 1`,
     [commentId],
   );
-  sendJson(res, 200, { message: 'แก้ไขข้อความแจ้งแก้ไขเรียบร้อยแล้ว', comment: rows[0] });
+  sendJson(res, 200, { message: hasCommentText ? 'แก้ไขข้อความแจ้งแก้ไขเรียบร้อยแล้ว' : 'ย้ายตำแหน่งข้อความแจ้งแก้ไขเรียบร้อยแล้ว', comment: rows[0] });
+}
+
+async function deleteComment(body: any, res: any, commentId: number) {
+  await setup();
+  const userId = toInt(body.user_id);
+  if (!userId) return sendJson(res, 400, { error: 'ไม่พบรหัสผู้ใช้งาน' });
+  if (!commentId) return sendJson(res, 400, { error: 'ไม่พบรหัสข้อความแจ้งแก้ไข' });
+
+  const [comments]: any = await pool.query(
+    `SELECT c.comment_id, c.user_id, c.report_id, r.section
+     FROM meeting_report_comments c
+     INNER JOIN meeting_reports r ON r.report_id = c.report_id
+     WHERE c.comment_id = ?
+     LIMIT 1`,
+    [commentId],
+  );
+  if (comments.length === 0) return sendJson(res, 404, { error: 'ไม่พบข้อความแจ้งแก้ไข' });
+
+  const section = normalizeSection(comments[0].section);
+  const isOwner = Number(comments[0].user_id) === userId;
+  const isAdmin = await userCanAccessMenu(userId, 'meeting_reports_admin');
+  if (!isOwner && !isAdmin) return sendJson(res, 403, { error: 'ลบได้เฉพาะข้อความของตนเอง' });
+  if (!isAdmin && !(await requireAccess(res, userId, section))) return;
+
+  await pool.query('DELETE FROM meeting_report_comments WHERE comment_id = ?', [commentId]);
+  sendJson(res, 200, { message: 'ลบข้อความแจ้งแก้ไขเรียบร้อยแล้ว' });
 }
 
 async function listAdminReports(req: any, res: any) {
@@ -674,7 +752,8 @@ async function adminDashboard(req: any, res: any) {
   const [comments]: any = await pool.query(`
     SELECT
       c.comment_id, c.report_id, c.user_id, r.section, r.title, r.meeting_date,
-      c.page_number, c.x_percent, c.y_percent, c.comment_text, c.status,
+      c.page_number, c.x_percent, c.y_percent, c.marker_type, c.width_percent, c.height_percent,
+      c.comment_text, c.status,
       DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
       u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department
     FROM meeting_report_comments c
@@ -727,6 +806,7 @@ export default async function handler(req: any, res: any) {
 
     const updateCommentMatch = path.match(/^comments\/(\d+)$/);
     if (updateCommentMatch && req.method === 'PUT') return updateComment(body, res, toInt(updateCommentMatch[1]));
+    if (updateCommentMatch && req.method === 'DELETE') return deleteComment(body, res, toInt(updateCommentMatch[1]));
 
     return sendJson(res, 404, { error: 'ไม่พบ API รายงานการประชุมนี้' });
   } catch (error) {

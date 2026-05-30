@@ -22,6 +22,9 @@ export type MeetingReportComment = {
   page_number: number;
   x_percent: number | string;
   y_percent: number | string;
+  marker_type?: 'point' | 'circle' | 'rect';
+  width_percent?: number | string;
+  height_percent?: number | string;
   comment_text: string;
   status: 'open' | 'resolved';
   created_at?: string;

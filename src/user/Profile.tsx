@@ -1,5 +1,5 @@
 import React, { useCallback, useState, useEffect, useRef } from 'react';
-import { User, Mail, Briefcase, MapPin, Building2, IdCard, ShieldCheck, Edit3, ChevronRight, ArrowLeft, X, Camera, ImagePlus, Trash2, UploadCloud } from 'lucide-react';
+import { User, Mail, Briefcase, MapPin, Building2, IdCard, ShieldCheck, Edit3, ChevronRight, ArrowLeft, X, Camera, ImagePlus, Trash2, UploadCloud, MessageCircle, Link2, CheckCircle2 } from 'lucide-react';
 import { API_BASE } from '../lib/apiConfig';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
@@ -224,6 +224,7 @@ export default function Profile() {
   const [avatarSourceDimensions, setAvatarSourceDimensions] = useState({ width: 1, height: 1 });
   const [avatarCrop, setAvatarCrop] = useState<AvatarCropState>({ zoom: 1, offsetX: 0, offsetY: 0 });
   const [isRenderingAvatar, setIsRenderingAvatar] = useState(false);
+  const [isLineConnecting, setIsLineConnecting] = useState(false);
   const avatarDragRef = useRef({
     active: false,
     pointerId: 0,
@@ -286,6 +287,14 @@ export default function Profile() {
     return () => window.removeEventListener('resize', handleResize);
   }, [fetchProfile]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('line_linked') === '1') {
+      toast.success('เชื่อมบัญชี LINE เรียบร้อยแล้ว');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
   const handleLogout = () => {
     localStorage.removeItem('user');
     window.location.href = '/';
@@ -298,6 +307,33 @@ export default function Profile() {
         setIsRefreshing(false);
         toast.success('อัปเดตข้อมูลแล้ว');
       });
+    }
+  };
+
+  const handleConnectLine = async () => {
+    if (!userData?.user_id) {
+      toast.error('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่');
+      return;
+    }
+
+    setIsLineConnecting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/line/auth-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'link', user_id: userData.user_id }),
+      });
+      const data = await readJsonResponse(res);
+
+      if (!res.ok || !data.authUrl) {
+        throw new Error(data.error || 'ไม่สามารถเริ่มเชื่อมบัญชี LINE ได้');
+      }
+
+      window.location.href = String(data.authUrl);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'ไม่สามารถเชื่อมบัญชี LINE ได้');
+    } finally {
+      setIsLineConnecting(false);
     }
   };
 
@@ -641,6 +677,45 @@ export default function Profile() {
                 <InfoItem icon={<Mail size={16} />} label="อีเมล" value={profileData?.email} />
                 <div className="sm:col-span-2 border-t border-slate-100 pt-4">
                   <InfoItem icon={<User size={16} />} label="ชื่อผู้ใช้งาน (Username)" value={profileData?.username} note="ไม่สามารถเปลี่ยน Username ได้" />
+                </div>
+                <div className="sm:col-span-2 rounded-xl border border-green-100 bg-green-50/70 p-4">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#06C755] text-white shadow-sm">
+                        <MessageCircle size={20} />
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-black text-slate-800">บัญชี LINE</p>
+                          {profileData?.line_user_id ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1 text-xs font-bold text-green-700 ring-1 ring-green-100">
+                              <CheckCircle2 size={13} /> เชื่อมแล้ว
+                            </span>
+                          ) : (
+                            <span className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-500 ring-1 ring-slate-100">
+                              ยังไม่ได้เชื่อม
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">
+                          {profileData?.line_user_id
+                            ? `เชื่อมกับ LINE: ${profileData?.line_display_name || profileData?.line_user_id}`
+                            : 'เชื่อมบัญชีเพื่อใช้ Login with LINE ในครั้งถัดไป'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleConnectLine}
+                      disabled={isLineConnecting}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#06C755] px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#05b84f] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Link2 size={16} />
+                      {profileData?.line_user_id
+                        ? (isLineConnecting ? 'กำลังเชื่อมต่อ...' : 'เชื่อม LINE ใหม่')
+                        : (isLineConnecting ? 'กำลังเชื่อมต่อ...' : 'เชื่อมบัญชี LINE')}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

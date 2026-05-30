@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bell, BookOpen, CalendarDays, Loader2, LogOut, PanelLeft, RefreshCcw } from 'lucide-react';
+import { Bell, BookOpen, CalendarDays, ClipboardList, Home, Loader2, LogOut, PanelLeft, RefreshCcw } from 'lucide-react';
 import { API_BASE } from './lib/apiConfig';
 
 interface HeaderProps {
@@ -9,7 +9,7 @@ interface HeaderProps {
   handleLogout: () => void;
 }
 
-type NotificationType = 'knowledge' | 'activity';
+type NotificationType = 'knowledge' | 'activity' | 'meeting_report';
 
 interface AppNotification {
   id: string;
@@ -129,6 +129,15 @@ const Header: React.FC<HeaderProps> = ({ setIsSidebarOpen, handleRefresh, isRefr
       </div>
 
       <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => window.location.assign('/index')}
+          className="p-2.5 bg-white/70 backdrop-blur-md text-slate-600 rounded-full shadow-sm border border-white/60 hover:bg-white hover:shadow-md transition-all group cursor-pointer"
+          aria-label="หน้าหลัก"
+          title="หน้าหลัก"
+        >
+          <Home size={18} className="group-hover:-translate-y-0.5 transition-transform" />
+        </button>
         <button onClick={handleRefresh} className="p-2.5 bg-white/70 backdrop-blur-md text-slate-600 rounded-full shadow-sm border border-white/60 hover:bg-white hover:shadow-md transition-all group cursor-pointer">
           <RefreshCcw size={18} className={`${isRefreshing ? 'animate-spin text-blue-600' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
         </button>
@@ -151,11 +160,11 @@ const Header: React.FC<HeaderProps> = ({ setIsSidebarOpen, handleRefresh, isRefr
           </button>
 
           {isNotificationOpen && (
-            <div className="absolute right-0 mt-3 w-[min(380px,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-2xl shadow-slate-900/15">
+            <div className="fixed left-1/2 top-24 z-50 w-[min(92vw,420px)] -translate-x-1/2 overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-2xl shadow-slate-900/15 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-3 sm:w-[min(380px,calc(100vw-2rem))] sm:translate-x-0">
               <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
                 <div>
                   <p className="text-sm font-black text-slate-900">แจ้งเตือน</p>
-                  <p className="text-xs font-bold text-slate-400">คลังความรู้และตารางกิจกรรมใหม่</p>
+                  <p className="text-xs font-bold text-slate-400">คลังความรู้ ตารางกิจกรรม และรายงานประชุมใหม่</p>
                 </div>
                 {isNotificationLoading && <Loader2 className="animate-spin text-blue-600" size={18} />}
               </div>
@@ -168,6 +177,7 @@ const Header: React.FC<HeaderProps> = ({ setIsSidebarOpen, handleRefresh, isRefr
                   </div>
                 ) : notifications.map((notification) => {
                   const isKnowledge = notification.type === 'knowledge';
+                  const isMeetingReport = notification.type === 'meeting_report';
                   return (
                     <button
                       key={notification.id}
@@ -175,11 +185,11 @@ const Header: React.FC<HeaderProps> = ({ setIsSidebarOpen, handleRefresh, isRefr
                       onClick={() => void handleNotificationClick(notification)}
                       className="flex w-full cursor-pointer gap-3 border-b border-slate-50 px-4 py-3 text-left transition hover:bg-blue-50/60"
                     >
-                      <span className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${isKnowledge ? 'bg-rose-50 text-rose-600' : 'bg-sky-50 text-sky-600'}`}>
-                        {isKnowledge ? <BookOpen size={18} /> : <CalendarDays size={18} />}
+                      <span className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${isKnowledge ? 'bg-rose-50 text-rose-600' : isMeetingReport ? 'bg-blue-50 text-blue-600' : 'bg-sky-50 text-sky-600'}`}>
+                        {isKnowledge ? <BookOpen size={18} /> : isMeetingReport ? <ClipboardList size={18} /> : <CalendarDays size={18} />}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block text-xs font-black text-blue-600">{isKnowledge ? 'คลังความรู้ใหม่' : 'กิจกรรมใหม่'}</span>
+                        <span className="block text-xs font-black text-blue-600">{isKnowledge ? 'คลังความรู้ใหม่' : isMeetingReport ? 'รายงานการประชุมใหม่' : 'กิจกรรมใหม่'}</span>
                         <span className="mt-0.5 block truncate text-sm font-black text-slate-900">{notification.title}</span>
                         <span className="mt-1 block truncate text-xs font-bold text-slate-500">{notification.subtitle}</span>
                         {notification.created_at && (

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, BookOpen, CheckCircle2, Clock, Eye, FilePlus2, ImagePlus, Plus, RefreshCw, Save, Search, Star, Trash2, UploadCloud, X } from 'lucide-react';
+import { BarChart3, BookOpen, CheckCircle2, Clock, Eye, FilePlus2, ImagePlus, Loader2, Plus, RefreshCw, Save, Search, Star, Trash2, UploadCloud, X } from 'lucide-react';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
@@ -477,6 +477,8 @@ export default function TrainingAdmin() {
   const [report, setReport] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<AdminTab>('report');
+  const [isSavingCourse, setIsSavingCourse] = useState(false);
+  const [savingQuizType, setSavingQuizType] = useState<QuizType | null>(null);
 
   const loadCourses = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/admin/training/courses`);
@@ -606,19 +608,25 @@ export default function TrainingAdmin() {
   };
 
   const saveCourse = async () => {
+    if (isSavingCourse) return;
     const url = selectedCourseId
       ? `${API_BASE}/api/admin/training/courses/${selectedCourseId}`
       : `${API_BASE}/api/admin/training/courses`;
-    const res = await fetch(url, {
-      method: selectedCourseId ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'บันทึกหลักสูตรไม่สำเร็จ');
-    toast.success(data.message);
-    resetForm();
-    await loadCourses();
+    setIsSavingCourse(true);
+    try {
+      const res = await fetch(url, {
+        method: selectedCourseId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) return toast.error(data.error || 'บันทึกหลักสูตรไม่สำเร็จ');
+      toast.success(data.message);
+      resetForm();
+      await loadCourses();
+    } finally {
+      setIsSavingCourse(false);
+    }
   };
 
   const deleteCourse = async (courseId?: number) => {
@@ -771,20 +779,26 @@ export default function TrainingAdmin() {
 
   const saveQuizSettings = async (quizType: QuizType) => {
     if (!selectedCourseId) return toast.warning('กรุณาเลือกหลักสูตรก่อนตั้งค่าแบบทดสอบ');
+    if (savingQuizType) return;
     const setting = quizSettings[quizType];
     const timeLimitMinutes = Math.max(0, (Number(setting.hours) || 0) * 60 + (Number(setting.minutes) || 0));
-    const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/quizzes/${quizType}/settings`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pass_score: setting.pass_score,
-        time_limit_minutes: timeLimitMinutes,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'บันทึกการตั้งค่าแบบทดสอบไม่สำเร็จ');
-    toast.success(data.message);
-    await loadQuizPreview(selectedCourseId).catch(() => undefined);
+    setSavingQuizType(quizType);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/quizzes/${quizType}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pass_score: setting.pass_score,
+          time_limit_minutes: timeLimitMinutes,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return toast.error(data.error || 'บันทึกการตั้งค่าแบบทดสอบไม่สำเร็จ');
+      toast.success(data.message);
+      await loadQuizPreview(selectedCourseId).catch(() => undefined);
+    } finally {
+      setSavingQuizType(null);
+    }
   };
 
   const openQuizPreview = async () => {
@@ -841,7 +855,7 @@ export default function TrainingAdmin() {
                   </div>
                   <button onClick={resetForm} className="rounded-2xl bg-blue-600 p-3 text-white"><Plus size={18} /></button>
                 </div>
-                <CourseForm form={form} setForm={setForm} onSave={saveCourse} selectedCourseId={selectedCourseId} />
+                <CourseForm form={form} setForm={setForm} onSave={saveCourse} selectedCourseId={selectedCourseId} isSaving={isSavingCourse} />
               </section>
 
               <div className="relative z-10 flex min-w-0 flex-col gap-6">
@@ -942,14 +956,16 @@ export default function TrainingAdmin() {
                       settings={quizSettings.pre}
                       onChange={(key, value) => updateQuizSetting('pre', key, value)}
                       onSave={() => saveQuizSettings('pre')}
-                      disabled={!selectedCourseId}
+                      disabled={!selectedCourseId || Boolean(savingQuizType)}
+                      saving={savingQuizType === 'pre'}
                     />
                     <QuizSettingCard
                       title="แบบทดสอบหลังเรียน"
                       settings={quizSettings.post}
                       onChange={(key, value) => updateQuizSetting('post', key, value)}
                       onSave={() => saveQuizSettings('post')}
-                      disabled={!selectedCourseId}
+                      disabled={!selectedCourseId || Boolean(savingQuizType)}
+                      saving={savingQuizType === 'post'}
                     />
                   </div>
                 </section>
@@ -1306,12 +1322,13 @@ function EvaluationQuestionResult({ summary }: { summary?: EvaluationReport['que
   );
 }
 
-function QuizSettingCard({ title, settings, onChange, onSave, disabled }: {
+function QuizSettingCard({ title, settings, onChange, onSave, disabled, saving = false }: {
   title: string;
   settings: { hours: number; minutes: number; pass_score: number };
   onChange: (key: 'hours' | 'minutes' | 'pass_score', value: number) => void;
   onSave: () => void;
   disabled?: boolean;
+  saving?: boolean;
 }) {
   return (
     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
@@ -1361,7 +1378,8 @@ function QuizSettingCard({ title, settings, onChange, onSave, disabled }: {
         disabled={disabled}
         className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
       >
-        <Save size={16} /> บันทึกการตั้งค่า
+        {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+        {saving ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า'}
       </button>
       <p className="mt-2 text-xs font-semibold text-slate-400">ใส่ 0 ชั่วโมง 0 นาที หากต้องการไม่จำกัดเวลา</p>
     </div>
@@ -1424,7 +1442,19 @@ function QuizPreviewModal({ quizzes, onClose }: { quizzes: AdminQuiz[]; onClose:
   );
 }
 
-function CourseForm({ form, setForm, onSave, selectedCourseId }: { form: Course; setForm: React.Dispatch<React.SetStateAction<Course>>; onSave: () => void; selectedCourseId: number | null }) {
+function CourseForm({
+  form,
+  setForm,
+  onSave,
+  selectedCourseId,
+  isSaving,
+}: {
+  form: Course;
+  setForm: React.Dispatch<React.SetStateAction<Course>>;
+  onSave: () => void;
+  selectedCourseId: number | null;
+  isSaving: boolean;
+}) {
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [coverUploadNote, setCoverUploadNote] = useState('');
   const [coverPreviewUrl, setCoverPreviewUrl] = useState('');
@@ -1539,8 +1569,13 @@ function CourseForm({ form, setForm, onSave, selectedCourseId }: { form: Course;
       <Textarea value={form.target_group} onChange={(v) => update('target_group', v)} placeholder="กลุ่มเป้าหมาย" />
       <Textarea value={form.content_summary} onChange={(v) => update('content_summary', v)} placeholder="เนื้อหาการอบรม" />
       <Textarea value={form.evaluation_method} onChange={(v) => update('evaluation_method', v)} placeholder="วิธีการประเมินผล" />
-      <button onClick={onSave} className="mt-2 inline-flex min-w-0 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white">
-        <Save size={16} /> {selectedCourseId ? 'บันทึกการแก้ไข' : 'เพิ่มหลักสูตร'}
+      <button
+        onClick={onSave}
+        disabled={isSaving || isUploadingCover}
+        className="mt-2 inline-flex min-w-0 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+      >
+        {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+        {isSaving ? 'กำลังบันทึก...' : selectedCourseId ? 'บันทึกการแก้ไข' : 'เพิ่มหลักสูตร'}
       </button>
     </div>
   );

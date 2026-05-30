@@ -58,7 +58,7 @@ function getRoutePath(req: any) {
 }
 
 type NotificationDbRow = {
-  notification_type: 'knowledge' | 'activity';
+  notification_type: 'knowledge' | 'activity' | 'meeting_report';
   source_id: number | string;
   title: string | null;
   subtitle: string | null;
@@ -80,7 +80,7 @@ async function ensureNotificationTables() {
     CREATE TABLE IF NOT EXISTS user_notification_reads (
       read_id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
-      notification_type ENUM('knowledge','activity') NOT NULL,
+      notification_type ENUM('knowledge','activity','meeting_report') NOT NULL,
       source_id INT NOT NULL,
       read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE KEY uq_user_notification_read (user_id, notification_type, source_id),
@@ -88,6 +88,10 @@ async function ensureNotificationTables() {
       INDEX idx_user_notification_source (notification_type, source_id),
       FOREIGN KEY (user_id) REFERENCES user(user_id) ON DELETE CASCADE
     ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    ALTER TABLE user_notification_reads
+    MODIFY notification_type ENUM('knowledge','activity','meeting_report') NOT NULL
   `);
 }
 
@@ -152,9 +156,44 @@ async function listNotifications(req: any, res: any) {
     [userId],
   );
 
+  const [meetingReportRows]: any = await pool.query(
+    `SELECT
+       'meeting_report' AS notification_type,
+       mr.report_id AS source_id,
+       mr.title AS title,
+       CONCAT('รายงานการประชุม', CASE WHEN mr.section = 'area' THEN 'สำนักงานในพื้นที่' ELSE 'สำนักงาน' END) AS subtitle,
+       CONCAT('/meeting-reports/', mr.report_id) AS href,
+       DATE_FORMAT(COALESCE(mr.published_at, mr.updated_at), '%Y-%m-%dT%H:%i:%s') AS sort_at,
+       DATE_FORMAT(COALESCE(mr.published_at, mr.updated_at), '%Y-%m-%dT%H:%i:%s') AS created_at
+     FROM meeting_reports mr
+     LEFT JOIN user_notification_reads r
+       ON r.user_id = ?
+      AND r.notification_type = 'meeting_report'
+      AND r.source_id = mr.report_id
+     LEFT JOIN meeting_report_read_logs l
+       ON l.user_id = ?
+      AND l.report_id = mr.report_id
+     WHERE mr.status = 'published'
+       AND r.read_id IS NULL
+       AND l.log_id IS NULL
+       AND EXISTS (
+         SELECT 1
+         FROM user u
+         INNER JOIN group_permissions gp ON gp.group_id = u.user_status AND gp.can_view = 1
+         INNER JOIN menu_items m ON m.menu_id = gp.menu_id AND m.is_active = 1
+         WHERE u.user_id = ?
+           AND m.menu_key = CASE WHEN mr.section = 'area' THEN 'meeting_reports_area' ELSE 'meeting_reports_office' END
+         LIMIT 1
+       )
+     ORDER BY COALESCE(mr.published_at, mr.updated_at) DESC
+     LIMIT 40`,
+    [userId, userId, userId],
+  );
+
   const rows = sortNotificationRows([
     ...(knowledgeRows as NotificationDbRow[]),
     ...(activityRows as NotificationDbRow[]),
+    ...(meetingReportRows as NotificationDbRow[]),
   ]).slice(0, 40);
 
   return sendJson(res, 200, rows.map((row) => ({
@@ -175,7 +214,7 @@ async function markNotificationRead(req: any, res: any) {
   const sourceId = toInt(body.source_id);
   const notificationType = String(body.notification_type || '').trim();
 
-  if (!userId || !sourceId || !['knowledge', 'activity'].includes(notificationType)) {
+  if (!userId || !sourceId || !['knowledge', 'activity', 'meeting_report'].includes(notificationType)) {
     return sendJson(res, 400, { error: 'ข้อมูลแจ้งเตือนไม่ครบถ้วน' });
   }
 

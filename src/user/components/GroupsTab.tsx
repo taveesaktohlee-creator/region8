@@ -171,11 +171,13 @@ export function GroupsTab({ groups, onRefresh }: { groups: Group[]; onRefresh: (
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState<Partial<Group>>({});
   const [permGroup, setPermGroup] = useState<Group|null>(null);
+  const [savingGroup, setSavingGroup] = useState(false);
 
   const openCreate = useCallback(() => { setForm({}); setEditMode(false); setModal(true); }, []);
   const openEdit = useCallback((g: Group) => { setForm({...g}); setEditMode(true); setModal(true); }, []);
 
   const save = useCallback(async () => {
+    if (savingGroup) return;
     if (!form.group_name?.trim()) { toast.warning('กรุณาระบุชื่อกลุ่ม'); return; }
     const normalizedName = form.group_name.trim().toLowerCase();
     const duplicated = groups.some(g =>
@@ -183,11 +185,16 @@ export function GroupsTab({ groups, onRefresh }: { groups: Group[]; onRefresh: (
     );
     if (duplicated) { toast.warning('ชื่อกลุ่มนี้ถูกใช้งานแล้ว'); return; }
     const url = editMode ? `${API}/groups/${form.group_id}` : `${API}/groups`;
-    const r = await fetch(url, { method: editMode?'PUT':'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) });
-    const d = await r.json();
-    if (!r.ok) { toast.error(d.error); return; }
-    toast.success(d.message); setModal(false); await onRefresh();
-  }, [form, groups, editMode, onRefresh]);
+    setSavingGroup(true);
+    try {
+      const r = await fetch(url, { method: editMode?'PUT':'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) });
+      const d = await r.json();
+      if (!r.ok) { toast.error(d.error); return; }
+      toast.success(d.message); setModal(false); await onRefresh();
+    } finally {
+      setSavingGroup(false);
+    }
+  }, [form, groups, editMode, onRefresh, savingGroup]);
 
   const del = useCallback(async (g: Group) => {
     if (!confirm(`ลบกลุ่ม "${g.group_name}" ใช่หรือไม่?`)) return;
@@ -241,7 +248,10 @@ export function GroupsTab({ groups, onRefresh }: { groups: Group[]; onRefresh: (
         <Modal title={<><Settings size={18} className="text-blue-600"/>{editMode?'แก้ไขกลุ่ม':'สร้างกลุ่มใหม่'}</>} onClose={()=>setModal(false)}
           footer={<>
             <button onClick={()=>setModal(false)} className="flex-1 py-3 rounded-2xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition-colors">ยกเลิก</button>
-            <button onClick={save} className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold shadow-lg shadow-blue-500/25 hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2"><Save size={16}/>บันทึก</button>
+            <button onClick={save} disabled={savingGroup} className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold shadow-lg shadow-blue-500/25 hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60">
+              {savingGroup ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"/> : <Save size={16}/>}
+              {savingGroup ? 'กำลังบันทึก...' : 'บันทึก'}
+            </button>
           </>}>
           <div className="space-y-4">
             <div>

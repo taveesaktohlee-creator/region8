@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { BarChart3, CheckCircle2, ClipboardList, FileText, MessageSquare, Plus, Save, Search, Trash2, UploadCloud } from 'lucide-react';
+import { BarChart3, CheckCircle2, ClipboardList, FileText, Loader2, MessageSquare, Plus, RefreshCcw, Save, Search, Trash2, UploadCloud } from 'lucide-react';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import Header from '../Header';
@@ -31,6 +31,8 @@ import {
 
 type AdminTab = 'report' | 'items';
 type ReportTable = 'reads' | 'acks' | 'comments';
+type ReportSectionFilter = 'all' | MeetingReportSection;
+type ReportDashboardRow = MeetingReportReadRow | MeetingReportAckRow | MeetingReportAdminCommentRow;
 
 const statusLabels: Record<MeetingReportStatus, string> = {
   draft: 'ฉบับร่าง',
@@ -52,6 +54,7 @@ export default function MeetingReportAdmin() {
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [isSavingItem, setIsSavingItem] = useState(false);
 
   const loadItems = useCallback(async (userId: number) => {
     const res = await fetch(`${API_BASE}/api/admin/meeting-reports?user_id=${userId}`);
@@ -145,23 +148,28 @@ export default function MeetingReportAdmin() {
   };
 
   const saveItem = async () => {
-    if (!userData?.user_id) return;
+    if (!userData?.user_id || isSavingItem) return;
     const url = selectedReportId
       ? `${API_BASE}/api/admin/meeting-reports/${selectedReportId}`
       : `${API_BASE}/api/admin/meeting-reports`;
-    const res = await fetch(url, {
-      method: selectedReportId ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, user_id: userData.user_id }),
-    });
-    const data = await readApiResponse(res);
-    if (!res.ok) {
-      toast.error(data.error || 'บันทึกรายงานการประชุมไม่สำเร็จ');
-      return;
+    setIsSavingItem(true);
+    try {
+      const res = await fetch(url, {
+        method: selectedReportId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, user_id: userData.user_id }),
+      });
+      const data = await readApiResponse(res);
+      if (!res.ok) {
+        toast.error(data.error || 'บันทึกรายงานการประชุมไม่สำเร็จ');
+        return;
+      }
+      toast.success(data.message || 'บันทึกข้อมูลแล้ว');
+      resetForm();
+      await refreshAll(userData.user_id);
+    } finally {
+      setIsSavingItem(false);
     }
-    toast.success(data.message || 'บันทึกข้อมูลแล้ว');
-    resetForm();
-    await refreshAll(userData.user_id);
   };
 
   const deleteItem = async (reportId?: number) => {
@@ -245,8 +253,13 @@ export default function MeetingReportAdmin() {
                     disabled={isUploadingPdf}
                     onChange={handlePdfUpload}
                   />
-                  <button onClick={() => void saveItem()} className="mt-2 inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white">
-                    <Save size={16} /> {selectedReportId ? 'บันทึกการแก้ไข' : 'เพิ่มรายงาน'}
+                  <button
+                    onClick={() => void saveItem()}
+                    disabled={isSavingItem || isUploadingPdf}
+                    className="mt-2 inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    {isSavingItem ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    {isSavingItem ? 'กำลังบันทึก...' : selectedReportId ? 'บันทึกการแก้ไข' : 'เพิ่มรายงาน'}
                   </button>
                 </div>
               </section>
@@ -296,7 +309,35 @@ export default function MeetingReportAdmin() {
 
 function ReportDashboard({ reportData }: { reportData: MeetingReportAdminData }) {
   const [activeTable, setActiveTable] = useState<ReportTable>('reads');
+  const [sectionFilter, setSectionFilter] = useState<ReportSectionFilter>('all');
+  const [unitFilter, setUnitFilter] = useState('all');
+  const [query, setQuery] = useState('');
   const rows = activeTable === 'reads' ? reportData.reads : activeTable === 'acks' ? reportData.acknowledgements : reportData.comments;
+  const sectionRows = useMemo(() => (
+    rows.filter((row) => sectionFilter === 'all' || row.section === sectionFilter)
+  ), [rows, sectionFilter]);
+  const unitOptions = useMemo(() => {
+    const units = new Set<string>();
+    sectionRows.forEach((row) => {
+      const unit = getReportRowUnit(row);
+      if (unit) units.add(unit);
+    });
+    return Array.from(units).sort((a, b) => a.localeCompare(b, 'th'));
+  }, [sectionRows]);
+  const filteredRows = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return sectionRows.filter((row) => {
+      const unit = getReportRowUnit(row);
+      if (unitFilter !== 'all' && unit !== unitFilter) return false;
+      if (!needle) return true;
+      return getReportRowSearchText(row).toLowerCase().includes(needle);
+    });
+  }, [query, sectionRows, unitFilter]);
+
+  useEffect(() => {
+    setUnitFilter('all');
+    setQuery('');
+  }, [activeTable, sectionFilter]);
 
   return (
     <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -311,11 +352,66 @@ function ReportDashboard({ reportData }: { reportData: MeetingReportAdminData })
           <TabButton active={activeTable === 'comments'} onClick={() => setActiveTable('comments')} icon={<MessageSquare size={16} />} label="แจ้งแก้ไข" />
         </div>
       </div>
-      {activeTable === 'reads' && <ReadTable rows={rows as MeetingReportReadRow[]} />}
-      {activeTable === 'acks' && <AckTable rows={rows as MeetingReportAckRow[]} />}
-      {activeTable === 'comments' && <CommentTable rows={rows as MeetingReportAdminCommentRow[]} />}
+      <div className="mb-5 grid gap-3 xl:grid-cols-[auto_minmax(220px,360px)_minmax(260px,1fr)_auto] xl:items-center">
+        <div className="grid gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-3">
+          <TabButton active={sectionFilter === 'all'} onClick={() => setSectionFilter('all')} icon={<ClipboardList size={16} />} label="ทั้งหมด" />
+          <TabButton active={sectionFilter === 'office'} onClick={() => setSectionFilter('office')} icon={<ClipboardList size={16} />} label="สำนักงาน" />
+          <TabButton active={sectionFilter === 'area'} onClick={() => setSectionFilter('area')} icon={<ClipboardList size={16} />} label="สำนักงานในพื้นที่" />
+        </div>
+        <label className="grid gap-1 text-xs font-black text-slate-500 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+          <span>หน่วยงาน</span>
+          <select
+            value={unitFilter}
+            onChange={(event) => setUnitFilter(event.target.value)}
+            className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none focus:ring-2 focus:ring-blue-200"
+          >
+            <option value="all">ทั้งหมด</option>
+            {unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+          </select>
+        </label>
+        <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+          <Search size={18} className="shrink-0 text-slate-400" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="ค้นหาผู้ใช้ เรื่อง หรือหมวดหมู่..."
+            className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none placeholder:text-slate-400"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setUnitFilter('all');
+            setQuery('');
+          }}
+          className="inline-flex cursor-pointer items-center justify-center rounded-2xl bg-slate-100 px-4 py-3 text-slate-600 hover:bg-slate-200"
+          title="ล้างตัวกรอง"
+        >
+          <RefreshCcw size={18} />
+        </button>
+      </div>
+      {activeTable === 'reads' && <ReadTable rows={filteredRows as MeetingReportReadRow[]} />}
+      {activeTable === 'acks' && <AckTable rows={filteredRows as MeetingReportAckRow[]} />}
+      {activeTable === 'comments' && <CommentTable rows={filteredRows as MeetingReportAdminCommentRow[]} />}
     </section>
   );
+}
+
+function getReportRowUnit(row: ReportDashboardRow) {
+  return String(row.Division_Province || row.Department || '').trim();
+}
+
+function getReportRowSearchText(row: ReportDashboardRow) {
+  const commentText = 'comment_text' in row ? row.comment_text : '';
+  return [
+    row.Name_Surname,
+    row.position,
+    row.Division_Province,
+    row.Department,
+    row.title,
+    sectionLabels[row.section],
+    commentText,
+  ].filter(Boolean).join(' ');
 }
 
 function ReadTable({ rows }: { rows: MeetingReportReadRow[] }) {

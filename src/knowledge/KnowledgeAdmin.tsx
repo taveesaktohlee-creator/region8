@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { BarChart3, FileText, ImagePlus, LibraryBig, Plus, RefreshCw, Save, Search, Trash2, UploadCloud } from 'lucide-react';
+import { BarChart3, FileText, ImagePlus, LibraryBig, Loader2, Plus, RefreshCw, Save, Search, Trash2, UploadCloud } from 'lucide-react';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import Header from '../Header';
@@ -130,6 +130,7 @@ export default function KnowledgeAdmin() {
   const [search, setSearch] = useState('');
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [isSavingItem, setIsSavingItem] = useState(false);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState('');
 
   const loadItems = useCallback(async () => {
@@ -185,19 +186,25 @@ export default function KnowledgeAdmin() {
   };
 
   const saveItem = async () => {
+    if (isSavingItem) return;
     const url = selectedItemId
       ? `${API_BASE}/api/admin/knowledge/items/${selectedItemId}`
       : `${API_BASE}/api/admin/knowledge/items`;
-    const res = await fetch(url, {
-      method: selectedItemId ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'บันทึกคลังความรู้ไม่สำเร็จ');
-    toast.success(data.message);
-    resetForm();
-    await loadItems();
+    setIsSavingItem(true);
+    try {
+      const res = await fetch(url, {
+        method: selectedItemId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) return toast.error(data.error || 'บันทึกคลังความรู้ไม่สำเร็จ');
+      toast.success(data.message);
+      resetForm();
+      await loadItems();
+    } finally {
+      setIsSavingItem(false);
+    }
   };
 
   const deleteItem = async (itemId?: number) => {
@@ -360,8 +367,13 @@ export default function KnowledgeAdmin() {
                     onChange={handlePdfUpload}
                   />
 
-                  <button onClick={saveItem} className="mt-2 inline-flex min-w-0 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white">
-                    <Save size={16} /> {selectedItemId ? 'บันทึกการแก้ไข' : 'เพิ่มเรื่อง'}
+                  <button
+                    onClick={saveItem}
+                    disabled={isSavingItem || isUploadingCover || isUploadingPdf}
+                    className="mt-2 inline-flex min-w-0 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    {isSavingItem ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    {isSavingItem ? 'กำลังบันทึก...' : selectedItemId ? 'บันทึกการแก้ไข' : 'เพิ่มเรื่อง'}
                   </button>
                 </div>
               </section>

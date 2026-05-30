@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu, Plus, Edit3, Trash2, Save, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Menu, Plus, Edit3, Trash2, Save, ToggleLeft, ToggleRight, Loader2 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { Modal, type MenuItem } from './GroupsTab';
 import { API_BASE } from '../../lib/apiConfig';
@@ -14,11 +14,13 @@ export function MenusTab({ menus, onRefresh }: { menus: MenuItem[]; onRefresh: (
   const [modal, setModal] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState<Partial<MenuItem>>({...emptyForm});
+  const [saving, setSaving] = useState(false);
 
   const openCreate = () => { setForm({...emptyForm}); setEditMode(false); setModal(true); };
   const openEdit = (m: MenuItem) => { setForm({...m}); setEditMode(true); setModal(true); };
 
   const save = async () => {
+    if (saving) return;
     if (!form.menu_name?.trim() || !form.menu_key?.trim()) { toast.warning('กรุณากรอกชื่อเมนูและ Key'); return; }
     const normalizedKey = form.menu_key.trim().toLowerCase();
     const duplicated = menus.some(m =>
@@ -27,11 +29,16 @@ export function MenusTab({ menus, onRefresh }: { menus: MenuItem[]; onRefresh: (
     if (duplicated) { toast.warning('Key เมนูนี้ถูกใช้งานแล้ว'); return; }
     const url = editMode ? `${API}/menus/${form.menu_id}` : `${API}/menus`;
     const method = editMode ? 'PUT' : 'POST';
-    const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) });
-    const d = await r.json();
-    if (!r.ok) { toast.error(d.error); return; }
-    clearMenuAccessCache();
-    toast.success(d.message); setModal(false); await onRefresh();
+    setSaving(true);
+    try {
+      const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) });
+      const d = await r.json();
+      if (!r.ok) { toast.error(d.error); return; }
+      clearMenuAccessCache();
+      toast.success(d.message); setModal(false); await onRefresh();
+    } finally {
+      setSaving(false);
+    }
   };
 
   const del = async (m: MenuItem) => {
@@ -108,7 +115,10 @@ export function MenusTab({ menus, onRefresh }: { menus: MenuItem[]; onRefresh: (
         <Modal title={<><Menu size={18} className="text-blue-600"/>{editMode?'แก้ไขเมนู':'เพิ่มเมนูใหม่'}</>} onClose={()=>setModal(false)}
           footer={<>
             <button onClick={()=>setModal(false)} className="flex-1 py-3 rounded-2xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition-all">ยกเลิก</button>
-            <button onClick={save} className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold shadow-lg shadow-blue-500/25 hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2"><Save size={16}/>บันทึก</button>
+            <button onClick={save} disabled={saving} className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold shadow-lg shadow-blue-500/25 hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60">
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16}/>}
+              {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+            </button>
           </>}>
           <div className="space-y-4">
             {([

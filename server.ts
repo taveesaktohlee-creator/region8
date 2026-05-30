@@ -45,6 +45,7 @@ let meetingReportTablesReady: Promise<void> | null = null;
 let activityCalendarTablesReady: Promise<void> | null = null;
 let notificationTablesReady: Promise<void> | null = null;
 let passwordResetTokensReady: Promise<void> | null = null;
+let lineLoginSchemaReady: Promise<void> | null = null;
 
 const DEFAULT_MENU_ITEMS = [
   ['home', 'หน้าหลัก', 'sidebar', 'Home', '/index', 1],
@@ -75,6 +76,7 @@ const SUPPORTED_AVATAR_MIME_RE = /^image\/(jpeg|jpg|png|webp|gif|avif|bmp|svg\+x
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_RESET_TOKEN_TTL_MINUTES = 30;
+const LINE_OAUTH_STATE_TTL_MINUTES = 10;
 
 function normalizeEmail(value: unknown) {
   return String(value || '').trim().toLowerCase();
@@ -301,6 +303,38 @@ async function ensureProfileAvatarColumn() {
   }
 
   return profileAvatarReady;
+}
+
+async function ensureLineLoginSchema() {
+  if (!lineLoginSchemaReady) {
+    lineLoginSchemaReady = (async () => {
+      await ensureColumn('user', 'line_user_id', 'VARCHAR(80) NULL UNIQUE');
+      await ensureColumn('user', 'line_display_name', 'VARCHAR(255) NULL');
+      await ensureColumn('user', 'line_picture_url', 'TEXT NULL');
+      await ensureColumn('user', 'line_linked_at', 'DATETIME NULL');
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS line_oauth_states (
+          state_id INT AUTO_INCREMENT PRIMARY KEY,
+          state_hash CHAR(64) NOT NULL,
+          mode ENUM('login','link') NOT NULL,
+          user_id INT NULL,
+          expires_at DATETIME NOT NULL,
+          used_at DATETIME NULL,
+          request_ip VARCHAR(50) NULL,
+          user_agent VARCHAR(500) NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY uq_line_oauth_state_hash (state_hash),
+          INDEX idx_line_oauth_state_lookup (state_hash, used_at, expires_at)
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+    })().catch((error) => {
+      lineLoginSchemaReady = null;
+      throw error;
+    });
+  }
+
+  return lineLoginSchemaReady;
 }
 
 async function ensureDefaultMenuItems() {
@@ -650,6 +684,7 @@ async function ensureKnowledgeTables() {
 }
 
 type MeetingReportSection = 'office' | 'area';
+type MeetingReportMarkerType = 'point' | 'circle' | 'rect';
 
 const MEETING_REPORT_SECTION_LABELS: Record<MeetingReportSection, string> = {
   office: 'สำนักงาน',
@@ -669,6 +704,12 @@ function normalizeMeetingReportStatus(value: unknown) {
   const text = String(value || '').trim();
   if (['draft', 'published', 'archived'].includes(text)) return text;
   return 'published';
+}
+
+function normalizeMeetingReportMarkerType(value: unknown): MeetingReportMarkerType {
+  const text = String(value || '').trim();
+  if (text === 'circle' || text === 'rect') return text;
+  return 'point';
 }
 
 async function userCanAccessMenu(userId: number, menuKey: string) {
@@ -773,6 +814,9 @@ async function ensureMeetingReportTables() {
           page_number INT NOT NULL DEFAULT 1,
           x_percent DECIMAL(6,3) NOT NULL DEFAULT 50,
           y_percent DECIMAL(6,3) NOT NULL DEFAULT 20,
+          marker_type ENUM('point','circle','rect') NOT NULL DEFAULT 'point',
+          width_percent DECIMAL(6,3) NOT NULL DEFAULT 0,
+          height_percent DECIMAL(6,3) NOT NULL DEFAULT 0,
           comment_text TEXT NOT NULL,
           status ENUM('open','resolved') NOT NULL DEFAULT 'open',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -782,6 +826,18 @@ async function ensureMeetingReportTables() {
           FOREIGN KEY (report_id) REFERENCES meeting_reports(report_id) ON DELETE CASCADE
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
       `);
+      for (const statement of [
+        `ALTER TABLE meeting_report_comments ADD COLUMN marker_type ENUM('point','circle','rect') NOT NULL DEFAULT 'point' AFTER y_percent`,
+        `ALTER TABLE meeting_report_comments ADD COLUMN width_percent DECIMAL(6,3) NOT NULL DEFAULT 0 AFTER marker_type`,
+        `ALTER TABLE meeting_report_comments ADD COLUMN height_percent DECIMAL(6,3) NOT NULL DEFAULT 0 AFTER width_percent`,
+      ]) {
+        try {
+          await pool.query(statement);
+        } catch (error: any) {
+          if (error?.code !== 'ER_DUP_FIELDNAME') throw error;
+        }
+      }
+      await pool.query(`ALTER TABLE meeting_report_comments MODIFY marker_type ENUM('point','circle','rect') NOT NULL DEFAULT 'point'`);
     })().catch((error) => {
       meetingReportTablesReady = null;
       throw error;
@@ -798,7 +854,7 @@ async function ensureNotificationTables() {
         CREATE TABLE IF NOT EXISTS user_notification_reads (
           read_id INT AUTO_INCREMENT PRIMARY KEY,
           user_id INT NOT NULL,
-          notification_type ENUM('knowledge','activity') NOT NULL,
+          notification_type ENUM('knowledge','activity','meeting_report') NOT NULL,
           source_id INT NOT NULL,
           read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           UNIQUE KEY uq_user_notification_read (user_id, notification_type, source_id),
@@ -806,6 +862,10 @@ async function ensureNotificationTables() {
           INDEX idx_user_notification_source (notification_type, source_id),
           FOREIGN KEY (user_id) REFERENCES user(user_id) ON DELETE CASCADE
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+      `);
+      await pool.query(`
+        ALTER TABLE user_notification_reads
+        MODIFY notification_type ENUM('knowledge','activity','meeting_report') NOT NULL
       `);
     })().catch((error) => {
       notificationTablesReady = null;
@@ -1373,6 +1433,189 @@ async function ensureUsageTables() {
   return usageTablesReady;
 }
 
+async function createLoginSession(userId: number, req: Request) {
+  let sessionId: number | null = null;
+
+  try {
+    await ensureUsageTables();
+    await pool.query(
+      'UPDATE user_sessions SET is_online = 0, logout_time = NOW() WHERE user_id = ? AND is_online = 1',
+      [userId]
+    );
+    const [sessionResult]: any = await pool.query(
+      'INSERT INTO user_sessions (user_id, ip_address, user_agent, last_seen_at) VALUES (?, ?, ?, NOW())',
+      [userId, req.ip || '', req.headers['user-agent'] || '']
+    );
+    sessionId = sessionResult.insertId;
+  } catch (_) {
+    // ตารางอาจยังไม่มี ข้ามไปเพื่อไม่ให้การ login ล้มเหลว
+  }
+
+  return sessionId;
+}
+
+function getLineConfig(req: Request) {
+  const channelId = process.env.LINE_CHANNEL_ID?.trim();
+  const channelSecret = process.env.LINE_CHANNEL_SECRET?.trim();
+  const redirectUri = process.env.LINE_REDIRECT_URI?.trim() || `${getAppBaseUrl(req)}/api/line/callback`;
+
+  if (!channelId || !channelSecret) {
+    throw new Error('ยังไม่ได้ตั้งค่า LINE_CHANNEL_ID และ LINE_CHANNEL_SECRET บนเซิร์ฟเวอร์');
+  }
+
+  return { channelId, channelSecret, redirectUri };
+}
+
+function hashLineState(state: string) {
+  return crypto.createHash('sha256').update(state).digest('hex');
+}
+
+function getSafeScriptJson(value: unknown) {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+function renderLineRedirectPage(targetPath: string, message = 'กำลังนำคุณกลับเข้าสู่ระบบ...') {
+  return `<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LINE Login</title>
+  <style>
+    body{font-family:Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;background:#f8fafc;color:#0f172a}
+    main{text-align:center;padding:24px}
+    p{color:#64748b;font-weight:600}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>LINE Login</h1>
+    <p>${escapeHtml(message)}</p>
+  </main>
+  <script>
+    window.location.replace(${getSafeScriptJson(targetPath)});
+  </script>
+</body>
+</html>`;
+}
+
+function renderLineLoginSuccessPage(user: Record<string, unknown>, sessionId: number | null) {
+  return `<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LINE Login</title>
+  <style>
+    body{font-family:Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;background:#f8fafc;color:#0f172a}
+    main{text-align:center;padding:24px}
+    p{color:#64748b;font-weight:600}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>เข้าสู่ระบบสำเร็จ</h1>
+    <p>กำลังนำคุณเข้าสู่ระบบ...</p>
+  </main>
+  <script>
+    localStorage.setItem('user', ${getSafeScriptJson(JSON.stringify(user))});
+    ${sessionId ? `localStorage.setItem('usage_session_id', ${getSafeScriptJson(String(sessionId))});` : ''}
+    window.location.replace('/index');
+  </script>
+</body>
+</html>`;
+}
+
+function renderLineMessagePage(title: string, message: string, targetPath = '/') {
+  return `<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;background:#f8fafc;color:#0f172a}
+    main{width:min(440px,calc(100vw - 32px));border:1px solid #e2e8f0;border-radius:18px;background:#fff;padding:28px;text-align:center;box-shadow:0 20px 45px rgba(15,23,42,.08)}
+    p{color:#64748b;font-weight:600;line-height:1.7}
+    a{display:inline-flex;margin-top:12px;border-radius:12px;background:#06c755;color:white;padding:12px 18px;text-decoration:none;font-weight:800}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(title)}</h1>
+    <p>${escapeHtml(message)}</p>
+    <a href="${escapeHtml(targetPath)}">กลับเข้าสู่ระบบ</a>
+  </main>
+</body>
+</html>`;
+}
+
+async function exchangeLineCodeForToken(code: string, config: ReturnType<typeof getLineConfig>) {
+  const params = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: config.redirectUri,
+    client_id: config.channelId,
+    client_secret: config.channelSecret,
+  });
+
+  const response = await fetch('https://api.line.me/oauth2/v2.1/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params,
+  });
+  const text = await response.text();
+  let parsed: any = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { error_description: text };
+  }
+
+  if (!response.ok || !parsed.access_token) {
+    throw new Error(parsed.error_description || parsed.error || 'ไม่สามารถแลก LINE authorization code ได้');
+  }
+
+  return parsed as { access_token: string };
+}
+
+async function fetchLineProfile(accessToken: string) {
+  const response = await fetch('https://api.line.me/v2/profile', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const text = await response.text();
+  let parsed: any = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { message: text };
+  }
+
+  if (!response.ok || !parsed.userId) {
+    throw new Error(parsed.message || 'ไม่สามารถดึงข้อมูลโปรไฟล์ LINE ได้');
+  }
+
+  return parsed as { userId: string; displayName?: string; pictureUrl?: string };
+}
+
+async function consumeLineOAuthState(state: string) {
+  const stateHash = hashLineState(state);
+  const [rows]: any = await pool.query(
+    `SELECT state_id, mode, user_id
+     FROM line_oauth_states
+     WHERE state_hash = ? AND used_at IS NULL AND expires_at > NOW()
+     LIMIT 1`,
+    [stateHash]
+  );
+
+  if (rows.length === 0) {
+    throw new Error('LINE login state หมดอายุหรือไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
+  }
+
+  await pool.query('UPDATE line_oauth_states SET used_at = NOW() WHERE state_id = ?', [rows[0].state_id]);
+  return rows[0] as { state_id: number; mode: 'login' | 'link'; user_id: number | null };
+}
+
 async function closeStaleUsageSessions() {
   await pool.query(
     `UPDATE user_sessions
@@ -1521,21 +1764,7 @@ app.post('/api/users/login', async (req, res) => {
     }
 
     // สร้าง session อัตโนมัติ (ปิด session เก่าก่อน)
-    let session_id: number | null = null;
-    try {
-      await ensureUsageTables();
-      await pool.query(
-        'UPDATE user_sessions SET is_online = 0, logout_time = NOW() WHERE user_id = ? AND is_online = 1',
-        [user.user_id]
-      );
-      const [sResult]: any = await pool.query(
-        'INSERT INTO user_sessions (user_id, ip_address, user_agent, last_seen_at) VALUES (?, ?, ?, NOW())',
-        [user.user_id, req.ip || '', req.headers['user-agent'] || '']
-      );
-      session_id = sResult.insertId;
-    } catch (_) {
-      // ตารางอาจยังไม่มี ข้ามไป
-    }
+    const session_id = await createLoginSession(user.user_id, req);
 
     // ล็อกอินสำเร็จ
     res.json({ 
@@ -1552,6 +1781,159 @@ app.post('/api/users/login', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการเข้าสู่ระบบ' });
+  }
+});
+
+// เริ่ม LINE OAuth สำหรับ login หรือผูกบัญชีกับสมาชิกเดิม
+app.post('/api/line/auth-url', async (req, res) => {
+  try {
+    const mode = req.body?.mode === 'link' ? 'link' : req.body?.mode === 'login' ? 'login' : '';
+    const userId = Number(req.body?.user_id);
+
+    if (!mode) {
+      return res.status(400).json({ error: 'LINE login mode ไม่ถูกต้อง' });
+    }
+    if (mode === 'link' && (!Number.isFinite(userId) || userId <= 0)) {
+      return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้สำหรับเชื่อมบัญชี LINE' });
+    }
+
+    await ensureLineLoginSchema();
+    const config = getLineConfig(req);
+
+    if (mode === 'link') {
+      const [users]: any = await pool.query('SELECT user_id FROM user WHERE user_id = ? LIMIT 1', [userId]);
+      if (users.length === 0) {
+        return res.status(404).json({ error: 'ไม่พบข้อมูลผู้ใช้สำหรับเชื่อมบัญชี LINE' });
+      }
+    }
+
+    const state = crypto.randomBytes(24).toString('hex');
+    await pool.query(
+      `INSERT INTO line_oauth_states
+       (state_hash, mode, user_id, expires_at, request_ip, user_agent)
+       VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE), ?, ?)`,
+      [
+        hashLineState(state),
+        mode,
+        mode === 'link' ? userId : null,
+        LINE_OAUTH_STATE_TTL_MINUTES,
+        req.ip || '',
+        req.headers['user-agent'] || '',
+      ]
+    );
+
+    const authUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('client_id', config.channelId);
+    authUrl.searchParams.set('redirect_uri', config.redirectUri);
+    authUrl.searchParams.set('state', state);
+    authUrl.searchParams.set('scope', 'profile');
+
+    res.json({ authUrl: authUrl.toString() });
+  } catch (error) {
+    console.error('Create LINE auth URL failed:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'ไม่สามารถเริ่ม LINE Login ได้',
+    });
+  }
+});
+
+// รับ callback จาก LINE Login
+app.get('/api/line/callback', async (req, res) => {
+  try {
+    await ensureLineLoginSchema();
+
+    const oauthError = typeof req.query.error === 'string' ? req.query.error : '';
+    if (oauthError) {
+      const description = typeof req.query.error_description === 'string'
+        ? req.query.error_description
+        : 'ผู้ใช้ยกเลิกหรือ LINE ปฏิเสธการอนุญาต';
+      return res.type('html').send(renderLineMessagePage('LINE Login ไม่สำเร็จ', description));
+    }
+
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+    if (!code || !state) {
+      return res.type('html').status(400).send(renderLineMessagePage(
+        'LINE Login ไม่สำเร็จ',
+        'ข้อมูล callback จาก LINE ไม่ครบถ้วน กรุณาลองใหม่อีกครั้ง'
+      ));
+    }
+
+    const stateRecord = await consumeLineOAuthState(state);
+    const config = getLineConfig(req);
+    const token = await exchangeLineCodeForToken(code, config);
+    const lineProfile = await fetchLineProfile(token.access_token);
+
+    if (stateRecord.mode === 'link') {
+      if (!stateRecord.user_id) {
+        return res.type('html').status(400).send(renderLineMessagePage(
+          'เชื่อมบัญชี LINE ไม่สำเร็จ',
+          'ไม่พบรหัสผู้ใช้สำหรับเชื่อมบัญชี LINE กรุณาเข้าสู่ระบบแล้วลองใหม่'
+        ));
+      }
+
+      const [linkedUsers]: any = await pool.query(
+        'SELECT user_id FROM user WHERE line_user_id = ? AND user_id != ? LIMIT 1',
+        [lineProfile.userId, stateRecord.user_id]
+      );
+      if (linkedUsers.length > 0) {
+        return res.type('html').status(409).send(renderLineMessagePage(
+          'เชื่อมบัญชี LINE ไม่สำเร็จ',
+          'บัญชี LINE นี้ถูกเชื่อมกับสมาชิกคนอื่นแล้ว'
+        ));
+      }
+
+      await pool.query(
+        `UPDATE user
+         SET line_user_id = ?, line_display_name = ?, line_picture_url = ?, line_linked_at = NOW()
+         WHERE user_id = ?`,
+        [
+          lineProfile.userId,
+          lineProfile.displayName || null,
+          lineProfile.pictureUrl || null,
+          stateRecord.user_id,
+        ]
+      );
+
+      return res.type('html').send(renderLineRedirectPage('/profile?line_linked=1', 'เชื่อมบัญชี LINE เรียบร้อยแล้ว'));
+    }
+
+    const [users]: any = await pool.query(
+      `SELECT user_id, Name_Surnam, position, Division_Province, avatar_data_url
+       FROM user
+       WHERE line_user_id = ?
+       LIMIT 1`,
+      [lineProfile.userId]
+    );
+
+    if (users.length === 0) {
+      return res.type('html').status(404).send(renderLineMessagePage(
+        'ยังไม่ได้เชื่อมบัญชี LINE',
+        'กรุณาเข้าสู่ระบบด้วยชื่อผู้ใช้งานและรหัสผ่านก่อน แล้วกด “เชื่อมบัญชี LINE” ที่หน้าโปรไฟล์'
+      ));
+    }
+
+    const user = users[0];
+    await pool.query(
+      'UPDATE user SET line_display_name = ?, line_picture_url = ? WHERE user_id = ?',
+      [lineProfile.displayName || null, lineProfile.pictureUrl || null, user.user_id]
+    );
+
+    const sessionId = await createLoginSession(user.user_id, req);
+    return res.type('html').send(renderLineLoginSuccessPage({
+      user_id: user.user_id,
+      Name_Surname: user.Name_Surnam,
+      position: user.position,
+      Division_Province: user.Division_Province,
+      avatar_data_url: user.avatar_data_url || null,
+    }, sessionId));
+  } catch (error) {
+    console.error('LINE callback failed:', error);
+    return res.type('html').status(500).send(renderLineMessagePage(
+      'LINE Login ไม่สำเร็จ',
+      error instanceof Error ? error.message : 'เกิดข้อผิดพลาดในการทำรายการ LINE Login'
+    ));
   }
 });
 
@@ -1683,8 +2065,13 @@ app.get('/api/users/profile/:id', async (req, res) => {
   try {
     const { id } = req.params;
     await ensureProfileAvatarColumn();
+    await ensureLineLoginSchema();
     const [rows]: any = await pool.query(
-      'SELECT Name_Surnam as Name_Surname, position, type, Division_Province, Department, email, National_ID_number, username, avatar_data_url FROM user WHERE user_id = ?',
+      `SELECT Name_Surnam as Name_Surname, position, type, Division_Province, Department,
+              email, National_ID_number, username, avatar_data_url,
+              line_user_id, line_display_name, line_picture_url, line_linked_at
+       FROM user
+       WHERE user_id = ?`,
       [id]
     );
     if (rows.length === 0) {
@@ -2610,6 +2997,7 @@ app.get('/api/notifications', async (req, res) => {
   try {
     await ensureKnowledgeTables();
     await ensureActivityCalendarTables();
+    await ensureMeetingReportTables();
     await ensureNotificationTables();
 
     const userId = toInt(req.query.user_id);
@@ -2670,7 +3058,41 @@ app.get('/api/notifications', async (req, res) => {
       [userId],
     );
 
-    const rows = [...knowledgeRows, ...activityRows]
+    const [meetingReportRows]: any = await pool.query(
+      `SELECT
+         'meeting_report' AS notification_type,
+         mr.report_id AS source_id,
+         mr.title AS title,
+         CONCAT('รายงานการประชุม', CASE WHEN mr.section = 'area' THEN 'สำนักงานในพื้นที่' ELSE 'สำนักงาน' END) AS subtitle,
+         CONCAT('/meeting-reports/', mr.report_id) AS href,
+         DATE_FORMAT(COALESCE(mr.published_at, mr.updated_at), '%Y-%m-%dT%H:%i:%s') AS sort_at,
+         DATE_FORMAT(COALESCE(mr.published_at, mr.updated_at), '%Y-%m-%dT%H:%i:%s') AS created_at
+       FROM meeting_reports mr
+       LEFT JOIN user_notification_reads r
+         ON r.user_id = ?
+        AND r.notification_type = 'meeting_report'
+        AND r.source_id = mr.report_id
+       LEFT JOIN meeting_report_read_logs l
+         ON l.user_id = ?
+        AND l.report_id = mr.report_id
+       WHERE mr.status = 'published'
+         AND r.read_id IS NULL
+         AND l.log_id IS NULL
+         AND EXISTS (
+           SELECT 1
+           FROM user u
+           INNER JOIN group_permissions gp ON gp.group_id = u.user_status AND gp.can_view = 1
+           INNER JOIN menu_items m ON m.menu_id = gp.menu_id AND m.is_active = 1
+           WHERE u.user_id = ?
+             AND m.menu_key = CASE WHEN mr.section = 'area' THEN 'meeting_reports_area' ELSE 'meeting_reports_office' END
+           LIMIT 1
+         )
+       ORDER BY COALESCE(mr.published_at, mr.updated_at) DESC
+       LIMIT 40`,
+      [userId, userId, userId],
+    );
+
+    const rows = [...knowledgeRows, ...activityRows, ...meetingReportRows]
       .sort((a: any, b: any) => {
         const aTime = Date.parse(String(a.sort_at || a.created_at || '').replace(' ', 'T'));
         const bTime = Date.parse(String(b.sort_at || b.created_at || '').replace(' ', 'T'));
@@ -2699,7 +3121,7 @@ app.post('/api/notifications/read', async (req, res) => {
     const userId = toInt(req.body.user_id);
     const sourceId = toInt(req.body.source_id);
     const notificationType = String(req.body.notification_type || '').trim();
-    if (!userId || !sourceId || !['knowledge', 'activity'].includes(notificationType)) {
+    if (!userId || !sourceId || !['knowledge', 'activity', 'meeting_report'].includes(notificationType)) {
       return res.status(400).json({ error: 'ข้อมูลแจ้งเตือนไม่ครบถ้วน' });
     }
 
@@ -3091,6 +3513,7 @@ app.get('/api/meeting-reports/:id', async (req, res) => {
     const [commentRows]: any = await pool.query(
       `SELECT
          c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+         c.marker_type, c.width_percent, c.height_percent,
          c.comment_text, c.status,
          DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
          u.Name_Surnam AS Name_Surname,
@@ -3203,6 +3626,9 @@ app.post('/api/meeting-reports/:id/comments', async (req, res) => {
     const pageNumber = Math.max(1, toInt(req.body.page_number, 1));
     const xPercent = Math.max(0, Math.min(Number(req.body.x_percent ?? 50), 100));
     const yPercent = Math.max(0, Math.min(Number(req.body.y_percent ?? 20), 100));
+    const markerType = normalizeMeetingReportMarkerType(req.body.marker_type);
+    const widthPercent = markerType !== 'point' ? Math.max(1, Math.min(Number(req.body.width_percent ?? 12), 100)) : 0;
+    const heightPercent = markerType !== 'point' ? Math.max(1, Math.min(Number(req.body.height_percent ?? 8), 100)) : 0;
     const commentText = String(req.body.comment_text || '').trim();
     if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
     if (!commentText) return res.status(400).json({ error: 'กรุณากรอกข้อความแจ้งแก้ไข' });
@@ -3217,13 +3643,14 @@ app.post('/api/meeting-reports/:id/comments', async (req, res) => {
 
     const [result]: any = await pool.query(
       `INSERT INTO meeting_report_comments
-       (report_id, user_id, page_number, x_percent, y_percent, comment_text)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [reportId, userId, pageNumber, xPercent, yPercent, commentText],
+       (report_id, user_id, page_number, x_percent, y_percent, marker_type, width_percent, height_percent, comment_text)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [reportId, userId, pageNumber, xPercent, yPercent, markerType, widthPercent, heightPercent, commentText],
     );
     const [rows]: any = await pool.query(
       `SELECT
          c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+         c.marker_type, c.width_percent, c.height_percent,
          c.comment_text, c.status,
          DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
          u.Name_Surnam AS Name_Surname,
@@ -3248,13 +3675,22 @@ app.put('/api/meeting-reports/comments/:commentId', async (req, res) => {
     await ensureMeetingReportTables();
     const commentId = toInt(req.params.commentId);
     const userId = toInt(req.body.user_id);
+    const hasCommentText = Object.prototype.hasOwnProperty.call(req.body, 'comment_text');
+    const hasPageNumber = Object.prototype.hasOwnProperty.call(req.body, 'page_number');
+    const hasXPercent = Object.prototype.hasOwnProperty.call(req.body, 'x_percent');
+    const hasYPercent = Object.prototype.hasOwnProperty.call(req.body, 'y_percent');
+    const hasMarkerType = Object.prototype.hasOwnProperty.call(req.body, 'marker_type');
+    const hasWidthPercent = Object.prototype.hasOwnProperty.call(req.body, 'width_percent');
+    const hasHeightPercent = Object.prototype.hasOwnProperty.call(req.body, 'height_percent');
     const commentText = String(req.body.comment_text || '').trim();
     if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
     if (!commentId) return res.status(400).json({ error: 'ไม่พบรหัสข้อความแจ้งแก้ไข' });
-    if (!commentText) return res.status(400).json({ error: 'กรุณากรอกข้อความแจ้งแก้ไข' });
+    if (!hasCommentText && !hasPageNumber && !hasXPercent && !hasYPercent && !hasMarkerType && !hasWidthPercent && !hasHeightPercent) return res.status(400).json({ error: 'ไม่พบข้อมูลที่ต้องการแก้ไข' });
+    if (hasCommentText && !commentText) return res.status(400).json({ error: 'กรุณากรอกข้อความแจ้งแก้ไข' });
 
     const [comments]: any = await pool.query(
-      `SELECT c.comment_id, c.user_id, c.report_id, r.section
+      `SELECT c.comment_id, c.user_id, c.report_id, c.page_number, c.x_percent, c.y_percent,
+              c.marker_type, c.width_percent, c.height_percent, c.comment_text, r.section
        FROM meeting_report_comments c
        INNER JOIN meeting_reports r ON r.report_id = c.report_id
        WHERE c.comment_id = ?
@@ -3269,14 +3705,30 @@ app.put('/api/meeting-reports/comments/:commentId', async (req, res) => {
     if (!isOwner && !isAdmin) return res.status(403).json({ error: 'แก้ไขได้เฉพาะข้อความของตนเอง' });
     if (!isAdmin && !(await requireMeetingReportAccess(res, userId, section))) return;
 
+    const nextText = hasCommentText ? commentText : comments[0].comment_text;
+    const nextPageNumber = hasPageNumber ? Math.max(1, toInt(req.body.page_number, 1)) : Number(comments[0].page_number || 1);
+    const nextXPercent = hasXPercent ? Math.max(0, Math.min(Number(req.body.x_percent ?? 50), 100)) : Number(comments[0].x_percent || 0);
+    const nextYPercent = hasYPercent ? Math.max(0, Math.min(Number(req.body.y_percent ?? 20), 100)) : Number(comments[0].y_percent || 0);
+    const nextMarkerType = hasMarkerType ? normalizeMeetingReportMarkerType(req.body.marker_type) : normalizeMeetingReportMarkerType(comments[0].marker_type || 'point');
+    const nextWidthPercent = nextMarkerType !== 'point'
+      ? (hasWidthPercent ? Math.max(1, Math.min(Number(req.body.width_percent ?? 12), 100)) : Number(comments[0].width_percent || 12))
+      : 0;
+    const nextHeightPercent = nextMarkerType !== 'point'
+      ? (hasHeightPercent ? Math.max(1, Math.min(Number(req.body.height_percent ?? 8), 100)) : Number(comments[0].height_percent || 8))
+      : 0;
+
     await pool.query(
-      'UPDATE meeting_report_comments SET comment_text = ?, updated_at = CURRENT_TIMESTAMP WHERE comment_id = ?',
-      [commentText, commentId],
+      `UPDATE meeting_report_comments
+       SET comment_text = ?, page_number = ?, x_percent = ?, y_percent = ?,
+           marker_type = ?, width_percent = ?, height_percent = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE comment_id = ?`,
+      [nextText, nextPageNumber, nextXPercent, nextYPercent, nextMarkerType, nextWidthPercent, nextHeightPercent, commentId],
     );
 
     const [rows]: any = await pool.query(
       `SELECT
          c.comment_id, c.report_id, c.user_id, c.page_number, c.x_percent, c.y_percent,
+         c.marker_type, c.width_percent, c.height_percent,
          c.comment_text, c.status,
          DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
          u.Name_Surnam AS Name_Surname,
@@ -3289,10 +3741,42 @@ app.put('/api/meeting-reports/comments/:commentId', async (req, res) => {
        LIMIT 1`,
       [commentId],
     );
-    res.json({ message: 'แก้ไขข้อความแจ้งแก้ไขเรียบร้อยแล้ว', comment: rows[0] });
+    res.json({ message: hasCommentText ? 'แก้ไขข้อความแจ้งแก้ไขเรียบร้อยแล้ว' : 'ย้ายตำแหน่งข้อความแจ้งแก้ไขเรียบร้อยแล้ว', comment: rows[0] });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'แก้ไขข้อความแจ้งแก้ไขไม่สำเร็จ' });
+  }
+});
+
+app.delete('/api/meeting-reports/comments/:commentId', async (req, res) => {
+  try {
+    await ensureMeetingReportTables();
+    const commentId = toInt(req.params.commentId);
+    const userId = toInt(req.body.user_id);
+    if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
+    if (!commentId) return res.status(400).json({ error: 'ไม่พบรหัสข้อความแจ้งแก้ไข' });
+
+    const [comments]: any = await pool.query(
+      `SELECT c.comment_id, c.user_id, c.report_id, r.section
+       FROM meeting_report_comments c
+       INNER JOIN meeting_reports r ON r.report_id = c.report_id
+       WHERE c.comment_id = ?
+       LIMIT 1`,
+      [commentId],
+    );
+    if (comments.length === 0) return res.status(404).json({ error: 'ไม่พบข้อความแจ้งแก้ไข' });
+
+    const section = normalizeMeetingReportSection(comments[0].section);
+    const isOwner = Number(comments[0].user_id) === userId;
+    const isAdmin = await userCanAccessMenu(userId, 'meeting_reports_admin');
+    if (!isOwner && !isAdmin) return res.status(403).json({ error: 'ลบได้เฉพาะข้อความของตนเอง' });
+    if (!isAdmin && !(await requireMeetingReportAccess(res, userId, section))) return;
+
+    await pool.query('DELETE FROM meeting_report_comments WHERE comment_id = ?', [commentId]);
+    res.json({ message: 'ลบข้อความแจ้งแก้ไขเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ลบข้อความแจ้งแก้ไขไม่สำเร็จ' });
   }
 });
 
@@ -3495,7 +3979,8 @@ app.get('/api/admin/meeting-reports/report', async (req, res) => {
     const [comments]: any = await pool.query(`
       SELECT
         c.comment_id, c.report_id, c.user_id, r.section, r.title, r.meeting_date,
-        c.page_number, c.x_percent, c.y_percent, c.comment_text, c.status,
+        c.page_number, c.x_percent, c.y_percent, c.marker_type, c.width_percent, c.height_percent,
+        c.comment_text, c.status,
         DATE_FORMAT(c.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
         u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department
       FROM meeting_report_comments c

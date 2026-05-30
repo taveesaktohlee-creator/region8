@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Button } from '@heroui/react';
-import { User, Lock, ArrowRight, Landmark, Mail, Send, X } from 'lucide-react';
+import { User, Lock, ArrowRight, Landmark, Mail, Send, X, MessageCircle } from 'lucide-react';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { API_BASE } from './lib/apiConfig';
@@ -17,6 +17,7 @@ export default function App() {
   const [forgotStep, setForgotStep] = useState<'email' | 'confirm'>('email');
   const [isCheckingEmail, setIsCheckingEmail] = useState(false);
   const [isSendingResetLink, setIsSendingResetLink] = useState(false);
+  const [isLineLoading, setIsLineLoading] = useState(false);
 
   const validateEmail = (email: string) => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -144,6 +145,29 @@ export default function App() {
       toast.error('ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้');
     } finally {
       setIsSendingResetLink(false);
+    }
+  };
+
+  const handleLineLogin = async () => {
+    setIsLineLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/line/auth-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'login' })
+      });
+      const data = await readApiResponse(res);
+
+      if (!res.ok || !data.authUrl) {
+        toast.error(data.error || 'ไม่สามารถเริ่ม LINE Login ได้');
+        return;
+      }
+
+      window.location.href = String(data.authUrl);
+    } catch (error) {
+      toast.error('ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้');
+    } finally {
+      setIsLineLoading(false);
     }
   };
 
@@ -343,6 +367,16 @@ export default function App() {
                   className="w-full bg-gradient-to-r from-sky-400 to-blue-500 hover:from-sky-500 hover:to-blue-600 text-white font-semibold py-6 rounded-xl shadow-lg shadow-sky-500/30 transition-all flex items-center justify-center gap-2 text-base disabled:opacity-50"
                 >
                   เข้าสู่ระบบ <ArrowRight size={18} />
+                </Button>
+
+                <Button
+                  type="button"
+                  isDisabled={isLineLoading}
+                  onPress={handleLineLogin}
+                  className="w-full bg-[#06C755] hover:bg-[#05b84f] text-white font-semibold py-6 rounded-xl shadow-lg shadow-green-500/25 transition-all flex items-center justify-center gap-2 text-base disabled:opacity-50"
+                >
+                  <MessageCircle size={18} />
+                  {isLineLoading ? 'กำลังเชื่อมต่อ LINE...' : 'Login with LINE'}
                 </Button>
 
                 <Button
