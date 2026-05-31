@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BellRing, Check, Loader2, MessageCircle, Plus, Save, Send, Trash2, X } from 'lucide-react';
+import { BellRing, Check, Loader2, MessageCircle, Plus, RefreshCw, Save, Send, Trash2, X } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { API_BASE } from '../../lib/apiConfig';
 
@@ -229,6 +229,19 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
           <MessageCircle size={16} className="text-emerald-600" />
           <span className="text-sm font-bold text-slate-700">LINE Groups</span>
           <span className="ml-auto text-xs font-bold text-slate-400">{groups.length} กลุ่ม</span>
+          <button
+            onClick={loadSettings}
+            className="inline-flex items-center gap-1 rounded-xl bg-slate-50 px-3 py-2 text-xs font-black text-slate-500 transition-all hover:bg-slate-100"
+          >
+            <RefreshCw size={14} />
+            โหลดใหม่
+          </button>
+        </div>
+
+        <div className="px-5 pt-5">
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">
+            ส่งข้อความใน LINE กลุ่มที่มีบอทอยู่แล้วกด “โหลดใหม่” ระบบจะเพิ่ม groupId ให้อัตโนมัติ
+          </div>
         </div>
 
         <div className="grid gap-3 p-5 lg:grid-cols-[1fr_1fr_auto]">

@@ -154,6 +154,24 @@ export async function verifyLineGroup(groupId: string) {
   };
 }
 
+export async function recordLineWebhookGroups(db: DbLike, groupIds: string[]) {
+  await ensureLineNotificationTables(db);
+  const uniqueGroupIds = [...new Set(groupIds.map(normalizeLineGroupId).filter((groupId) => groupId.startsWith('C')))];
+  for (const groupId of uniqueGroupIds) {
+    await db.query(
+      `INSERT INTO line_notification_groups
+         (group_name, group_id, is_active, last_verified_at, last_error)
+       VALUES (?, ?, 1, NOW(), NULL)
+       ON DUPLICATE KEY UPDATE
+         is_active = 1,
+         last_verified_at = NOW(),
+         last_error = NULL`,
+      [`LINE group ${groupId.slice(-8)}`, groupId],
+    );
+  }
+  return uniqueGroupIds.length;
+}
+
 async function pushLineText(groupId: string, text: string) {
   const token = getLineMessagingToken();
   if (!token) throw new Error('ยังไม่ได้ตั้งค่า LINE_MESSAGING_CHANNEL_ACCESS_TOKEN');

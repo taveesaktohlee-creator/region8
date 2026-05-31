@@ -77,6 +77,10 @@
       "destination": "/api/line-notifications?path=test"
     },
     {
+      "source": "/webhook/line",
+      "destination": "/api/line-notifications?path=webhook"
+    },
+    {
       "source": "/api/:path*",
       "destination": "http://region8.duckdns.org/api/:path*"
     },

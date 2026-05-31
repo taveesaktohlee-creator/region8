@@ -7,6 +7,7 @@ import {
   assertLineGroupId,
   ensureLineNotificationTables,
   getLineMessagingConfigStatus,
+  recordLineWebhookGroups,
   seedLineNotificationTopics,
   sendLineTestToGroup,
   sendLineTopicNotification,
@@ -2171,6 +2172,17 @@ app.post('/api/admin/line-notifications/test', async (req, res) => {
     console.error(error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'ส่งข้อความทดสอบ LINE ไม่สำเร็จ' });
   }
+});
+
+app.post('/webhook/line', async (req, res) => {
+  const events = Array.isArray(req.body?.events) ? req.body.events : [];
+  const groupIds = events
+    .map((event: any) => event?.source?.type === 'group' ? event.source.groupId : '')
+    .filter(Boolean);
+  console.log('LINE webhook:', JSON.stringify(req.body));
+  if (groupIds.length > 0) console.log('LINE groupId:', [...new Set(groupIds)].join(', '));
+  if (groupIds.length > 0) await recordLineWebhookGroups(pool, groupIds);
+  res.sendStatus(200);
 });
 
 // ตรวจสอบอีเมลสำหรับขอรีเซ็ตรหัสผ่าน

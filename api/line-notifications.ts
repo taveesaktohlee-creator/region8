@@ -3,6 +3,7 @@ import {
   assertLineGroupId,
   ensureLineNotificationTables,
   getLineMessagingConfigStatus,
+  recordLineWebhookGroups,
   seedLineNotificationTopics,
   sendLineTestToGroup,
   verifyLineGroup,
@@ -216,6 +217,18 @@ async function sendTest(req: any, res: any) {
   return sendJson(res, 200, { message: `ส่งข้อความทดสอบไปยัง ${result.group_name} เรียบร้อยแล้ว` });
 }
 
+async function lineWebhook(req: any, res: any) {
+  const body = await readBody(req);
+  const events = Array.isArray(body?.events) ? body.events : [];
+  const groupIds = events
+    .map((event: any) => event?.source?.type === 'group' ? event.source.groupId : '')
+    .filter(Boolean);
+  console.log('LINE webhook:', JSON.stringify(body));
+  if (groupIds.length > 0) console.log('LINE groupId:', [...new Set(groupIds)].join(', '));
+  if (groupIds.length > 0) await recordLineWebhookGroups(pool, groupIds);
+  return sendJson(res, 200, { ok: true });
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
@@ -239,6 +252,7 @@ export default async function handler(req: any, res: any) {
     if (groupMatch && req.method === 'DELETE') return await deleteGroup(res, toInt(groupMatch[1]));
 
     if (path === 'test' && req.method === 'POST') return await sendTest(req, res);
+    if (path === 'webhook' && req.method === 'POST') return await lineWebhook(req, res);
 
     return sendJson(res, 404, { error: 'ไม่พบ API แจ้งเตือน LINE' });
   } catch (error) {
