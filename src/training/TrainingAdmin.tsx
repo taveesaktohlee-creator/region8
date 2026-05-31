@@ -638,7 +638,10 @@ export default function TrainingAdmin() {
     const data = await res.json();
     if (!res.ok) return toast.error(data.error || 'ลบหลักสูตรไม่สำเร็จ');
     toast.success(data.message);
-    await refreshAll();
+    if (selectedCourseId === courseId) resetForm();
+    setCourses((current) => current.filter((course) => Number(course.course_id) !== Number(courseId)));
+    setReport((current) => current.filter((row) => Number(row.course_id) !== Number(courseId)));
+    loadReport().catch(() => undefined);
   };
 
   const addLesson = async () => {
@@ -768,8 +771,8 @@ export default function TrainingAdmin() {
       setEvaluationReport(getLocalEvaluationReport(selectedCourseId));
     }
     toast.success(successMessage);
-    await loadEvaluationQuestions(selectedCourseId).catch(() => undefined);
-    await loadEvaluationReport(selectedCourseId).catch(() => undefined);
+    setEvaluationQuestions((current) => current.filter((question) => Number(question.question_id) !== Number(questionId)));
+    loadEvaluationReport(selectedCourseId).catch(() => undefined);
   };
 
   const updateQuizSetting = (quizType: QuizType, key: 'hours' | 'minutes' | 'pass_score', value: number) => {

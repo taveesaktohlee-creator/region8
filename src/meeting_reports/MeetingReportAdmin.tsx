@@ -185,7 +185,13 @@ export default function MeetingReportAdmin() {
     }
     toast.success(data.message || 'ลบข้อมูลแล้ว');
     if (selectedReportId === reportId) resetForm();
-    await refreshAll(userData.user_id);
+    setItems((current) => current.filter((item) => Number(item.report_id) !== Number(reportId)));
+    setReportData((current) => ({
+      reads: current.reads.filter((row) => Number(row.report_id) !== Number(reportId)),
+      acknowledgements: current.acknowledgements.filter((row) => Number(row.report_id) !== Number(reportId)),
+      comments: current.comments.filter((row) => Number(row.report_id) !== Number(reportId)),
+    }));
+    loadReport(userData.user_id).catch(() => undefined);
   };
 
   const handleLogout = async () => {

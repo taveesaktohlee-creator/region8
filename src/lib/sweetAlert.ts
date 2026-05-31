@@ -1,8 +1,5 @@
 import Swal, { type SweetAlertIcon } from 'sweetalert2';
-import withReactContent from 'sweetalert2-react-content';
 import 'sweetalert2/dist/sweetalert2.min.css';
-
-const ReactSwal = withReactContent(Swal);
 
 const baseCustomClass = {
   popup: 'rounded-3xl px-6 py-5 font-sarabun',
@@ -11,6 +8,15 @@ const baseCustomClass = {
   actions: 'gap-3',
   confirmButton: 'rounded-2xl bg-blue-600 px-8 py-3 text-base font-black text-white shadow-none hover:bg-blue-700',
   cancelButton: 'rounded-2xl bg-blue-100 px-8 py-3 text-base font-black text-blue-900 shadow-none hover:bg-blue-200',
+};
+
+const fastDialogOptions = {
+  animation: false,
+  heightAuto: false,
+  buttonsStyling: false,
+  showClass: { popup: '' },
+  hideClass: { popup: '' },
+  customClass: baseCustomClass,
 };
 
 type ConfirmOptions = {
@@ -35,7 +41,8 @@ export async function confirmDialog({
   confirmButtonText = 'ตกลง',
   cancelButtonText = 'ยกเลิก',
 }: ConfirmOptions) {
-  const result = await ReactSwal.fire({
+  const result = await Swal.fire({
+    ...fastDialogOptions,
     title,
     text,
     icon,
@@ -43,9 +50,7 @@ export async function confirmDialog({
     confirmButtonText,
     cancelButtonText,
     reverseButtons: true,
-    buttonsStyling: false,
     focusCancel: true,
-    customClass: baseCustomClass,
   });
 
   return result.isConfirmed;
@@ -57,12 +62,11 @@ export async function alertDialog({
   icon = 'info',
   confirmButtonText = 'ตกลง',
 }: AlertOptions) {
-  await ReactSwal.fire({
+  await Swal.fire({
+    ...fastDialogOptions,
     title,
     text,
     icon,
     confirmButtonText,
-    buttonsStyling: false,
-    customClass: baseCustomClass,
   });
 }

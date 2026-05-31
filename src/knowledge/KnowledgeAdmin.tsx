@@ -217,7 +217,9 @@ export default function KnowledgeAdmin() {
     if (!res.ok) return toast.error(data.error || 'ลบเรื่องไม่สำเร็จ');
     toast.success(data.message);
     if (selectedItemId === itemId) resetForm();
-    await refreshAll();
+    setItems((current) => current.filter((item) => Number(item.item_id) !== Number(itemId)));
+    setReport((current) => current.filter((row) => Number(row.item_id) !== Number(itemId)));
+    loadReport().catch(() => undefined);
   };
 
   const handleCoverUpload = async (event: ChangeEvent<HTMLInputElement>) => {
