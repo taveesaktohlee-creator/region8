@@ -33,6 +33,27 @@ type LineConfig = {
   missing: string[];
 };
 
+type LineWebhookEvent = {
+  webhook_event_id: number;
+  source_type?: string | null;
+  event_type?: string | null;
+  group_id?: string | null;
+  room_id?: string | null;
+  user_id?: string | null;
+  message_text?: string | null;
+  received_at?: string | null;
+};
+
+type LineWebhookStatus = {
+  endpoint_status?: {
+    webhook_url?: string;
+    endpoint?: string;
+    active?: boolean;
+  } | null;
+  endpoint_error?: string;
+  recent_events?: LineWebhookEvent[];
+};
+
 function uniqueNumbers(values: number[]) {
   return [...new Set(values.filter(value => Number.isFinite(value) && value > 0))];
 }
@@ -41,9 +62,12 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
   const [topics, setTopics] = useState<LineTopic[]>([]);
   const [groups, setGroups] = useState<LineGroup[]>([]);
   const [lineConfig, setLineConfig] = useState<LineConfig | null>(null);
+  const [webhookStatus, setWebhookStatus] = useState<LineWebhookStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [settingWebhook, setSettingWebhook] = useState(false);
+  const [testingWebhook, setTestingWebhook] = useState(false);
   const [testingId, setTestingId] = useState<number | null>(null);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupId, setNewGroupId] = useState('');
@@ -62,6 +86,7 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
       setTopics(Array.isArray(data.topics) ? data.topics : []);
       setGroups(Array.isArray(data.groups) ? data.groups : []);
       setLineConfig(data.line_config || null);
+      setWebhookStatus(data.webhook_status || null);
     } finally {
       setLoading(false);
     }
@@ -142,6 +167,40 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
       setCreating(false);
     }
   }, [creating, loadSettings, newGroupId, newGroupName]);
+
+  const setupWebhook = useCallback(async () => {
+    if (settingWebhook) return;
+    setSettingWebhook(true);
+    try {
+      const res = await fetch(`${API}/line-webhook/setup`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'ตั้งค่า Webhook ไม่สำเร็จ');
+        return;
+      }
+      toast.success(data.message || 'ตั้งค่า Webhook แล้ว');
+      await loadSettings();
+    } finally {
+      setSettingWebhook(false);
+    }
+  }, [loadSettings, settingWebhook]);
+
+  const testWebhook = useCallback(async () => {
+    if (testingWebhook) return;
+    setTestingWebhook(true);
+    try {
+      const res = await fetch(`${API}/line-webhook/test`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || data.message || 'ทดสอบ Webhook ไม่สำเร็จ');
+        return;
+      }
+      toast.success(data.message || 'ทดสอบ Webhook สำเร็จ');
+      await loadSettings();
+    } finally {
+      setTestingWebhook(false);
+    }
+  }, [loadSettings, testingWebhook]);
 
   const updateGroup = useCallback(async (group: LineGroup, patch: Partial<LineGroup>) => {
     const res = await fetch(`${API}/line-notification-groups/${group.group_ref_id}`, {
@@ -225,6 +284,95 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
       </div>
 
       <div className="rounded-2xl border border-white bg-white/80 shadow-[0_8px_30px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 lg:flex-row lg:items-center">
+          <div className="flex items-center gap-2">
+            <RefreshCw size={16} className="text-blue-600" />
+            <span className="text-sm font-bold text-slate-700">Webhook ตรวจจับ groupId</span>
+            <span className={`rounded-full px-3 py-1 text-xs font-black ${
+              webhookStatus?.endpoint_status?.active ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+            }`}>
+              {webhookStatus?.endpoint_status?.active ? 'เปิดอยู่' : 'ยังไม่เปิด'}
+            </span>
+          </div>
+          <div className="ml-auto flex flex-wrap gap-2">
+            <button
+              onClick={setupWebhook}
+              disabled={settingWebhook}
+              className="inline-flex items-center gap-1 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 disabled:opacity-50"
+            >
+              {settingWebhook ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              ตั้งค่า Webhook
+            </button>
+            <button
+              onClick={testWebhook}
+              disabled={testingWebhook}
+              className="inline-flex items-center gap-1 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 disabled:opacity-50"
+            >
+              {testingWebhook ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+              ทดสอบ Webhook
+            </button>
+            <button
+              onClick={loadSettings}
+              className="inline-flex items-center gap-1 rounded-xl bg-slate-50 px-3 py-2 text-xs font-black text-slate-500 transition-all hover:bg-slate-100"
+            >
+              <RefreshCw size={14} />
+              โหลดใหม่
+            </button>
+          </div>
+        </div>
+
+        <div className="grid gap-3 px-5 py-4 lg:grid-cols-2">
+          <div className="rounded-2xl bg-slate-50 px-4 py-3">
+            <p className="text-xs font-black uppercase text-slate-400">Webhook URL</p>
+            <p className="mt-1 break-all font-mono text-xs font-bold text-slate-600">
+              {webhookStatus?.endpoint_status?.webhook_url || 'https://region8.vercel.app/webhook/line'}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-slate-50 px-4 py-3">
+            <p className="text-xs font-black uppercase text-slate-400">LINE Console</p>
+            <p className="mt-1 break-all font-mono text-xs font-bold text-slate-600">
+              {webhookStatus?.endpoint_status?.endpoint || 'ยังไม่พบ endpoint จาก LINE'}
+            </p>
+          </div>
+        </div>
+
+        {webhookStatus?.endpoint_error && (
+          <div className="mx-5 mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+            {webhookStatus.endpoint_error}
+          </div>
+        )}
+
+        <div className="px-5 pb-5">
+          {(webhookStatus?.recent_events || []).length === 0 ? (
+            <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+              ยังไม่พบ webhook จาก LINE ให้กด “ตั้งค่า Webhook” แล้วส่งข้อความในกลุ่มที่มีบอทอยู่ จากนั้นกด “โหลดใหม่”
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {(webhookStatus?.recent_events || []).slice(0, 3).map(event => {
+                const idText = event.group_id || event.room_id || event.user_id || '-';
+                const isGroup = event.source_type === 'group' && Boolean(event.group_id);
+                return (
+                  <div key={event.webhook_event_id} className={`rounded-2xl border px-4 py-3 text-sm font-bold ${
+                    isGroup ? 'border-emerald-100 bg-emerald-50 text-emerald-800' : 'border-amber-100 bg-amber-50 text-amber-800'
+                  }`}>
+                    <div className="flex flex-col gap-1 lg:flex-row lg:items-center lg:justify-between">
+                      <span>{isGroup ? 'พบ LINE groupId แล้ว' : `พบ source: ${event.source_type || '-'}`}</span>
+                      <span className="font-mono text-xs">{event.received_at || ''}</span>
+                    </div>
+                    <div className="mt-1 break-all font-mono text-xs">{idText}</div>
+                    {!isGroup && event.source_type === 'room' && (
+                      <p className="mt-1 text-xs">รายการนี้เป็น roomId ไม่ใช่ groupId จึงยังไม่เพิ่มเป็นกลุ่มแจ้งเตือน</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-white bg-white/80 shadow-[0_8px_30px_rgba(0,0,0,0.04)]">
         <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4">
           <MessageCircle size={16} className="text-emerald-600" />
           <span className="text-sm font-bold text-slate-700">LINE Groups</span>
@@ -240,7 +388,7 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
 
         <div className="px-5 pt-5">
           <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">
-            ส่งข้อความใน LINE กลุ่มที่มีบอทอยู่แล้วกด “โหลดใหม่” ระบบจะเพิ่ม groupId ให้อัตโนมัติ
+            ส่งข้อความใน LINE กลุ่มที่มีบอทอยู่แล้วกด “โหลดใหม่” ระบบจะเพิ่ม groupId ให้อัตโนมัติ หากบอทตอบกลับเอง ให้ปิด Auto-reply messages และ Greeting messages ใน LINE Official Account Manager
           </div>
         </div>
 

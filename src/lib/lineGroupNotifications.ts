@@ -19,6 +19,8 @@ type LinePushResult = {
 };
 
 const LINE_PUSH_URL = 'https://api.line.me/v2/bot/message/push';
+const LINE_WEBHOOK_ENDPOINT_URL = 'https://api.line.me/v2/bot/channel/webhook/endpoint';
+const LINE_WEBHOOK_TEST_URL = 'https://api.line.me/v2/bot/channel/webhook/test';
 const LINE_GROUP_ID_RE = /^C[a-zA-Z0-9_-]{20,}$/;
 
 function toInt(value: unknown, fallback = 0) {
@@ -33,6 +35,17 @@ function trimText(value: unknown, maxLength: number) {
 
 function getLineMessagingToken() {
   return process.env.LINE_MESSAGING_CHANNEL_ACCESS_TOKEN?.trim() || '';
+}
+
+export function getLineWebhookUrl() {
+  const configured = process.env.LINE_WEBHOOK_URL?.trim();
+  if (configured) return configured;
+
+  const appBase =
+    process.env.APP_BASE_URL?.trim() ||
+    process.env.PUBLIC_APP_URL?.trim() ||
+    'https://region8.vercel.app';
+  return `${appBase.replace(/\/+$/, '')}/webhook/line`;
 }
 
 export function getLineMessagingConfigStatus() {
@@ -117,6 +130,23 @@ export async function ensureLineNotificationTables(db: DbLike) {
       INDEX idx_line_delivery_status (status)
     ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
   `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS line_webhook_events (
+      webhook_event_id INT AUTO_INCREMENT PRIMARY KEY,
+      source_type VARCHAR(40) NULL,
+      event_type VARCHAR(80) NULL,
+      group_id VARCHAR(100) NULL,
+      room_id VARCHAR(100) NULL,
+      user_id VARCHAR(100) NULL,
+      message_text TEXT NULL,
+      raw_json LONGTEXT NULL,
+      received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_line_webhook_received_at (received_at),
+      INDEX idx_line_webhook_group_id (group_id),
+      INDEX idx_line_webhook_room_id (room_id)
+    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+  `);
 }
 
 export async function seedLineNotificationTopics(db: DbLike) {
@@ -170,6 +200,125 @@ export async function recordLineWebhookGroups(db: DbLike, groupIds: string[]) {
     );
   }
   return uniqueGroupIds.length;
+}
+
+export async function recordLineWebhookEvents(db: DbLike, events: any[]) {
+  await ensureLineNotificationTables(db);
+  const webhookEvents = Array.isArray(events) ? events : [];
+
+  for (const event of webhookEvents) {
+    const source = event?.source || {};
+    await db.query(
+      `INSERT INTO line_webhook_events
+         (source_type, event_type, group_id, room_id, user_id, message_text, raw_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        trimText(source.type, 40) || null,
+        trimText(event?.type, 80) || null,
+        trimText(source.groupId, 100) || null,
+        trimText(source.roomId, 100) || null,
+        trimText(source.userId, 100) || null,
+        event?.message?.type === 'text' ? trimText(event.message.text, 1000) || null : null,
+        trimText(JSON.stringify(event), 60_000) || null,
+      ],
+    );
+  }
+
+  return webhookEvents.length;
+}
+
+export async function getRecentLineWebhookEvents(db: DbLike, limit = 8) {
+  await ensureLineNotificationTables(db);
+  const safeLimit = Math.min(Math.max(toInt(limit, 8), 1), 20);
+  const [rows]: any = await db.query(
+    `SELECT webhook_event_id, source_type, event_type, group_id, room_id, user_id, message_text,
+            DATE_FORMAT(received_at, '%Y-%m-%dT%H:%i:%s') AS received_at
+     FROM line_webhook_events
+     ORDER BY webhook_event_id DESC
+     LIMIT ?`,
+    [safeLimit],
+  );
+  return rows;
+}
+
+async function lineMessagingRequest(url: string, init: RequestInit = {}) {
+  const token = getLineMessagingToken();
+  if (!token) throw new Error('ยังไม่ได้ตั้งค่า LINE_MESSAGING_CHANNEL_ACCESS_TOKEN');
+
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init.headers || {}),
+    },
+  });
+  const text = await response.text();
+  let payload: any = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok) {
+    throw new Error(String(payload?.message || text || 'เรียก LINE Messaging API ไม่สำเร็จ'));
+  }
+  return payload;
+}
+
+export async function getLineWebhookEndpointStatus() {
+  const payload = await lineMessagingRequest(LINE_WEBHOOK_ENDPOINT_URL);
+  return {
+    webhook_url: getLineWebhookUrl(),
+    endpoint: String(payload?.endpoint || ''),
+    active: Boolean(payload?.active),
+  };
+}
+
+export async function setLineWebhookEndpoint(endpoint = getLineWebhookUrl()) {
+  await lineMessagingRequest(LINE_WEBHOOK_ENDPOINT_URL, {
+    method: 'PUT',
+    body: JSON.stringify({ endpoint }),
+  });
+  return await getLineWebhookEndpointStatus();
+}
+
+export async function testLineWebhookEndpoint(endpoint = getLineWebhookUrl()) {
+  const payload = await lineMessagingRequest(LINE_WEBHOOK_TEST_URL, {
+    method: 'POST',
+    body: JSON.stringify({ endpoint }),
+  });
+  return {
+    webhook_url: endpoint,
+    success: Boolean(payload?.success),
+    timestamp: payload?.timestamp || '',
+    status_code: payload?.statusCode || null,
+    reason: payload?.reason || '',
+    detail: payload?.detail || '',
+  };
+}
+
+export async function getLineWebhookStatus(db: DbLike) {
+  const recent_events = await getRecentLineWebhookEvents(db);
+  let endpoint_status: any = null;
+  let endpoint_error = '';
+  try {
+    endpoint_status = await getLineWebhookEndpointStatus();
+  } catch (error) {
+    endpoint_error = error instanceof Error ? error.message : 'ตรวจสถานะ LINE webhook ไม่สำเร็จ';
+    endpoint_status = {
+      webhook_url: getLineWebhookUrl(),
+      endpoint: '',
+      active: false,
+    };
+  }
+
+  return {
+    endpoint_status,
+    endpoint_error,
+    recent_events,
+  };
 }
 
 async function pushLineText(groupId: string, text: string) {

@@ -3,9 +3,13 @@ import {
   assertLineGroupId,
   ensureLineNotificationTables,
   getLineMessagingConfigStatus,
+  getLineWebhookStatus,
   recordLineWebhookGroups,
+  recordLineWebhookEvents,
   seedLineNotificationTopics,
+  setLineWebhookEndpoint,
   sendLineTestToGroup,
+  testLineWebhookEndpoint,
   verifyLineGroup,
 } from '../src/lib/lineGroupNotifications.js';
 
@@ -92,6 +96,7 @@ async function listSettings(_req: any, res: any) {
 
   return sendJson(res, 200, {
     line_config: getLineMessagingConfigStatus(),
+    webhook_status: await getLineWebhookStatus(pool),
     topics: topicRows.map((topic: any) => ({
       ...topic,
       is_enabled: Number(topic.is_enabled) === 1,
@@ -217,6 +222,27 @@ async function sendTest(req: any, res: any) {
   return sendJson(res, 200, { message: `ส่งข้อความทดสอบไปยัง ${result.group_name} เรียบร้อยแล้ว` });
 }
 
+async function webhookStatus(_req: any, res: any) {
+  await setup();
+  return sendJson(res, 200, await getLineWebhookStatus(pool));
+}
+
+async function setupWebhook(_req: any, res: any) {
+  const endpoint = await setLineWebhookEndpoint();
+  return sendJson(res, 200, {
+    message: 'ตั้งค่า Webhook URL ใน LINE Developers เรียบร้อยแล้ว',
+    endpoint,
+  });
+}
+
+async function testWebhook(_req: any, res: any) {
+  const result = await testLineWebhookEndpoint();
+  return sendJson(res, result.success ? 200 : 400, {
+    message: result.success ? 'ทดสอบ Webhook สำเร็จ' : 'ทดสอบ Webhook ไม่สำเร็จ',
+    result,
+  });
+}
+
 async function lineWebhook(req: any, res: any) {
   const body = await readBody(req);
   const events = Array.isArray(body?.events) ? body.events : [];
@@ -225,8 +251,9 @@ async function lineWebhook(req: any, res: any) {
     .filter(Boolean);
   console.log('LINE webhook:', JSON.stringify(body));
   if (groupIds.length > 0) console.log('LINE groupId:', [...new Set(groupIds)].join(', '));
+  if (events.length > 0) await recordLineWebhookEvents(pool, events);
   if (groupIds.length > 0) await recordLineWebhookGroups(pool, groupIds);
-  return sendJson(res, 200, { ok: true });
+  return sendJson(res, 200, { ok: true, events: events.length, group_ids: [...new Set(groupIds)] });
 }
 
 export default async function handler(req: any, res: any) {
@@ -253,6 +280,10 @@ export default async function handler(req: any, res: any) {
 
     if (path === 'test' && req.method === 'POST') return await sendTest(req, res);
     if (path === 'webhook' && req.method === 'POST') return await lineWebhook(req, res);
+    if (path === 'webhook' && req.method === 'GET') return await webhookStatus(req, res);
+    if (path === 'webhook-status' && req.method === 'GET') return await webhookStatus(req, res);
+    if (path === 'webhook-setup' && req.method === 'POST') return await setupWebhook(req, res);
+    if (path === 'webhook-test' && req.method === 'POST') return await testWebhook(req, res);
 
     return sendJson(res, 404, { error: 'ไม่พบ API แจ้งเตือน LINE' });
   } catch (error) {

@@ -7,10 +7,14 @@ import {
   assertLineGroupId,
   ensureLineNotificationTables,
   getLineMessagingConfigStatus,
+  getLineWebhookStatus,
   recordLineWebhookGroups,
+  recordLineWebhookEvents,
   seedLineNotificationTopics,
+  setLineWebhookEndpoint,
   sendLineTestToGroup,
   sendLineTopicNotification,
+  testLineWebhookEndpoint,
   verifyLineGroup,
 } from './src/lib/lineGroupNotifications.js';
 
@@ -2001,6 +2005,7 @@ app.get('/api/admin/line-notification-settings', async (_req, res) => {
 
     res.json({
       line_config: getLineMessagingConfigStatus(),
+      webhook_status: await getLineWebhookStatus(pool),
       topics: topicRows.map((topic: any) => ({
         ...topic,
         is_enabled: Number(topic.is_enabled) === 1,
@@ -2174,6 +2179,42 @@ app.post('/api/admin/line-notifications/test', async (req, res) => {
   }
 });
 
+app.get('/api/admin/line-webhook/status', async (_req, res) => {
+  try {
+    await ensureLineNotificationSchema();
+    res.json(await getLineWebhookStatus(pool));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'ตรวจสถานะ LINE webhook ไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/admin/line-webhook/setup', async (_req, res) => {
+  try {
+    const endpoint = await setLineWebhookEndpoint();
+    res.json({
+      message: 'ตั้งค่า Webhook URL ใน LINE Developers เรียบร้อยแล้ว',
+      endpoint,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'ตั้งค่า LINE webhook ไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/admin/line-webhook/test', async (_req, res) => {
+  try {
+    const result = await testLineWebhookEndpoint();
+    res.status(result.success ? 200 : 400).json({
+      message: result.success ? 'ทดสอบ Webhook สำเร็จ' : 'ทดสอบ Webhook ไม่สำเร็จ',
+      result,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'ทดสอบ LINE webhook ไม่สำเร็จ' });
+  }
+});
+
 app.post('/webhook/line', async (req, res) => {
   const events = Array.isArray(req.body?.events) ? req.body.events : [];
   const groupIds = events
@@ -2181,8 +2222,19 @@ app.post('/webhook/line', async (req, res) => {
     .filter(Boolean);
   console.log('LINE webhook:', JSON.stringify(req.body));
   if (groupIds.length > 0) console.log('LINE groupId:', [...new Set(groupIds)].join(', '));
+  if (events.length > 0) await recordLineWebhookEvents(pool, events);
   if (groupIds.length > 0) await recordLineWebhookGroups(pool, groupIds);
-  res.sendStatus(200);
+  res.status(200).json({ ok: true, events: events.length, group_ids: [...new Set(groupIds)] });
+});
+
+app.get('/webhook/line', async (_req, res) => {
+  try {
+    await ensureLineNotificationSchema();
+    res.json(await getLineWebhookStatus(pool));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'ตรวจสถานะ LINE webhook ไม่สำเร็จ' });
+  }
 });
 
 // ตรวจสอบอีเมลสำหรับขอรีเซ็ตรหัสผ่าน

@@ -77,6 +77,18 @@
       "destination": "/api/line-notifications?path=test"
     },
     {
+      "source": "/api/admin/line-webhook/status",
+      "destination": "/api/line-notifications?path=webhook-status"
+    },
+    {
+      "source": "/api/admin/line-webhook/setup",
+      "destination": "/api/line-notifications?path=webhook-setup"
+    },
+    {
+      "source": "/api/admin/line-webhook/test",
+      "destination": "/api/line-notifications?path=webhook-test"
+    },
+    {
       "source": "/webhook/line",
       "destination": "/api/line-notifications?path=webhook"
     },
