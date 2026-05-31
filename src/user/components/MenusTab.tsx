@@ -4,6 +4,7 @@ import { toast } from 'react-toastify';
 import { Modal, type MenuItem } from './GroupsTab';
 import { API_BASE } from '../../lib/apiConfig';
 import { clearMenuAccessCache } from '../../lib/menuAccess';
+import { confirmDialog } from '../../lib/sweetAlert';
 
 const API = `${API_BASE}/api/admin`;
 
@@ -42,7 +43,8 @@ export function MenusTab({ menus, onRefresh }: { menus: MenuItem[]; onRefresh: (
   };
 
   const del = async (m: MenuItem) => {
-    if (!confirm(`ลบเมนู "${m.menu_name}" ใช่หรือไม่?`)) return;
+    const confirmed = await confirmDialog({ text: `ลบเมนู "${m.menu_name}" ใช่หรือไม่?` });
+    if (!confirmed) return;
     const r = await fetch(`${API}/menus/${m.menu_id}`, { method:'DELETE' });
     const d = await r.json();
     if (!r.ok) { toast.error(d.error); return; }

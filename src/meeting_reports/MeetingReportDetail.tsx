@@ -15,8 +15,9 @@ import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
 import { closeSession, getSessionId, stopHeartbeat } from '../lib/activityTracker';
+import { confirmDialog } from '../lib/sweetAlert';
 import {
-  formatDuration,
+  formatDigitalDuration,
   formatMeetingReportDate,
   getMeetingReportDrivePreviewUrl,
   getMeetingReportPdfOpenUrl,
@@ -55,6 +56,7 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
   const [draftComment, setDraftComment] = useState<DraftComment | null>(null);
   const [readLogId, setReadLogId] = useState<number | null>(null);
   const [readingSeconds, setReadingSeconds] = useState(0);
+  const [timerNow, setTimerNow] = useState(() => Date.now());
   const [activePdfPage, setActivePdfPage] = useState(1);
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const activeStartRef = useRef<number | null>(null);
@@ -139,6 +141,21 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
   }, [pdfDrivePreviewUrl, pdfUrl]);
 
   const viewerReady = Boolean(pdfDoc || (pdfLoadFailed && pdfDrivePreviewUrl));
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setTimerNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const displayedReadingSeconds = useMemo(() => {
+    const activeStartedAt = activeStartRef.current;
+    const activeSeconds = activeStartedAt
+      ? Math.floor(Math.max(0, timerNow - activeStartedAt) / 1000)
+      : 0;
+    return readingSeconds + activeSeconds;
+  }, [readingSeconds, timerNow]);
 
   const shouldTrackReading = useCallback(() => {
     return (
@@ -375,7 +392,7 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
 
   const handleDeleteComment = async (commentId: number) => {
     if (!userData?.user_id) return false;
-    const confirmed = window.confirm('ต้องการลบข้อความแจ้งแก้ไขนี้ใช่หรือไม่');
+    const confirmed = await confirmDialog({ text: 'ต้องการลบข้อความแจ้งแก้ไขนี้ใช่หรือไม่' });
     if (!confirmed) return false;
 
     const res = await fetch(`${API_BASE}/api/meeting-reports/comments/${commentId}`, {
@@ -455,7 +472,7 @@ export default function MeetingReportDetail({ reportId }: { reportId: number }) 
               {report.description && <p className="mt-3 whitespace-pre-line text-sm font-semibold leading-7 text-slate-600">{report.description}</p>}
             </div>
             <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[520px]">
-              <InfoBox icon={<Timer size={19} />} label="เวลาที่อ่าน" value={formatDuration(readingSeconds)} />
+              <InfoBox icon={<Timer size={19} />} label="เวลาที่อ่าน" value={formatDigitalDuration(displayedReadingSeconds)} />
               <InfoBox icon={<MessageSquare size={19} />} label="แจ้งแก้ไข" value={`${comments.length.toLocaleString('th-TH')} ข้อความ`} />
               <button
                 type="button"

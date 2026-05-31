@@ -6,7 +6,7 @@ import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
 import { closeSession, getSessionId, stopHeartbeat } from '../lib/activityTracker';
-import { formatDuration, formatThaiDate, getKnowledgeAssetUrl, getKnowledgePdfOpenUrl, getKnowledgePdfPreviewUrl, type KnowledgeItem } from './knowledgeUtils';
+import { formatDigitalDuration, formatThaiDate, getKnowledgeAssetUrl, getKnowledgePdfOpenUrl, getKnowledgePdfPreviewUrl, type KnowledgeItem } from './knowledgeUtils';
 
 const READING_FLUSH_INTERVAL_MS = 15_000;
 const MAX_READING_CHUNK_SECONDS = 60;
@@ -28,6 +28,7 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
   const [isLoading, setIsLoading] = useState(true);
   const [readLogId, setReadLogId] = useState<number | null>(null);
   const [readingSeconds, setReadingSeconds] = useState(0);
+  const [timerNow, setTimerNow] = useState(() => Date.now());
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const activeStartRef = useRef<number | null>(null);
   const viewerVisibleRef = useRef(false);
@@ -71,6 +72,21 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
     if (!item) return '';
     return getKnowledgePdfOpenUrl(item.pdf_file_id || item.pdf_url || item.pdf_proxy_url);
   }, [item]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setTimerNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const displayedReadingSeconds = useMemo(() => {
+    const activeStartedAt = activeStartRef.current;
+    const activeSeconds = activeStartedAt
+      ? Math.floor(Math.max(0, timerNow - activeStartedAt) / 1000)
+      : 0;
+    return readingSeconds + activeSeconds;
+  }, [readingSeconds, timerNow]);
 
   const shouldTrackReading = useCallback(() => {
     return (
@@ -285,7 +301,7 @@ export default function KnowledgeDetail({ itemId }: { itemId: number }) {
                 <div className="grid gap-3 sm:grid-cols-3">
                   <InfoStat icon={<CalendarDays />} label="เผยแพร่" value={formatThaiDate(item.published_at || item.updated_at)} />
                   <InfoStat icon={<Eye />} label="เปิดอ่าน" value={`${Number(item.view_count || 0).toLocaleString('th-TH')} ครั้ง`} />
-                  <InfoStat icon={<Timer />} label="เวลาที่อ่าน" value={formatDuration(readingSeconds)} />
+                  <InfoStat icon={<Timer />} label="เวลาที่อ่าน" value={formatDigitalDuration(displayedReadingSeconds)} />
                 </div>
               </div>
             </div>

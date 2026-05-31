@@ -378,7 +378,7 @@ const sheetRowToForm = (row: SheetRow, userData?: any): MonitorForm => {
     },
     ups_status: toText(row[SHEET_KEYS.ups]),
     access_register: toText(row[SHEET_KEYS.accessRegister]),
-    upload_responsible: toText(row[SHEET_KEYS.uploadResponsible]) || userData?.Name_Surname || '',
+    upload_responsible: toText(row[SHEET_KEYS.uploadResponsible]),
     send_method: toText(row[SHEET_KEYS.sendCurrent]) || toText(row[SHEET_KEYS.sendNotCurrent]),
     send_current_method: toText(row[SHEET_KEYS.sendCurrent]),
     send_not_current_method: toText(row[SHEET_KEYS.sendNotCurrent]),
@@ -461,7 +461,6 @@ export default function MonitorData() {
         setForm(current => ({
           ...current,
           office: parsed?.Division_Province || current.office,
-          upload_responsible: parsed?.Name_Surname || current.upload_responsible,
         }));
       } catch {
         window.location.href = '/';
@@ -563,7 +562,7 @@ export default function MonitorData() {
       ...initialForm(),
       visit_round: 'ครั้งที่ 2',
       office: userData?.Division_Province || '',
-      upload_responsible: userData?.Name_Surname || '',
+      upload_responsible: '',
     });
     setSourceRound(nextRound);
   };
@@ -585,7 +584,7 @@ export default function MonitorData() {
       ...initialForm(),
       visit_round: 'ครั้งที่ 2',
       office: userData?.Division_Province || '',
-      upload_responsible: userData?.Name_Surname || '',
+      upload_responsible: '',
     });
     setSelectedRowIndex(null);
     setSourceSearch('');
@@ -634,7 +633,7 @@ export default function MonitorData() {
       setForm({
         ...initialForm(),
         office: userData?.Division_Province || '',
-        upload_responsible: userData?.Name_Surname || '',
+        upload_responsible: '',
       });
     } catch (error) {
       console.error(error);

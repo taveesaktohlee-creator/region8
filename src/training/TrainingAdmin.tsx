@@ -7,6 +7,7 @@ import { API_BASE } from '../lib/apiConfig';
 import { getDriveFileIdFromUrl, getTrainingFileUrl, getTrainingImageUrl } from './driveMedia';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
+import { confirmDialog } from '../lib/sweetAlert';
 
 type Course = {
   course_id?: number;
@@ -630,7 +631,9 @@ export default function TrainingAdmin() {
   };
 
   const deleteCourse = async (courseId?: number) => {
-    if (!courseId || !window.confirm('ต้องการลบหลักสูตรนี้หรือไม่')) return;
+    if (!courseId) return;
+    const confirmed = await confirmDialog({ text: 'ต้องการลบหลักสูตรนี้หรือไม่' });
+    if (!confirmed) return;
     const res = await fetch(`${API_BASE}/api/admin/training/courses/${courseId}`, { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) return toast.error(data.error || 'ลบหลักสูตรไม่สำเร็จ');
@@ -746,7 +749,9 @@ export default function TrainingAdmin() {
   };
 
   const deleteEvaluationQuestion = async (questionId: number) => {
-    if (!selectedCourseId || !window.confirm('ต้องการลบหัวข้อประเมินนี้หรือไม่')) return;
+    if (!selectedCourseId) return;
+    const confirmed = await confirmDialog({ text: 'ต้องการลบหัวข้อประเมินนี้หรือไม่' });
+    if (!confirmed) return;
     let successMessage = 'ลบหัวข้อการประเมินเรียบร้อยแล้ว';
     try {
       const { response, data } = await fetchJsonWithFallback(

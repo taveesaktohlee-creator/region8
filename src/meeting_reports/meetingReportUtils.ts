@@ -1,6 +1,7 @@
 import { API_BASE } from '../lib/apiConfig';
 import {
   dataUrlToBase64,
+  formatDigitalDuration,
   formatDuration,
   formatFileSize,
   formatThaiDate,
@@ -206,4 +207,4 @@ export function formatMeetingReportDate(value?: string | null) {
   return formatThaiDate(value);
 }
 
-export { formatDuration, formatFileSize, getDriveFileIdFromUrl };
+export { formatDigitalDuration, formatDuration, formatFileSize, getDriveFileIdFromUrl };

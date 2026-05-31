@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BellRing, Check, Loader2, MessageCircle, Plus, RefreshCw, Save, Send, Trash2, X } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { API_BASE } from '../../lib/apiConfig';
+import { confirmDialog } from '../../lib/sweetAlert';
 
 const API = `${API_BASE}/api/admin`;
 
@@ -222,7 +223,8 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
   }, [loadSettings]);
 
   const deleteGroup = useCallback(async (group: LineGroup) => {
-    if (!confirm(`ลบ LINE group "${group.group_name}" ใช่หรือไม่?`)) return;
+    const confirmed = await confirmDialog({ text: `ลบ LINE group "${group.group_name}" ใช่หรือไม่?` });
+    if (!confirmed) return;
     const res = await fetch(`${API}/line-notification-groups/${group.group_ref_id}`, { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) {

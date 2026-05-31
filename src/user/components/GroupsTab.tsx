@@ -3,6 +3,7 @@ import { Settings, Users, Layout, X, Save, Edit3, Trash2, Check, Plus } from 'lu
 import { toast } from 'react-toastify';
 import { API_BASE } from '../../lib/apiConfig';
 import { clearMenuAccessCache } from '../../lib/menuAccess';
+import { confirmDialog } from '../../lib/sweetAlert';
 
 const API = `${API_BASE}/api/admin`;
 export type MenuItem = { menu_id: number; menu_key: string; menu_name: string; menu_type: 'sidebar'|'content'; menu_icon: string; menu_href: string; sort_order: number; is_active: number; can_view?: number; };
@@ -197,7 +198,8 @@ export function GroupsTab({ groups, onRefresh }: { groups: Group[]; onRefresh: (
   }, [form, groups, editMode, onRefresh, savingGroup]);
 
   const del = useCallback(async (g: Group) => {
-    if (!confirm(`ลบกลุ่ม "${g.group_name}" ใช่หรือไม่?`)) return;
+    const confirmed = await confirmDialog({ text: `ลบกลุ่ม "${g.group_name}" ใช่หรือไม่?` });
+    if (!confirmed) return;
     const r = await fetch(`${API}/groups/${g.group_id}`, { method:'DELETE' });
     const d = await r.json();
     if (!r.ok) { toast.error(d.error); return; }

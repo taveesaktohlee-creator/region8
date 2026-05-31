@@ -1,4 +1,5 @@
 import { API_BASE } from '../lib/apiConfig';
+export { formatDigitalDuration } from '../lib/timeFormat';
 
 export type KnowledgeStatus = 'draft' | 'published' | 'archived';
 

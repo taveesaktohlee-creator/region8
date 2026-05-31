@@ -22,6 +22,7 @@ import type { Content, TDocumentDefinitions } from 'pdfmake/interfaces';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
+import { alertDialog } from '../lib/sweetAlert';
 import sarabunFontUrl from '../assets/fonts/Sarabun-Regular.ttf?url';
 import sarabunBoldFontUrl from '../assets/fonts/Sarabun-Bold.ttf?url';
 
@@ -884,7 +885,7 @@ export default function ProgramMonitoring() {
             if (printWindow && !printWindow.closed) {
                 printWindow.close();
             }
-            alert('ไม่สามารถออกรายงาน PDF ได้ กรุณาลองใหม่อีกครั้ง');
+            await alertDialog({ title: 'ไม่สามารถออกรายงาน PDF ได้', text: 'กรุณาลองใหม่อีกครั้ง', icon: 'error' });
         }
     };
 

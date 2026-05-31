@@ -9,6 +9,7 @@ import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
 import { clearMenuAccessCache } from '../lib/menuAccess';
 import { closeSession, stopHeartbeat } from '../lib/activityTracker';
+import { confirmDialog } from '../lib/sweetAlert';
 import {
   emptyMeetingReport,
   formatDuration,
@@ -173,7 +174,9 @@ export default function MeetingReportAdmin() {
   };
 
   const deleteItem = async (reportId?: number) => {
-    if (!reportId || !userData?.user_id || !window.confirm('ต้องการลบรายงานการประชุมนี้หรือไม่')) return;
+    if (!reportId || !userData?.user_id) return;
+    const confirmed = await confirmDialog({ text: 'ต้องการลบรายงานการประชุมนี้หรือไม่' });
+    if (!confirmed) return;
     const res = await fetch(`${API_BASE}/api/admin/meeting-reports/${reportId}?user_id=${userData.user_id}`, { method: 'DELETE' });
     const data = await readApiResponse(res);
     if (!res.ok) {

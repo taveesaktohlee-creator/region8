@@ -9,6 +9,7 @@ import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
 import { clearMenuAccessCache } from '../lib/menuAccess';
 import { closeSession, stopHeartbeat } from '../lib/activityTracker';
+import { confirmDialog } from '../lib/sweetAlert';
 import {
   dataUrlToBase64,
   emptyKnowledgeItem,
@@ -208,7 +209,9 @@ export default function KnowledgeAdmin() {
   };
 
   const deleteItem = async (itemId?: number) => {
-    if (!itemId || !window.confirm('ต้องการลบเรื่องนี้หรือไม่')) return;
+    if (!itemId) return;
+    const confirmed = await confirmDialog({ text: 'ต้องการลบเรื่องนี้หรือไม่' });
+    if (!confirmed) return;
     const res = await fetch(`${API_BASE}/api/admin/knowledge/items/${itemId}`, { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) return toast.error(data.error || 'ลบเรื่องไม่สำเร็จ');

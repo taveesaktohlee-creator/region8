@@ -4,6 +4,7 @@ import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
+import { formatDigitalDuration } from '../lib/timeFormat';
 import { getTrainingFileUrl, getTrainingImageUrl } from './driveMedia';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
@@ -56,10 +57,7 @@ const courseTypeLabels: Record<Course['course_type'], string> = {
 };
 
 function formatSeconds(seconds?: number) {
-  const value = Math.max(0, Number(seconds || 0));
-  const hours = Math.floor(value / 3600);
-  const minutes = Math.floor((value % 3600) / 60);
-  return `${hours} ชม. ${minutes} นาที`;
+  return formatDigitalDuration(seconds);
 }
 
 function formatMinutes(totalMinutes?: number) {
@@ -163,6 +161,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [activeLogId, setActiveLogId] = useState<number | null>(null);
+  const [timerNow, setTimerNow] = useState(() => Date.now());
   const lastFlushRef = useRef<number | null>(null);
 
   const loadDetail = useCallback(async (userId?: number) => {
@@ -210,6 +209,22 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
 
   const enrollmentId = enrollment?.enrollment_id;
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setTimerNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const displayedAttendedSeconds = useMemo(() => {
+    const savedSeconds = Number(enrollment?.attended_seconds || 0);
+    const activeStartedAt = lastFlushRef.current;
+    const activeSeconds = activeLogId && activeStartedAt
+      ? Math.floor(Math.max(0, timerNow - activeStartedAt) / 1000)
+      : 0;
+    return savedSeconds + activeSeconds;
+  }, [activeLogId, enrollment?.attended_seconds, timerNow]);
+
   const flushTime = useCallback(async () => {
     if (!enrollmentId || !lastFlushRef.current) return;
     const now = Date.now();
@@ -222,6 +237,10 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
       body: JSON.stringify({ seconds, log_id: activeLogId }),
       keepalive: true,
     }).catch(() => undefined);
+    setEnrollment((current) => current ? {
+      ...current,
+      attended_seconds: Number(current.attended_seconds || 0) + seconds,
+    } : current);
   }, [activeLogId, enrollmentId]);
 
   useEffect(() => {
@@ -358,15 +377,15 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
                 </div>
                 <div className="flex flex-wrap gap-3">
                   {!enrollment ? (
-                    <button onClick={handleEnroll} className="rounded-2xl bg-red-600 px-6 py-3 text-sm font-black text-white shadow-lg transition hover:bg-red-700">
+                    <button type="button" onClick={handleEnroll} className="rounded-2xl bg-red-600 px-6 py-3 text-sm font-black text-white shadow-lg transition hover:bg-red-700">
                       ลงทะเบียน
                     </button>
                   ) : activeLogId ? (
-                    <button onClick={handleStop} className="rounded-2xl bg-slate-900 px-6 py-3 text-sm font-black text-white shadow-lg">
-                      หยุดนับเวลา
+                    <button type="button" onClick={handleStop} className="rounded-2xl bg-slate-900 px-6 py-3 text-sm font-black text-white shadow-lg">
+                      หยุดนับเวลา {formatDigitalDuration(displayedAttendedSeconds)}
                     </button>
                   ) : (
-                    <button onClick={handleStart} className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-6 py-3 text-sm font-black text-white shadow-lg transition hover:bg-blue-700">
+                    <button type="button" onClick={handleStart} className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-6 py-3 text-sm font-black text-white shadow-lg transition hover:bg-blue-700">
                       <PlayCircle size={18} /> เริ่มเข้าอบรม
                     </button>
                   )}
@@ -384,7 +403,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
             <div className="flex flex-col gap-5">
               <div className="grid gap-3 sm:grid-cols-4">
                 <Stat icon={<Clock />} label="เวลาเรียน" value={formatMinutes(course.duration_minutes)} />
-                <Stat icon={<CalendarCheck />} label="เวลาที่เข้าอบรม" value={formatSeconds(enrollment?.attended_seconds)} />
+                <Stat icon={<CalendarCheck />} label="เวลาที่เข้าอบรม" value={formatSeconds(displayedAttendedSeconds)} />
                 <Stat icon={<Award />} label="คะแนนก่อนเรียน" value={formatScore(enrollment?.pre_score)} />
                 <Stat icon={<CheckCircle2 />} label="คะแนนหลังเรียน" value={hasPostQuizResult ? `${formatScore(enrollment?.post_score)} ${getPassResult(enrollment?.post_score, course.pass_score)}` : '-'} />
               </div>

@@ -23,6 +23,7 @@ import LeftSide from '../LeftSide';
 import Footer from '../Footer';
 import { API_BASE } from '../lib/apiConfig';
 import { closeSession, stopHeartbeat } from '../lib/activityTracker';
+import { confirmDialog } from '../lib/sweetAlert';
 
 type ViewMode = 'day' | 'week' | 'month' | 'year';
 
@@ -391,7 +392,8 @@ export default function ActivityCalendar() {
 
   const deleteEvent = async () => {
     if (!selectedEvent?.event_id || !currentUserId) return;
-    if (!window.confirm('ยืนยันลบกิจกรรมนี้หรือไม่')) return;
+    const confirmed = await confirmDialog({ text: 'ยืนยันลบกิจกรรมนี้หรือไม่' });
+    if (!confirmed) return;
     setIsSaving(true);
     try {
       const response = await fetch(`${API_BASE}/api/activity-calendar/events/${selectedEvent.event_id}?user_id=${currentUserId}`, { method: 'DELETE' });
@@ -448,7 +450,9 @@ export default function ActivityCalendar() {
   };
 
   const disconnectGoogle = async () => {
-    if (!currentUserId || !window.confirm('ยกเลิกการเชื่อม Google Calendar และลบกิจกรรมที่ sync ไว้หรือไม่')) return;
+    if (!currentUserId) return;
+    const confirmed = await confirmDialog({ text: 'ยกเลิกการเชื่อม Google Calendar และลบกิจกรรมที่ sync ไว้หรือไม่' });
+    if (!confirmed) return;
     try {
       const response = await fetch(`${API_BASE}/api/activity-calendar/google/disconnect?user_id=${currentUserId}`, { method: 'DELETE' });
       const data = await response.json();
