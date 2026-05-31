@@ -359,9 +359,41 @@ function buildAppUrl(href?: string) {
   const base =
     process.env.APP_BASE_URL?.trim() ||
     process.env.PUBLIC_APP_URL?.trim() ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
+    'https://region8.vercel.app';
   if (!base) return path;
   return `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+}
+
+function buildOfficialLineMessage(input: {
+  heading: string;
+  menuName: string;
+  title: string;
+  description?: string;
+  href?: string;
+}) {
+  const description = trimText(input.description, 900);
+  const url = buildAppUrl(input.href);
+  const lines = [
+    trimText(input.heading, 160),
+    '------------------------------',
+    `ประเภท: ${trimText(input.menuName, 120)}`,
+    `เรื่อง: ${trimText(input.title, 300)}`,
+  ];
+
+  if (description) {
+    lines.push('', 'รายละเอียด:', description);
+  }
+
+  if (url) {
+    lines.push('', 'ดูรายละเอียดเพิ่มเติม:', url);
+  }
+
+  lines.push(
+    '------------------------------',
+    'ข้อความนี้เป็นการแจ้งเตือนอัตโนมัติจากระบบสารสนเทศ สำนักงานตรวจบัญชีสหกรณ์ที่ 8',
+  );
+
+  return lines.filter((line) => line !== undefined && line !== null).join('\n');
 }
 
 export function buildLineTopicMessage(input: {
@@ -370,15 +402,13 @@ export function buildLineTopicMessage(input: {
   description?: string;
   href?: string;
 }) {
-  const lines = [
-    `สตท.8: ${input.menuName}`,
-    trimText(input.title, 300),
-  ];
-  const description = trimText(input.description, 700);
-  if (description) lines.push(description);
-  const url = buildAppUrl(input.href);
-  if (url) lines.push(`เปิดดู: ${url}`);
-  return lines.filter(Boolean).join('\n');
+  return buildOfficialLineMessage({
+    heading: 'ประกาศแจ้งเตือนจากระบบสารสนเทศ สตท.8',
+    menuName: input.menuName,
+    title: input.title,
+    description: input.description,
+    href: input.href,
+  });
 }
 
 async function logDelivery(
@@ -502,9 +532,12 @@ export async function sendLineTestToGroup(
   if (!group) throw new Error('ไม่พบ LINE group ที่เลือก');
   if (Number(group.is_active) !== 1) throw new Error('LINE group นี้ถูกปิดใช้งานอยู่');
 
-  const text =
-    trimText(input.message, 1000) ||
-    `สตท.8: ทดสอบแจ้งเตือน LINE\nกลุ่ม: ${group.group_name}\nระบบส่งเข้า LINE กลุ่มเท่านั้น`;
+  const text = buildOfficialLineMessage({
+    heading: 'ทดสอบระบบแจ้งเตือน LINE',
+    menuName: 'ทดสอบการแจ้งเตือน',
+    title: 'ทดสอบส่งข้อความไปยัง LINE กลุ่ม',
+    description: trimText(input.message, 1000) || `กลุ่มปลายทาง: ${group.group_name}\nระบบส่งข้อความเข้า LINE กลุ่มเท่านั้น`,
+  });
   const lineResponse = await pushLineText(group.group_id, text);
 
   await db.query(
