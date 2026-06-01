@@ -306,6 +306,7 @@ async function ensureColumn(tableName: string, columnName: string, definition: s
 }
 
 async function ensureTrainingSchemaColumns() {
+  await ensureColumn('training_courses', 'post_quiz_enabled', 'TINYINT(1) DEFAULT 1');
   await ensureColumn('training_quizzes', 'time_limit_minutes', 'INT DEFAULT 0');
 }
 
@@ -995,6 +996,7 @@ async function ensureTrainingTables() {
           zoom_url TEXT NULL,
           location VARCHAR(255) DEFAULT '',
           pass_score INT DEFAULT 70,
+          post_quiz_enabled TINYINT(1) DEFAULT 1,
           certificate_enabled TINYINT(1) DEFAULT 1,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -1078,6 +1080,9 @@ async function ensureTrainingTables() {
           post_score DECIMAL(5,2) NULL,
           post_total INT DEFAULT 0,
           attended_seconds INT DEFAULT 0,
+          online_video_seconds INT DEFAULT 0,
+          online_video_required_seconds INT DEFAULT 0,
+          online_video_completed TINYINT(1) DEFAULT 0,
           attendance_confirmed TINYINT(1) DEFAULT 0,
           evaluated TINYINT(1) DEFAULT 0,
           certificate_code VARCHAR(80) DEFAULT '',
@@ -1089,6 +1094,9 @@ async function ensureTrainingTables() {
           FOREIGN KEY (course_id) REFERENCES training_courses(course_id) ON DELETE CASCADE
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
       `);
+      await ensureColumn('training_enrollments', 'online_video_seconds', 'INT DEFAULT 0');
+      await ensureColumn('training_enrollments', 'online_video_required_seconds', 'INT DEFAULT 0');
+      await ensureColumn('training_enrollments', 'online_video_completed', 'TINYINT(1) DEFAULT 0');
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS training_attendance_logs (
@@ -1212,6 +1220,18 @@ function getYouTubeEmbedUrl(url?: string | null) {
   const embedMatch = raw.match(/youtube\.com\/embed\/([^?&/]+)/);
   const id = watchMatch?.[1] || shortMatch?.[1] || embedMatch?.[1];
   return id ? `https://www.youtube.com/embed/${id}` : raw;
+}
+
+async function getPrimaryOnlineLessonDuration(courseId: number) {
+  const [rows]: any = await pool.query(
+    `SELECT duration_seconds
+     FROM training_lessons
+     WHERE course_id = ? AND lesson_type = 'video' AND youtube_url <> ''
+     ORDER BY sort_order, lesson_id
+     LIMIT 1`,
+    [courseId],
+  );
+  return Math.max(0, toInt(rows[0]?.duration_seconds));
 }
 
 function truncateExternalMessage(value: unknown, fallback = 'ไม่สามารถเชื่อมต่อบริการภายนอกได้') {
@@ -4513,6 +4533,61 @@ app.post('/api/training/enrollments/:id/time', async (req, res) => {
   }
 });
 
+app.post('/api/training/enrollments/:id/video-progress', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const enrollmentId = toInt(req.params.id);
+    const watchedSeconds = Math.max(0, Math.min(toInt(req.body.watched_seconds), 24 * 3600));
+    const reportedDuration = Math.max(0, Math.min(toInt(req.body.duration_seconds), 24 * 3600));
+    const [rows]: any = await pool.query(
+      `SELECT e.enrollment_id, e.course_id, c.course_type
+       FROM training_enrollments e
+       INNER JOIN training_courses c ON c.course_id = e.course_id
+       WHERE e.enrollment_id = ?
+       LIMIT 1`,
+      [enrollmentId],
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'ไม่พบข้อมูลการลงทะเบียน' });
+    if (rows[0].course_type !== 'online') {
+      return res.json({ message: 'หลักสูตรนี้ไม่ต้องติดตามวิดีโอออนไลน์', completed: true });
+    }
+
+    const lessonDuration = await getPrimaryOnlineLessonDuration(Number(rows[0].course_id));
+    const requiredSeconds = lessonDuration > 0 ? lessonDuration : reportedDuration;
+    const completed = requiredSeconds > 0 && watchedSeconds >= Math.max(1, Math.floor(requiredSeconds * 0.95));
+
+    await pool.query(
+      `UPDATE training_enrollments
+       SET online_video_seconds = GREATEST(online_video_seconds, ?),
+           online_video_required_seconds = GREATEST(online_video_required_seconds, ?),
+           online_video_completed = IF(online_video_completed = 1 OR ? = 1, 1, 0)
+       WHERE enrollment_id = ?`,
+      [watchedSeconds, requiredSeconds, completed ? 1 : 0, enrollmentId],
+    );
+
+    if (reportedDuration > 0 && lessonDuration <= 0) {
+      await pool.query(
+        `UPDATE training_lessons
+         SET duration_seconds = ?
+         WHERE course_id = ? AND lesson_type = 'video' AND youtube_url <> ''
+         ORDER BY sort_order, lesson_id
+         LIMIT 1`,
+        [reportedDuration, rows[0].course_id],
+      );
+    }
+
+    res.json({
+      message: 'บันทึกความคืบหน้าการดูวิดีโอแล้ว',
+      watched_seconds: watchedSeconds,
+      required_seconds: requiredSeconds,
+      completed,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'บันทึกความคืบหน้าวิดีโอไม่สำเร็จ' });
+  }
+});
+
 app.get('/api/training/quizzes/:id', async (req, res) => {
   try {
     await ensureTrainingTables();
@@ -4557,6 +4632,11 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
     const [quizzes]: any = await pool.query('SELECT * FROM training_quizzes WHERE quiz_id = ?', [quizId]);
     if (quizzes.length === 0) return res.status(404).json({ error: 'ไม่พบแบบทดสอบ' });
     const quiz = quizzes[0];
+    const [courseRows]: any = await pool.query(
+      'SELECT course_type, pass_score, post_quiz_enabled FROM training_courses WHERE course_id = ?',
+      [quiz.course_id],
+    );
+    const course = courseRows[0];
     const timeLimitMinutes = Math.max(0, toInt(quiz.time_limit_minutes));
     const elapsedSeconds = Math.max(0, toInt(req.body.elapsed_seconds));
     if (timeLimitMinutes > 0 && elapsedSeconds > (timeLimitMinutes * 60) + 5) {
@@ -4569,6 +4649,23 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
     );
     if (enrollments.length === 0) return res.status(400).json({ error: 'กรุณาลงทะเบียนหลักสูตรก่อนทำแบบทดสอบ' });
     const enrollment = enrollments[0];
+    if (quiz.quiz_type === 'post') {
+      if (course?.course_type !== 'online' && Number(course?.post_quiz_enabled ?? 1) !== 1) {
+        return res.status(403).json({ error: 'ผู้ดูแลระบบยังไม่เปิดแบบทดสอบหลังเรียนสำหรับหลักสูตรนี้' });
+      }
+      if (course?.course_type === 'online') {
+        const lessonDuration = await getPrimaryOnlineLessonDuration(Number(quiz.course_id));
+        const requiredSeconds = Math.max(lessonDuration, toInt(enrollment.online_video_required_seconds));
+        const watchedSeconds = toInt(enrollment.online_video_seconds);
+        const videoCompleted = Number(enrollment.online_video_completed || 0) === 1;
+        if (requiredSeconds <= 0) {
+          return res.status(403).json({ error: 'ระบบยังไม่พบความยาววิดีโอ YouTube กรุณาเปิดวิดีโออบรมก่อนทำแบบทดสอบหลังเรียน' });
+        }
+        if (!videoCompleted && watchedSeconds < Math.max(1, Math.floor(requiredSeconds * 0.95))) {
+          return res.status(403).json({ error: 'กรุณาดูวิดีโออบรมให้จบก่อนทำแบบทดสอบหลังเรียน' });
+        }
+      }
+    }
     if (quiz.quiz_type === 'pre' && enrollment.pre_score !== null && enrollment.pre_score !== undefined) {
       return res.status(400).json({ error: `แบบทดสอบก่อนเรียนทำได้เพียงครั้งเดียว คะแนนเดิม ${enrollment.pre_score}%` });
     }
@@ -4608,8 +4705,6 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
       [enrollment.enrollment_id, quizId, quiz.quiz_type, score, total, JSON.stringify(answers)],
     );
 
-    const [courseRows]: any = await pool.query('SELECT course_type, pass_score FROM training_courses WHERE course_id = ?', [quiz.course_id]);
-    const course = courseRows[0];
     const passScore = Number(course?.pass_score || quiz.pass_score || 70);
     const passed = score >= passScore;
 
@@ -4827,8 +4922,8 @@ app.post('/api/admin/training/courses', async (req, res) => {
       `INSERT INTO training_courses
        (title, category, course_type, status, thumbnail_url, instructor, target_group,
         learning_objectives, learning_topics, content_summary, evaluation_method, description,
-        duration_minutes, zoom_url, location, pass_score, certificate_enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        duration_minutes, zoom_url, location, pass_score, post_quiz_enabled, certificate_enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
         String(body.category || '').trim(),
@@ -4846,6 +4941,7 @@ app.post('/api/admin/training/courses', async (req, res) => {
         String(body.zoom_url || '').trim(),
         String(body.location || '').trim(),
         toInt(body.pass_score, 70),
+        body.post_quiz_enabled === false ? 0 : 1,
         body.certificate_enabled === false ? 0 : 1,
       ],
     );
@@ -4882,7 +4978,7 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
       `UPDATE training_courses SET
        title=?, category=?, course_type=?, status=?, thumbnail_url=?, instructor=?, target_group=?,
        learning_objectives=?, learning_topics=?, content_summary=?, evaluation_method=?, description=?,
-       duration_minutes=?, zoom_url=?, location=?, pass_score=?, certificate_enabled=?
+       duration_minutes=?, zoom_url=?, location=?, pass_score=?, post_quiz_enabled=?, certificate_enabled=?
        WHERE course_id=?`,
       [
         title,
@@ -4901,6 +4997,7 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
         String(body.zoom_url || '').trim(),
         String(body.location || '').trim(),
         toInt(body.pass_score, 70),
+        body.post_quiz_enabled === false ? 0 : 1,
         body.certificate_enabled === false ? 0 : 1,
         courseId,
       ],
@@ -5150,6 +5247,96 @@ app.delete('/api/admin/training/evaluation-questions/:questionId', async (req, r
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'ลบหัวข้อการประเมินไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/admin/training/evaluation-report', async (_req, res) => {
+  try {
+    await ensureTrainingTables();
+    const [questions]: any = await pool.query(
+      `SELECT q.question_id, q.course_id, q.question_text, q.question_type, q.is_required, q.sort_order,
+              c.title, c.course_type, c.category
+       FROM training_evaluation_questions q
+       INNER JOIN training_courses c ON c.course_id = q.course_id
+       ORDER BY c.updated_at DESC, c.course_id DESC, q.sort_order, q.question_id`,
+    );
+    const [responses]: any = await pool.query(
+      `SELECT r.response_id, r.enrollment_id, r.course_id, r.user_id,
+              DATE_FORMAT(r.submitted_at, '%Y-%m-%d %H:%i:%s') AS submitted_at,
+              c.title, c.course_type, c.category,
+              u.Name_Surnam AS Name_Surname, u.position, u.Division_Province, u.Department
+       FROM training_evaluation_responses r
+       INNER JOIN training_courses c ON c.course_id = r.course_id
+       INNER JOIN user u ON u.user_id = r.user_id
+       ORDER BY r.submitted_at DESC`,
+    );
+    const responseIds = responses.map((response: any) => response.response_id);
+    const [answers]: any = responseIds.length > 0
+      ? await pool.query(
+          `SELECT a.response_id, a.question_id, a.answer_value,
+                  q.course_id, q.question_text, q.question_type
+           FROM training_evaluation_answers a
+           INNER JOIN training_evaluation_questions q ON q.question_id = a.question_id
+           WHERE a.response_id IN (?)`,
+          [responseIds],
+        )
+      : [[]];
+
+    const summaries = questions.map((question: any) => {
+      const questionAnswers = answers.filter((answer: any) => answer.question_id === question.question_id);
+      if (question.question_type === 'rating') {
+        const ratings = questionAnswers
+          .map((answer: any) => Number(answer.answer_value))
+          .filter((value: number) => Number.isFinite(value) && value > 0);
+        return {
+          ...question,
+          total_answers: ratings.length,
+          average_rating: ratings.length > 0 ? Number((ratings.reduce((sum: number, value: number) => sum + value, 0) / ratings.length).toFixed(2)) : null,
+        };
+      }
+
+      if (question.question_type === 'single_choice' || question.question_type === 'multiple_choice') {
+        const counts: Record<string, number> = {};
+        questionAnswers.forEach((answer: any) => {
+          let values: string[] = [];
+          if (question.question_type === 'multiple_choice') {
+            try { values = JSON.parse(answer.answer_value || '[]'); } catch { values = []; }
+          } else if (answer.answer_value) {
+            values = [String(answer.answer_value)];
+          }
+          values.forEach((value) => { counts[value] = (counts[value] || 0) + 1; });
+        });
+        return { ...question, total_answers: questionAnswers.length, option_counts: counts };
+      }
+
+      return {
+        ...question,
+        total_answers: questionAnswers.filter((answer: any) => String(answer.answer_value || '').trim()).length,
+        text_answers: questionAnswers
+          .map((answer: any) => String(answer.answer_value || '').trim())
+          .filter(Boolean)
+          .slice(0, 100),
+      };
+    });
+
+    res.json({
+      response_count: responses.length,
+      questions: summaries,
+      responses: responses.map((response: any) => ({
+        ...response,
+        answers: answers
+          .filter((answer: any) => answer.response_id === response.response_id)
+          .map((answer: any) => ({
+            question_id: answer.question_id,
+            question_text: answer.question_text,
+            question_type: answer.question_type,
+            answer_value: answer.answer_value,
+          })),
+      })),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายงานแบบประเมินรวมได้' });
   }
 });
 

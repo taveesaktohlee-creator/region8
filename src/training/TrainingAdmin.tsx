@@ -27,6 +27,7 @@ type Course = {
   zoom_url: string;
   location: string;
   pass_score: number;
+  post_quiz_enabled: boolean | number;
   certificate_enabled: boolean;
   enrolled_count?: number;
 };
@@ -68,11 +69,37 @@ type AdminEvaluationQuestion = {
 type EvaluationReport = {
   response_count: number;
   questions: Array<AdminEvaluationQuestion & {
+    course_id?: number;
+    title?: string;
+    course_type?: Course['course_type'];
+    category?: string;
     total_answers?: number;
     average_rating?: number | null;
     option_counts?: Record<string, number>;
     text_answers?: string[];
   }>;
+  responses?: EvaluationReportResponse[];
+};
+
+type EvaluationReportResponse = {
+  response_id: number;
+  enrollment_id: number;
+  course_id: number;
+  user_id: number;
+  submitted_at: string;
+  title: string;
+  course_type: Course['course_type'];
+  category?: string;
+  Name_Surname: string;
+  position?: string;
+  Division_Province?: string;
+  Department?: string;
+  answers: {
+    question_id: number;
+    question_text: string;
+    question_type: EvaluationQuestionType;
+    answer_value: string;
+  }[];
 };
 
 type EvaluationFormState = {
@@ -133,6 +160,7 @@ const emptyCourse: Course = {
   zoom_url: '',
   location: '',
   pass_score: 70,
+  post_quiz_enabled: true,
   certificate_enabled: true,
 };
 
@@ -353,6 +381,11 @@ function formatSecondsAsHoursMinutes(seconds?: number) {
   return `${hours} ชม. ${minutes} นาที`;
 }
 
+function formatPercent(value?: number | null) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-';
+  return `${Number(value).toFixed(2)}%`;
+}
+
 function enrollmentStatusMeta(status?: string) {
   if (status === 'completed') return { label: 'สำเร็จการอบรม', className: 'bg-emerald-50 text-emerald-700 border-emerald-100' };
   if (status === 'in_progress') return { label: 'กำลังอบรม', className: 'bg-blue-50 text-blue-700 border-blue-100' };
@@ -471,6 +504,7 @@ export default function TrainingAdmin() {
   });
   const [evaluationQuestions, setEvaluationQuestions] = useState<AdminEvaluationQuestion[]>([]);
   const [evaluationReport, setEvaluationReport] = useState<EvaluationReport | null>(null);
+  const [allEvaluationReport, setAllEvaluationReport] = useState<EvaluationReport | null>(null);
   const [courseMaterials, setCourseMaterials] = useState<TrainingMaterial[]>([]);
   const [quizSettings, setQuizSettings] = useState(defaultQuizSettings);
   const [quizPreview, setQuizPreview] = useState<AdminQuiz[] | null>(null);
@@ -491,6 +525,12 @@ export default function TrainingAdmin() {
     const res = await fetch(`${API_BASE}/api/admin/training/report`);
     if (!res.ok) throw new Error('Cannot load report');
     setReport(await res.json());
+  }, []);
+
+  const loadAllEvaluationReport = useCallback(async () => {
+    const res = await fetch(`${API_BASE}/api/admin/training/evaluation-report`);
+    if (!res.ok) throw new Error('Cannot load evaluation report');
+    setAllEvaluationReport(await res.json());
   }, []);
 
   const loadQuizPreview = useCallback(async (courseId: number) => {
@@ -555,8 +595,8 @@ export default function TrainingAdmin() {
   }, []);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadCourses(), loadReport()]);
-  }, [loadCourses, loadReport]);
+    await Promise.all([loadCourses(), loadReport(), loadAllEvaluationReport()]);
+  }, [loadAllEvaluationReport, loadCourses, loadReport]);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('user');
@@ -852,7 +892,7 @@ export default function TrainingAdmin() {
           </div>
 
           {activeTab === 'report' ? (
-            <ReportSection report={report} onRefresh={loadReport} onConfirmAttendance={confirmAttendance} />
+            <ReportSection report={report} evaluationReport={allEvaluationReport} onRefresh={refreshAll} onConfirmAttendance={confirmAttendance} />
           ) : (
             <div className="grid min-w-0 items-start gap-6 2xl:grid-cols-[minmax(0,460px)_minmax(0,1fr)]">
               <section className="relative z-0 min-w-0 overflow-hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -861,7 +901,7 @@ export default function TrainingAdmin() {
                     <h2 className="text-xl font-black text-slate-900">จัดการหลักสูตร</h2>
                     <p className="text-sm font-semibold text-slate-500">เพิ่ม/แก้ไขหลักสูตรอบรม</p>
                   </div>
-                  <button onClick={resetForm} className="rounded-2xl bg-blue-600 p-3 text-white"><Plus size={18} /></button>
+                  <button type="button" onClick={resetForm} className="rounded-2xl bg-blue-600 p-3 text-white"><Plus size={18} /></button>
                 </div>
                 <CourseForm form={form} setForm={setForm} onSave={saveCourse} selectedCourseId={selectedCourseId} isSaving={isSavingCourse} />
               </section>
@@ -878,12 +918,12 @@ export default function TrainingAdmin() {
                   <div className="grid gap-3">
                     {filteredCourses.map((course) => (
                       <div key={course.course_id} className={`grid min-w-0 gap-3 rounded-2xl border p-4 transition sm:grid-cols-[minmax(0,1fr)_auto] ${selectedCourseId === course.course_id ? 'border-blue-200 bg-blue-50' : 'border-slate-100 bg-slate-50'}`}>
-                        <button onClick={() => selectCourse(course)} className="min-w-0 text-left">
+                        <button type="button" onClick={() => selectCourse(course)} className="min-w-0 text-left">
                           <p className="break-words font-black text-slate-900">{course.title}</p>
                           <p className="mt-1 text-xs font-bold text-slate-500">{course.category || '-'} · {courseTypeLabels[course.course_type]} · ผู้ลงทะเบียน {course.enrolled_count || 0} คน</p>
                           <p className="mt-1 text-xs font-black text-blue-600">{courseStatusLabels[course.status]}</p>
                         </button>
-                        <button onClick={() => deleteCourse(course.course_id)} className="rounded-xl bg-red-50 p-3 text-red-600"><Trash2 size={16} /></button>
+                        <button type="button" onClick={() => deleteCourse(course.course_id)} className="rounded-xl bg-red-50 p-3 text-red-600"><Trash2 size={16} /></button>
                       </div>
                     ))}
                   </div>
@@ -954,7 +994,7 @@ export default function TrainingAdmin() {
                       <h2 className="flex items-center gap-2 text-lg font-black text-slate-900"><Clock className="text-blue-600" /> ตั้งค่าเวลาแบบทดสอบ</h2>
                       <p className="text-sm font-semibold text-slate-500">กำหนดเวลาในการทำแบบทดสอบก่อนเรียนและหลังเรียน แสดงผลในหน้าผู้ลงทะเบียน</p>
                     </div>
-                    <button onClick={openQuizPreview} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-black text-blue-700 disabled:cursor-not-allowed disabled:opacity-50" disabled={!selectedCourseId}>
+                    <button type="button" onClick={openQuizPreview} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-black text-blue-700 disabled:cursor-not-allowed disabled:opacity-50" disabled={!selectedCourseId}>
                       <Eye size={16} /> ดูตัวอย่างแบบทดสอบ
                     </button>
                   </div>
@@ -1020,6 +1060,7 @@ export default function TrainingAdmin() {
 function TabButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition ${
         active ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'
@@ -1031,9 +1072,10 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
-function ReportSection({ report, onRefresh, onConfirmAttendance }: {
+function ReportSection({ report, evaluationReport, onRefresh, onConfirmAttendance }: {
   report: any[];
-  onRefresh: () => void;
+  evaluationReport: EvaluationReport | null;
+  onRefresh: () => void | Promise<void>;
   onConfirmAttendance: (enrollmentId: number, confirmed: boolean) => void;
 }) {
   const [selectedDivision, setSelectedDivision] = useState('ทั้งหมด');
@@ -1068,99 +1110,298 @@ function ReportSection({ report, onRefresh, onConfirmAttendance }: {
   const safePage = Math.min(currentPage, totalPages);
   const pageStart = (safePage - 1) * REPORT_PAGE_SIZE;
   const paginatedReport = filteredReport.slice(pageStart, pageStart + REPORT_PAGE_SIZE);
+  const quizSummary = useMemo(() => {
+    const total = filteredReport.length;
+    const summary = filteredReport.reduce((acc, row) => {
+      const pre = Number(row.pre_score);
+      const post = Number(row.post_score);
+      if (Number.isFinite(pre)) acc.preScores.push(pre);
+      if (Number.isFinite(post)) {
+        acc.postScores.push(post);
+        if (post >= Number(row.pass_score || 70)) acc.passedCount += 1;
+      }
+      if (Number.isFinite(pre) && Number.isFinite(post)) {
+        acc.bothCount += 1;
+        if (post > pre) acc.improvedCount += 1;
+      }
+      if (row.status === 'completed') acc.completedCount += 1;
+      return acc;
+    }, {
+      preScores: [] as number[],
+      postScores: [] as number[],
+      passedCount: 0,
+      completedCount: 0,
+      bothCount: 0,
+      improvedCount: 0,
+    });
+    const average = (values: number[]) => values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+
+    return {
+      total,
+      preTaken: summary.preScores.length,
+      postTaken: summary.postScores.length,
+      completedCount: summary.completedCount,
+      avgPre: average(summary.preScores),
+      avgPost: average(summary.postScores),
+      passRate: summary.postScores.length > 0 ? (summary.passedCount / summary.postScores.length) * 100 : null,
+      completionRate: total > 0 ? (summary.completedCount / total) * 100 : null,
+      improvementRate: summary.bothCount > 0 ? (summary.improvedCount / summary.bothCount) * 100 : null,
+    };
+  }, [filteredReport]);
+  const filteredEvaluationResponses = useMemo(() => {
+    const needle = reportSearch.trim().toLowerCase();
+    return (evaluationReport?.responses || []).filter((response) => {
+      const matchesDivision = selectedDivision === 'ทั้งหมด' || String(response.Division_Province || '').trim() === selectedDivision;
+      if (!matchesDivision) return false;
+      if (!needle) return true;
+      return [
+        response.Name_Surname,
+        response.position,
+        response.Division_Province,
+        response.Department,
+        response.title,
+        response.category,
+        courseTypeLabels[response.course_type] || response.course_type,
+        ...response.answers.flatMap((answer) => [answer.question_text, answer.answer_value]),
+      ].some((value) => String(value || '').toLowerCase().includes(needle));
+    });
+  }, [evaluationReport?.responses, reportSearch, selectedDivision]);
+  const filteredEvaluationQuestions = useMemo(() => {
+    const needle = reportSearch.trim().toLowerCase();
+    const responseCourseIds = new Set(filteredEvaluationResponses.map((response) => Number(response.course_id)));
+    return (evaluationReport?.questions || []).filter((question) => {
+      if (selectedDivision !== 'ทั้งหมด' && !responseCourseIds.has(Number(question.course_id))) return false;
+      if (!needle) return true;
+      return [
+        question.title,
+        question.category,
+        question.question_text,
+        evaluationTypeLabels[question.question_type],
+      ].some((value) => String(value || '').toLowerCase().includes(needle));
+    });
+  }, [evaluationReport?.questions, filteredEvaluationResponses, reportSearch, selectedDivision]);
 
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedDivision, reportSearch, report]);
 
   return (
-    <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="text-blue-600" /> รายงานผู้ลงทะเบียน</h2>
-          <p className="text-sm font-semibold text-slate-500">รายชื่อผู้ลงทะเบียน เวลาเข้าอบรม คะแนนก่อน/หลัง และสถานะยืนยัน</p>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <label className="text-xs font-black text-slate-500" htmlFor="training-report-division">หน่วยงาน</label>
-          <select
-            id="training-report-division"
-            value={selectedDivision}
-            onChange={(event) => setSelectedDivision(event.target.value)}
-            className="min-w-[260px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-          >
-            {divisionOptions.map((division) => (
-              <option key={division} value={division}>{division}</option>
-            ))}
-          </select>
-          <label className="sr-only" htmlFor="training-report-search">ค้นหารายงานผู้ลงทะเบียน</label>
-          <div className="relative min-w-[260px]">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input
-              id="training-report-search"
-              value={reportSearch}
-              onChange={(event) => setReportSearch(event.target.value)}
-              placeholder="ค้นหาผู้ลงทะเบียน หลักสูตร หรือสถานะ..."
-              className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-            />
+    <section className="space-y-5">
+      <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="text-blue-600" /> รายงานผู้ลงทะเบียน</h2>
+            <p className="text-sm font-semibold text-slate-500">รายชื่อผู้ลงทะเบียน เวลาเข้าอบรม คะแนนก่อน/หลัง และสถานะยืนยัน</p>
           </div>
-          <button onClick={onRefresh} className="rounded-xl bg-slate-100 p-3 text-slate-600"><RefreshCw size={16} /></button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <label className="text-xs font-black text-slate-500" htmlFor="training-report-division">หน่วยงาน</label>
+            <select
+              id="training-report-division"
+              value={selectedDivision}
+              onChange={(event) => setSelectedDivision(event.target.value)}
+              className="min-w-[260px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            >
+              {divisionOptions.map((division) => (
+                <option key={division} value={division}>{division}</option>
+              ))}
+            </select>
+            <label className="sr-only" htmlFor="training-report-search">ค้นหารายงานผู้ลงทะเบียน</label>
+            <div className="relative min-w-[260px]">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+              <input
+                id="training-report-search"
+                value={reportSearch}
+                onChange={(event) => setReportSearch(event.target.value)}
+                placeholder="ค้นหาผู้ลงทะเบียน หลักสูตร สถานะ หรือคำตอบประเมิน..."
+                className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+              />
+            </div>
+            <button type="button" onClick={onRefresh} className="rounded-xl bg-slate-100 p-3 text-slate-600"><RefreshCw size={16} /></button>
+          </div>
         </div>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs font-black text-slate-500">
-            <tr>
-              <th className="px-4 py-3">ผู้เข้าอบรม</th>
-              <th className="px-4 py-3">หลักสูตร</th>
-              <th className="px-4 py-3">ประเภท</th>
-              <th className="px-4 py-3">เวลา</th>
-              <th className="px-4 py-3">ก่อน/หลัง</th>
-              <th className="px-4 py-3">สถานะ</th>
-              <th className="px-4 py-3">ยืนยัน</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredReport.length === 0 ? (
+
+        <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <ReportStatCard title="ผู้ลงทะเบียน" value={quizSummary.total.toLocaleString('th-TH')} detail={`สำเร็จ ${quizSummary.completedCount.toLocaleString('th-TH')} คน`} />
+          <ReportStatCard title="เฉลี่ยก่อนเรียน" value={formatPercent(quizSummary.avgPre)} detail={`เข้าสอบ ${quizSummary.preTaken.toLocaleString('th-TH')} คน`} />
+          <ReportStatCard title="เฉลี่ยหลังเรียน" value={formatPercent(quizSummary.avgPost)} detail={`เข้าสอบ ${quizSummary.postTaken.toLocaleString('th-TH')} คน`} />
+          <ReportStatCard title="อัตราความสำเร็จ" value={formatPercent(quizSummary.passRate)} detail="ผ่านเกณฑ์แบบทดสอบหลังเรียน" tone="emerald" />
+          <ReportStatCard title="คะแนนพัฒนาขึ้น" value={formatPercent(quizSummary.improvementRate)} detail={`จบอบรม ${formatPercent(quizSummary.completionRate)}`} tone="blue" />
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-black text-slate-500">
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center font-bold text-slate-400">ยังไม่มีข้อมูลผู้ลงทะเบียนในหน่วยงานนี้</td>
+                <th className="px-4 py-3">ผู้เข้าอบรม</th>
+                <th className="px-4 py-3">หลักสูตร</th>
+                <th className="px-4 py-3">ประเภท</th>
+                <th className="px-4 py-3">เวลา</th>
+                <th className="px-4 py-3">ก่อน/หลัง</th>
+                <th className="px-4 py-3">สถานะ</th>
+                <th className="px-4 py-3">ยืนยัน</th>
               </tr>
-            ) : paginatedReport.map((row) => {
-              const status = enrollmentStatusMeta(row.status);
-              const result = passResultMeta(row.post_score, row.pass_score);
-              return (
-                <tr key={row.enrollment_id} className="border-b border-slate-100">
-                  <td className="px-4 py-3 font-bold text-slate-800">{row.Name_Surname}<p className="text-xs text-slate-400">{row.position}</p></td>
-                  <td className="max-w-[360px] px-4 py-3 font-semibold text-slate-600">{row.title}</td>
-                  <td className="px-4 py-3 text-xs font-black text-blue-600">{courseTypeLabels[row.course_type as Course['course_type']] || row.course_type}</td>
-                  <td className="px-4 py-3 font-bold">{formatSecondsAsHoursMinutes(row.attended_seconds)}</td>
-                  <td className="px-4 py-3 font-bold">{row.pre_score ?? '-'} / {row.post_score ?? '-'}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-col items-start gap-1">
-                      <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${status.className}`}>{status.label}</span>
-                      <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${result.className}`}>{result.label}</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <button onClick={() => onConfirmAttendance(row.enrollment_id, !row.attendance_confirmed)} className={`rounded-xl px-3 py-2 text-xs font-black ${row.attendance_confirmed ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-                      {row.attendance_confirmed ? 'ยืนยันแล้ว' : 'ยืนยันเข้าอบรม'}
-                    </button>
-                  </td>
+            </thead>
+            <tbody>
+              {filteredReport.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-12 text-center font-bold text-slate-400">ยังไม่มีข้อมูลผู้ลงทะเบียนในหน่วยงานนี้</td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              ) : paginatedReport.map((row) => {
+                const status = enrollmentStatusMeta(row.status);
+                const result = passResultMeta(row.post_score, row.pass_score);
+                return (
+                  <tr key={row.enrollment_id} className="border-b border-slate-100">
+                    <td className="px-4 py-3 font-bold text-slate-800">{row.Name_Surname}<p className="text-xs text-slate-400">{row.position}</p></td>
+                    <td className="max-w-[360px] px-4 py-3 font-semibold text-slate-600">{row.title}</td>
+                    <td className="px-4 py-3 text-xs font-black text-blue-600">{courseTypeLabels[row.course_type as Course['course_type']] || row.course_type}</td>
+                    <td className="px-4 py-3 font-bold">{formatSecondsAsHoursMinutes(row.attended_seconds)}</td>
+                    <td className="px-4 py-3 font-bold">{formatPercent(row.pre_score)} / {formatPercent(row.post_score)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col items-start gap-1">
+                        <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${status.className}`}>{status.label}</span>
+                        <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${result.className}`}>{result.label}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <button type="button" onClick={() => onConfirmAttendance(row.enrollment_id, !row.attendance_confirmed)} className={`rounded-xl px-3 py-2 text-xs font-black ${row.attendance_confirmed ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                        {row.attendance_confirmed ? 'ยืนยันแล้ว' : 'ยืนยันเข้าอบรม'}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <ReportPagination
+          currentPage={safePage}
+          totalPages={totalPages}
+          totalItems={filteredReport.length}
+          pageStart={pageStart}
+          pageCount={paginatedReport.length}
+          onPageChange={setCurrentPage}
+        />
       </div>
-      <ReportPagination
-        currentPage={safePage}
-        totalPages={totalPages}
-        totalItems={filteredReport.length}
-        pageStart={pageStart}
-        pageCount={paginatedReport.length}
-        onPageChange={setCurrentPage}
+
+      <EvaluationDetailedReport
+        questions={filteredEvaluationQuestions}
+        responses={filteredEvaluationResponses}
       />
     </section>
   );
+}
+
+function ReportStatCard({
+  title,
+  value,
+  detail,
+  tone = 'slate',
+}: {
+  title: string;
+  value: string;
+  detail: string;
+  tone?: 'slate' | 'blue' | 'emerald';
+}) {
+  const toneClass = tone === 'emerald'
+    ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
+    : tone === 'blue'
+      ? 'border-blue-100 bg-blue-50 text-blue-700'
+      : 'border-slate-100 bg-slate-50 text-slate-700';
+  return (
+    <div className={`rounded-2xl border px-4 py-3 ${toneClass}`}>
+      <p className="text-xs font-black opacity-80">{title}</p>
+      <p className="mt-1 text-2xl font-black">{value}</p>
+      <p className="mt-1 text-xs font-bold opacity-75">{detail}</p>
+    </div>
+  );
+}
+
+function EvaluationDetailedReport({
+  questions,
+  responses,
+}: {
+  questions: EvaluationReport['questions'];
+  responses: EvaluationReportResponse[];
+}) {
+  return (
+    <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 text-xl font-black"><Star className="text-amber-500" /> รายงานสรุปแบบประเมินแบบละเอียด</h2>
+          <p className="text-sm font-semibold text-slate-500">สรุปผลรายหัวข้อและคำตอบรายผู้เข้าอบรม ตามตัวกรองด้านบน</p>
+        </div>
+        <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+          ผู้ตอบ {responses.length.toLocaleString('th-TH')} คน
+        </span>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <div className="min-w-0 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+          <h3 className="mb-3 text-base font-black text-slate-900">สรุปตามหัวข้อประเมิน</h3>
+          <div className="grid max-h-[520px] gap-3 overflow-y-auto pr-1">
+            {questions.length === 0 ? (
+              <p className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                ยังไม่มีข้อมูลสรุปแบบประเมิน
+              </p>
+            ) : questions.map((question, index) => (
+              <div key={question.question_id} className="rounded-2xl border border-slate-100 bg-white p-4">
+                <p className="text-xs font-black text-blue-600">{question.title || 'หลักสูตร'} · {evaluationTypeLabels[question.question_type]}</p>
+                <p className="mt-1 font-black text-slate-900">{index + 1}. {question.question_text}</p>
+                <EvaluationQuestionResult summary={question} />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="min-w-0 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+          <h3 className="mb-3 text-base font-black text-slate-900">รายละเอียดคำตอบรายผู้เข้าอบรม</h3>
+          <div className="grid max-h-[520px] gap-3 overflow-y-auto pr-1">
+            {responses.length === 0 ? (
+              <p className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                ยังไม่มีผู้ส่งแบบประเมินตามตัวกรองนี้
+              </p>
+            ) : responses.map((response) => (
+              <div key={response.response_id} className="rounded-2xl border border-slate-100 bg-white p-4">
+                <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-black text-slate-900">{response.Name_Surname}</p>
+                    <p className="text-xs font-bold text-slate-400">{response.position || '-'} · {response.Division_Province || '-'}</p>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500">{response.submitted_at}</span>
+                </div>
+                <p className="mb-3 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">{response.title}</p>
+                <div className="grid gap-2">
+                  {response.answers.length === 0 ? (
+                    <p className="text-xs font-bold text-slate-400">ไม่มีคำตอบ</p>
+                  ) : response.answers.map((answer) => (
+                    <div key={`${response.response_id}-${answer.question_id}`} className="rounded-xl bg-slate-50 px-3 py-2">
+                      <p className="text-xs font-black text-slate-500">{answer.question_text}</p>
+                      <p className="mt-1 whitespace-pre-line text-sm font-bold text-slate-800">
+                        {formatEvaluationAnswer(answer)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function formatEvaluationAnswer(answer: EvaluationReportResponse['answers'][number]) {
+  if (answer.question_type === 'multiple_choice') {
+    try {
+      const values = JSON.parse(answer.answer_value || '[]');
+      return Array.isArray(values) && values.length > 0 ? values.join(', ') : '-';
+    } catch {
+      return answer.answer_value || '-';
+    }
+  }
+  if (answer.question_type === 'rating' && answer.answer_value) return `${answer.answer_value} / 5`;
+  return answer.answer_value || '-';
 }
 
 function ReportPagination({
@@ -1251,7 +1492,7 @@ function EvaluationQuestionForm({ form, setForm, disabled, disabledReason, onSub
           </div>
         )}
         {disabledReason && <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">{disabledReason}</p>}
-        <button onClick={onSubmit} disabled={disabled} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+        <button type="button" onClick={onSubmit} disabled={disabled} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
           <Save size={16} /> {disabled ? 'เลือก/บันทึกหลักสูตรก่อน' : 'เพิ่มหัวข้อประเมิน'}
         </button>
       </div>
@@ -1281,7 +1522,7 @@ function EvaluationSummary({ questions, report, onDelete }: {
                 <p className="font-black text-slate-900">{index + 1}. {question.question_text}</p>
                 <p className="mt-1 text-xs font-bold text-blue-600">{evaluationTypeLabels[question.question_type]} · {question.is_required ? 'จำเป็นต้องตอบ' : 'ไม่บังคับ'}</p>
               </div>
-              <button onClick={() => onDelete(question.question_id)} className="rounded-xl bg-red-50 p-2 text-red-600"><Trash2 size={15} /></button>
+              <button type="button" onClick={() => onDelete(question.question_id)} className="rounded-xl bg-red-50 p-2 text-red-600"><Trash2 size={15} /></button>
             </div>
             {question.options.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
@@ -1382,6 +1623,7 @@ function QuizSettingCard({ title, settings, onChange, onSave, disabled, saving =
         </label>
       </div>
       <button
+        type="button"
         onClick={onSave}
         disabled={disabled}
         className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
@@ -1404,7 +1646,7 @@ function QuizPreviewModal({ quizzes, onClose }: { quizzes: AdminQuiz[]; onClose:
             <h2 className="text-xl font-black text-slate-900">ตัวอย่างแบบทดสอบ</h2>
             <p className="text-sm font-semibold text-slate-500">ดูรูปแบบคำถาม ตัวเลือก และคำตอบที่ตั้งไว้</p>
           </div>
-          <button onClick={onClose} className="rounded-2xl bg-slate-100 p-3 text-slate-600 hover:bg-slate-200">
+          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-3 text-slate-600 hover:bg-slate-200">
             <X size={18} />
           </button>
         </div>
@@ -1572,12 +1814,27 @@ function CourseForm({
       <Input value={form.instructor} onChange={(v) => update('instructor', v)} placeholder="วิทยากร" />
       <Input value={form.zoom_url} onChange={(v) => update('zoom_url', v)} placeholder="Zoom URL (ถ้ามี)" />
       <Input value={form.location} onChange={(v) => update('location', v)} placeholder="สถานที่อบรม (ถ้ามี)" />
+      {form.course_type !== 'online' && (
+        <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
+          <span>
+            <span className="block text-sm font-black text-blue-900">เปิดแบบทดสอบหลังเรียน</span>
+            <span className="block text-xs font-semibold text-blue-600">ใช้สำหรับอบรมผ่าน Zoom และอบรม ณ สถานที่ แอดมินเปิด/ปิดได้เอง</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={Number(form.post_quiz_enabled ?? 1) === 1}
+            onChange={(event) => update('post_quiz_enabled', event.target.checked)}
+            className="h-5 w-5 accent-blue-600"
+          />
+        </label>
+      )}
       <Textarea value={form.learning_objectives} onChange={(v) => update('learning_objectives', v)} placeholder="เป้าหมายการเรียนรู้" />
       <Textarea value={form.learning_topics} onChange={(v) => update('learning_topics', v)} placeholder="ประเด็นการเรียนรู้" />
       <Textarea value={form.target_group} onChange={(v) => update('target_group', v)} placeholder="กลุ่มเป้าหมาย" />
       <Textarea value={form.content_summary} onChange={(v) => update('content_summary', v)} placeholder="เนื้อหาการอบรม" />
       <Textarea value={form.evaluation_method} onChange={(v) => update('evaluation_method', v)} placeholder="วิธีการประเมินผล" />
       <button
+        type="button"
         onClick={onSave}
         disabled={isSaving || isUploadingCover}
         className="mt-2 inline-flex min-w-0 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
@@ -1601,7 +1858,7 @@ function QuickPanel({ title, icon, children, onSubmit, submitLabel = 'เพิ�
     <section className="min-w-0 overflow-hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
       <h3 className="mb-3 flex items-center gap-2 text-base font-black text-slate-900">{icon} {title}</h3>
       <div className="grid min-w-0 gap-3">{children}</div>
-      <button onClick={onSubmit} disabled={disabled} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+      <button type="button" onClick={onSubmit} disabled={disabled} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
         <CheckCircle2 size={16} /> {submitLabel}
       </button>
     </section>

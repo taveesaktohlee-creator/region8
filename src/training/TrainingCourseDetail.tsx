@@ -26,6 +26,7 @@ type Course = {
   zoom_url?: string;
   location?: string;
   pass_score?: number;
+  post_quiz_enabled?: number;
 };
 
 type Enrollment = {
@@ -34,6 +35,9 @@ type Enrollment = {
   pre_score?: number | string | null;
   post_score?: number | string | null;
   attended_seconds?: number;
+  online_video_seconds?: number;
+  online_video_required_seconds?: number;
+  online_video_completed?: number;
   attendance_confirmed?: number;
   evaluated?: number;
   certificate_code?: string;
@@ -42,6 +46,13 @@ type Enrollment = {
 type Quiz = { quiz_id: number; quiz_type: 'pre' | 'post'; title: string; pass_score: number; time_limit_minutes?: number };
 type QuizSubmitResult = { quizType: Quiz['quiz_type']; score: number; passed?: boolean };
 type Question = { question_id: number; question_text: string; choices: { choice_id: number; choice_text: string }[] };
+type TrainingLesson = {
+  lesson_id: number;
+  title: string;
+  youtube_url?: string;
+  embed_url?: string;
+  duration_seconds?: number;
+};
 type EvaluationQuestion = {
   question_id: number;
   question_text: string;
@@ -49,6 +60,13 @@ type EvaluationQuestion = {
   is_required: number;
   options: { option_id: number; option_text: string }[];
 };
+
+declare global {
+  interface Window {
+    YT?: any;
+    onYouTubeIframeAPIReady?: () => void;
+  }
+}
 
 const courseTypeLabels: Record<Course['course_type'], string> = {
   online: 'อบรมผ่านสื่ออิเล็กทรอนิกส์ (Online Training)',
@@ -82,6 +100,30 @@ function formatQuizLimit(minutes?: number) {
   const hours = Math.floor(safe / 60);
   const mins = safe % 60;
   return `${hours} ชม. ${mins} นาที`;
+}
+
+function extractYouTubeVideoId(url?: string) {
+  const raw = String(url || '').trim();
+  const watchMatch = raw.match(/[?&]v=([^&]+)/);
+  const shortMatch = raw.match(/youtu\.be\/([^?&/]+)/);
+  const embedMatch = raw.match(/youtube\.com\/embed\/([^?&/]+)/);
+  return watchMatch?.[1] || shortMatch?.[1] || embedMatch?.[1] || '';
+}
+
+function loadYouTubeIframeApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  return new Promise<any>((resolve) => {
+    const previousReady = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      previousReady?.();
+      resolve(window.YT);
+    };
+    if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+      const script = document.createElement('script');
+      script.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(script);
+    }
+  });
 }
 
 function hasScore(score: unknown) {
@@ -154,7 +196,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [course, setCourse] = useState<Course | null>(null);
-  const [lessons, setLessons] = useState<any[]>([]);
+  const [lessons, setLessons] = useState<TrainingLesson[]>([]);
   const [materials, setMaterials] = useState<any[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [evaluationQuestions, setEvaluationQuestions] = useState<EvaluationQuestion[]>([]);
@@ -162,6 +204,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
   const [isLoading, setIsLoading] = useState(true);
   const [activeLogId, setActiveLogId] = useState<number | null>(null);
   const [timerNow, setTimerNow] = useState(() => Date.now());
+  const [onlineVideoProgress, setOnlineVideoProgress] = useState({ watchedSeconds: 0, requiredSeconds: 0, completed: false });
   const lastFlushRef = useRef<number | null>(null);
 
   const loadDetail = useCallback(async (userId?: number) => {
@@ -176,6 +219,11 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
       setMaterials(data.materials || []);
       setQuizzes(data.quizzes || []);
       setEnrollment(data.enrollment || null);
+      setOnlineVideoProgress({
+        watchedSeconds: Number(data.enrollment?.online_video_seconds || 0),
+        requiredSeconds: Number(data.enrollment?.online_video_required_seconds || 0),
+        completed: Number(data.enrollment?.online_video_completed || 0) === 1,
+      });
       const { response: evalResponse, data: evalData } = await fetchJsonWithFallback(
         `${API_BASE}/api/training/courses/${courseId}/evaluation-form`,
         getEvaluationProxyUrl({ courseId }),
@@ -257,8 +305,27 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
 
   const preQuiz = useMemo(() => quizzes.find((quiz) => quiz.quiz_type === 'pre'), [quizzes]);
   const postQuiz = useMemo(() => quizzes.find((quiz) => quiz.quiz_type === 'post'), [quizzes]);
-  const firstVideo = lessons.find((lesson) => lesson.embed_url);
+  const firstVideo = lessons.find((lesson) => lesson.youtube_url || lesson.embed_url);
   const hasPostQuizResult = hasScore(enrollment?.post_score);
+  const isOnlineCourse = course?.course_type === 'online';
+  const isPostQuizEnabledByAdmin = Number(course?.post_quiz_enabled ?? 1) === 1;
+  const requiredVideoSeconds = Math.max(
+    Number(firstVideo?.duration_seconds || 0),
+    Number(enrollment?.online_video_required_seconds || 0),
+    onlineVideoProgress.requiredSeconds,
+  );
+  const watchedVideoSeconds = Math.max(
+    Number(enrollment?.online_video_seconds || 0),
+    onlineVideoProgress.watchedSeconds,
+  );
+  const hasCompletedOnlineVideo = !isOnlineCourse
+    || !firstVideo
+    || Number(enrollment?.online_video_completed || 0) === 1
+    || onlineVideoProgress.completed;
+  const postQuizDisabledReason = isOnlineCourse
+    ? (!hasCompletedOnlineVideo ? 'กรุณาดูวิดีโออบรมให้จบก่อน ระบบจึงจะแสดงแบบทดสอบหลังเรียน' : '')
+    : (!isPostQuizEnabledByAdmin ? 'ผู้ดูแลระบบยังไม่เปิดแบบทดสอบหลังเรียนสำหรับหลักสูตรนี้' : '');
+  const canShowPostQuiz = !postQuizDisabledReason;
   const hasEnteredTraining = Boolean(
     enrollment
     && (
@@ -410,12 +477,31 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
 
               {firstVideo && (
                 <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
-                  <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4 text-lg font-black">
-                    <Video className="text-blue-600" /> วิดีโอการอบรม
+                  <div className="flex flex-col gap-1 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2 text-lg font-black">
+                      <Video className="text-blue-600" /> วิดีโอการอบรม
+                    </div>
+                    {isOnlineCourse && enrollment && (
+                      <div className="text-xs font-black text-slate-500">
+                        ดูแล้ว {formatDigitalDuration(watchedVideoSeconds)} / {formatDigitalDuration(requiredVideoSeconds || Number(firstVideo.duration_seconds || 0))}
+                      </div>
+                    )}
                   </div>
-                  <div className="aspect-video bg-black">
-                    <iframe title={firstVideo.title} src={firstVideo.embed_url} className="h-full w-full" allowFullScreen />
-                  </div>
+                  <YouTubeTrainingVideo
+                    lesson={firstVideo}
+                    enrollment={enrollment}
+                    trackProgress={isOnlineCourse && Boolean(enrollment)}
+                    initialProgress={onlineVideoProgress}
+                    onProgress={(progress) => {
+                      setOnlineVideoProgress(progress);
+                      setEnrollment((current) => current ? {
+                        ...current,
+                        online_video_seconds: progress.watchedSeconds,
+                        online_video_required_seconds: progress.requiredSeconds,
+                        online_video_completed: progress.completed ? 1 : current.online_video_completed,
+                      } : current);
+                    }}
+                  />
                 </section>
               )}
 
@@ -427,13 +513,20 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
               <InfoBlock title="วิธีการประเมินผล">{course.evaluation_method || `ทำแบบทดสอบหลังเรียนให้ได้ตั้งแต่ ${course.pass_score || 70}% ขึ้นไป`}</InfoBlock>
 
               {hasEnteredTraining && (
-                <>
-                  <QuizPanel quiz={preQuiz} title="แบบทดสอบก่อนเรียน" userId={userData?.user_id} attemptedScore={enrollment?.pre_score} onSubmitted={handleQuizSubmitted} disabled={!enrollment} />
-                  <QuizPanel quiz={postQuiz} title="แบบทดสอบหลังเรียน" userId={userData?.user_id} attemptedScore={enrollment?.post_score} onSubmitted={handleQuizSubmitted} disabled={!enrollment} />
-                  {hasPostQuizResult && enrollment?.status === 'completed' && (
-                    <EvaluationPanel enrollment={enrollment} questions={evaluationQuestions} onSubmitted={handleEvaluationSubmitted} />
-                  )}
-                </>
+                <TrainingAssessmentTabs
+                  preQuiz={preQuiz}
+                  postQuiz={postQuiz}
+                  userId={userData?.user_id}
+                  enrollment={enrollment}
+                  evaluationQuestions={evaluationQuestions}
+                  canShowPostQuiz={canShowPostQuiz}
+                  postQuizDisabledReason={postQuizDisabledReason}
+                  watchedVideoSeconds={watchedVideoSeconds}
+                  requiredVideoSeconds={requiredVideoSeconds}
+                  hasPostQuizResult={hasPostQuizResult}
+                  onQuizSubmitted={handleQuizSubmitted}
+                  onEvaluationSubmitted={handleEvaluationSubmitted}
+                />
               )}
             </div>
 
@@ -482,7 +575,394 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
   );
 }
 
-function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled }: { quiz?: Quiz; title: string; userId?: number; attemptedScore?: number | string | null; onSubmitted: (result?: QuizSubmitResult) => void | Promise<void>; disabled?: boolean }) {
+type OnlineVideoProgress = {
+  watchedSeconds: number;
+  requiredSeconds: number;
+  completed: boolean;
+};
+
+type AssessmentTabKey = 'pre' | 'post' | 'evaluation';
+
+function TrainingAssessmentTabs({
+  preQuiz,
+  postQuiz,
+  userId,
+  enrollment,
+  evaluationQuestions,
+  canShowPostQuiz,
+  postQuizDisabledReason,
+  watchedVideoSeconds,
+  requiredVideoSeconds,
+  hasPostQuizResult,
+  onQuizSubmitted,
+  onEvaluationSubmitted,
+}: {
+  preQuiz?: Quiz;
+  postQuiz?: Quiz;
+  userId?: number;
+  enrollment: Enrollment | null;
+  evaluationQuestions: EvaluationQuestion[];
+  canShowPostQuiz: boolean;
+  postQuizDisabledReason: string;
+  watchedVideoSeconds: number;
+  requiredVideoSeconds: number;
+  hasPostQuizResult: boolean;
+  onQuizSubmitted: (result?: QuizSubmitResult) => void | Promise<void>;
+  onEvaluationSubmitted: () => void | Promise<void>;
+}) {
+  const [activeTab, setActiveTab] = useState<AssessmentTabKey>('pre');
+  const canUseEvaluation = Boolean(hasPostQuizResult && enrollment?.status === 'completed');
+  const tabs: Array<{
+    key: AssessmentTabKey;
+    label: string;
+    icon: React.ReactNode;
+    status: string;
+    disabled?: boolean;
+  }> = [
+    {
+      key: 'pre',
+      label: 'แบบทดสอบก่อนเรียน',
+      icon: <Award size={18} />,
+      status: hasScore(enrollment?.pre_score) ? 'ทำแล้ว' : 'พร้อมทำ',
+    },
+    {
+      key: 'post',
+      label: 'แบบทดสอบหลังเรียน',
+      icon: <CheckCircle2 size={18} />,
+      status: canShowPostQuiz ? (hasScore(enrollment?.post_score) ? 'ทำแล้ว' : 'พร้อมทำ') : 'ยังไม่เปิด',
+    },
+    {
+      key: 'evaluation',
+      label: 'แบบประเมินหลังอบรม',
+      icon: <Star size={18} />,
+      status: enrollment?.evaluated ? 'ส่งแล้ว' : canUseEvaluation ? 'พร้อมส่ง' : 'รอจบอบรม',
+    },
+  ];
+
+  return (
+    <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
+      <div className="border-b border-slate-100 px-4 py-4 sm:px-5">
+        <div className="flex flex-col gap-4">
+          <div>
+            <h3 className="text-lg font-black text-slate-900">แบบทดสอบและแบบประเมิน</h3>
+            <p className="text-sm font-semibold text-slate-500">เลือกแท็บเพื่อทำแบบทดสอบก่อนเรียน หลังเรียน และแบบประเมินหลังอบรม</p>
+          </div>
+          <div className="grid w-full gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-3">
+            {tabs.map((tab) => {
+              const isActive = activeTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActiveTab(tab.key)}
+                  className={`flex min-h-[76px] min-w-0 items-center gap-3 rounded-xl px-4 py-3 text-left transition ${
+                    isActive
+                      ? 'bg-white text-blue-700 shadow-sm ring-2 ring-blue-500'
+                      : 'text-slate-500 hover:bg-white/70 hover:text-slate-800'
+                  }`}
+                >
+                  <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
+                    isActive ? 'bg-blue-50 text-blue-700' : 'bg-white text-slate-500'
+                  }`}>
+                    {tab.icon}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block whitespace-normal text-sm font-black leading-5">{tab.label}</span>
+                    <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-black ${
+                      isActive ? 'bg-blue-50 text-blue-700' : 'bg-white/80 text-slate-500'
+                    }`}>
+                      {tab.status}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="p-4 sm:p-5">
+        {activeTab === 'pre' && (
+          <QuizPanel
+            embedded
+            quiz={preQuiz}
+            title="แบบทดสอบก่อนเรียน"
+            userId={userId}
+            attemptedScore={enrollment?.pre_score}
+            onSubmitted={onQuizSubmitted}
+            disabled={!enrollment}
+          />
+        )}
+        {activeTab === 'post' && (
+          canShowPostQuiz ? (
+            <QuizPanel
+              embedded
+              quiz={postQuiz}
+              title="แบบทดสอบหลังเรียน"
+              userId={userId}
+              attemptedScore={enrollment?.post_score}
+              onSubmitted={onQuizSubmitted}
+              disabled={!enrollment}
+            />
+          ) : (
+            <LockedPostQuizNotice reason={postQuizDisabledReason} watchedSeconds={watchedVideoSeconds} requiredSeconds={requiredVideoSeconds} />
+          )
+        )}
+        {activeTab === 'evaluation' && (
+          canUseEvaluation ? (
+            <EvaluationPanel embedded enrollment={enrollment} questions={evaluationQuestions} onSubmitted={onEvaluationSubmitted} />
+          ) : (
+            <LockedTrainingStepNotice
+              title="แบบประเมินหลังอบรมยังไม่เปิด"
+              reason="ทำแบบทดสอบหลังเรียนให้เสร็จและจบการอบรมก่อน ระบบจึงจะเปิดแบบประเมินหลังอบรม"
+            />
+          )
+        )}
+      </div>
+    </section>
+  );
+}
+
+function LockedTrainingStepNotice({ title, reason }: { title: string; reason: string }) {
+  return (
+    <section className="rounded-3xl border border-slate-100 bg-slate-50 p-5">
+      <h3 className="text-lg font-black text-slate-900">{title}</h3>
+      <p className="mt-2 text-sm font-bold leading-6 text-slate-500">{reason}</p>
+    </section>
+  );
+}
+
+function LockedPostQuizNotice({
+  reason,
+  watchedSeconds,
+  requiredSeconds,
+}: {
+  reason: string;
+  watchedSeconds: number;
+  requiredSeconds: number;
+}) {
+  return (
+    <section className="rounded-3xl border border-amber-100 bg-amber-50 p-5 shadow-sm">
+      <h3 className="text-lg font-black text-amber-950">แบบทดสอบหลังเรียนยังไม่เปิด</h3>
+      <p className="mt-2 text-sm font-bold leading-6 text-amber-700">{reason}</p>
+      {requiredSeconds > 0 && (
+        <div className="mt-4 rounded-2xl bg-white px-4 py-3 text-sm font-black text-slate-700 shadow-sm">
+          ดูวิดีโอแล้ว {formatDigitalDuration(watchedSeconds)} / {formatDigitalDuration(requiredSeconds)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function YouTubeTrainingVideo({
+  lesson,
+  enrollment,
+  trackProgress,
+  initialProgress,
+  onProgress,
+}: {
+  lesson: TrainingLesson;
+  enrollment: Enrollment | null;
+  trackProgress: boolean;
+  initialProgress: OnlineVideoProgress;
+  onProgress: (progress: OnlineVideoProgress) => void;
+}) {
+  const [playerId] = useState(() => `training-youtube-${lesson.lesson_id}-${Math.random().toString(36).slice(2)}`);
+  const videoId = useMemo(() => extractYouTubeVideoId(lesson.youtube_url || lesson.embed_url), [lesson.embed_url, lesson.youtube_url]);
+  const [progress, setProgress] = useState<OnlineVideoProgress>(() => ({
+    watchedSeconds: Math.max(0, Number(initialProgress.watchedSeconds || 0)),
+    requiredSeconds: Math.max(Number(lesson.duration_seconds || 0), Number(initialProgress.requiredSeconds || 0)),
+    completed: initialProgress.completed,
+  }));
+  const playerRef = useRef<any>(null);
+  const watchedRef = useRef(progress.watchedSeconds);
+  const durationRef = useRef(progress.requiredSeconds);
+  const completedRef = useRef(progress.completed);
+  const isPlayingRef = useRef(false);
+  const sentSecondsRef = useRef(progress.watchedSeconds);
+  const onProgressRef = useRef(onProgress);
+
+  useEffect(() => {
+    onProgressRef.current = onProgress;
+  }, [onProgress]);
+
+  useEffect(() => {
+    const nextWatched = Math.max(watchedRef.current, Number(initialProgress.watchedSeconds || 0));
+    const nextRequired = Math.max(durationRef.current, Number(lesson.duration_seconds || 0), Number(initialProgress.requiredSeconds || 0));
+    const nextCompleted = completedRef.current || initialProgress.completed;
+    watchedRef.current = nextWatched;
+    durationRef.current = nextRequired;
+    completedRef.current = nextCompleted;
+    setProgress({ watchedSeconds: nextWatched, requiredSeconds: nextRequired, completed: nextCompleted });
+  }, [initialProgress.completed, initialProgress.requiredSeconds, initialProgress.watchedSeconds, lesson.duration_seconds]);
+
+  const publishProgress = useCallback((force = false) => {
+    const requiredSeconds = Math.max(0, Math.floor(durationRef.current || 0));
+    const watchedSeconds = Math.max(0, Math.floor(watchedRef.current || 0));
+    const completed = completedRef.current || (requiredSeconds > 0 && watchedSeconds >= Math.floor(requiredSeconds * 0.95));
+    completedRef.current = completed;
+
+    const nextProgress = { watchedSeconds, requiredSeconds, completed };
+    setProgress(nextProgress);
+    onProgressRef.current(nextProgress);
+
+    const shouldSend = trackProgress
+      && Boolean(enrollment?.enrollment_id)
+      && (force || completed || watchedSeconds - sentSecondsRef.current >= 10);
+    if (!shouldSend) return;
+
+    sentSecondsRef.current = watchedSeconds;
+    fetch(`${API_BASE}/api/training/enrollments/${enrollment?.enrollment_id}/video-progress`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        watched_seconds: watchedSeconds,
+        duration_seconds: requiredSeconds,
+      }),
+    })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .then((data) => {
+        if (!data) return;
+        const serverProgress = {
+          watchedSeconds: Math.max(watchedSeconds, Number(data.watched_seconds || 0)),
+          requiredSeconds: Math.max(requiredSeconds, Number(data.required_seconds || 0)),
+          completed: completed || Boolean(data.completed),
+        };
+        watchedRef.current = serverProgress.watchedSeconds;
+        durationRef.current = serverProgress.requiredSeconds;
+        completedRef.current = serverProgress.completed;
+        setProgress(serverProgress);
+        onProgressRef.current(serverProgress);
+      })
+      .catch(() => undefined);
+  }, [enrollment?.enrollment_id, trackProgress]);
+
+  useEffect(() => {
+    if (!videoId) return undefined;
+    let cancelled = false;
+    let player: any = null;
+    void loadYouTubeIframeApi().then((YT) => {
+      if (cancelled) return;
+      player = new YT.Player(playerId, {
+        videoId,
+        playerVars: {
+          playsinline: 1,
+          rel: 0,
+          modestbranding: 1,
+        },
+        events: {
+          onReady: (event: any) => {
+            const duration = Math.floor(Number(event.target?.getDuration?.() || 0));
+            if (duration > 0) durationRef.current = Math.max(durationRef.current, duration);
+            publishProgress(true);
+          },
+          onStateChange: (event: any) => {
+            const state = window.YT?.PlayerState;
+            isPlayingRef.current = event.data === state?.PLAYING;
+            if (event.data === state?.ENDED) {
+              const duration = Math.floor(Number(event.target?.getDuration?.() || durationRef.current || 0));
+              if (duration > 0) {
+                durationRef.current = Math.max(durationRef.current, duration);
+                watchedRef.current = Math.max(watchedRef.current, duration);
+              }
+              completedRef.current = true;
+              publishProgress(true);
+              return;
+            }
+            if (event.data === state?.PAUSED || event.data === state?.BUFFERING) {
+              publishProgress(true);
+            }
+          },
+        },
+      });
+      playerRef.current = player;
+    });
+
+    return () => {
+      cancelled = true;
+      player?.destroy?.();
+    };
+  }, [playerId, publishProgress, videoId]);
+
+  useEffect(() => {
+    if (!trackProgress) return undefined;
+    const timer = window.setInterval(() => {
+      if (completedRef.current || !isPlayingRef.current || document.visibilityState !== 'visible') return;
+      const playerDuration = Math.floor(Number(playerRef.current?.getDuration?.() || 0));
+      if (playerDuration > 0) durationRef.current = Math.max(durationRef.current, playerDuration);
+      const requiredSeconds = Math.max(0, durationRef.current);
+      watchedRef.current = requiredSeconds > 0
+        ? Math.min(requiredSeconds, watchedRef.current + 1)
+        : watchedRef.current + 1;
+      if (requiredSeconds > 0 && watchedRef.current >= Math.floor(requiredSeconds * 0.95)) {
+        completedRef.current = true;
+      }
+      publishProgress(completedRef.current);
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [publishProgress, trackProgress]);
+
+  if (!videoId && lesson.embed_url) {
+    return (
+      <iframe
+        src={lesson.embed_url}
+        title={lesson.title}
+        className="h-[420px] w-full bg-slate-950"
+        sandbox="allow-scripts allow-presentation"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowFullScreen
+      />
+    );
+  }
+
+  const percent = progress.requiredSeconds > 0
+    ? Math.min(100, Math.round((progress.watchedSeconds / progress.requiredSeconds) * 100))
+    : 0;
+
+  return (
+    <div className="bg-slate-950">
+      <div className="aspect-video w-full">
+        <div id={playerId} className="h-full w-full" />
+      </div>
+      {trackProgress && (
+        <div className="space-y-2 border-t border-white/10 bg-slate-900 px-5 py-4">
+          <div className="flex items-center justify-between text-xs font-black text-slate-200">
+            <span>ความคืบหน้าการดูวิดีโอ</span>
+            <span>{formatDigitalDuration(progress.watchedSeconds)} / {formatDigitalDuration(progress.requiredSeconds)}</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-white/10">
+            <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${percent}%` }} />
+          </div>
+          <p className="text-xs font-bold text-slate-400">
+            ระบบนับเฉพาะเวลาที่วิดีโอกำลังเล่นอยู่จริง และต้องดูจนจบก่อนจึงจะทำแบบทดสอบหลังเรียนได้
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuizPanel({
+  quiz,
+  title,
+  userId,
+  attemptedScore,
+  onSubmitted,
+  disabled,
+  embedded,
+}: {
+  quiz?: Quiz;
+  title: string;
+  userId?: number;
+  attemptedScore?: number | string | null;
+  onSubmitted: (result?: QuizSubmitResult) => void | Promise<void>;
+  disabled?: boolean;
+  embedded?: boolean;
+}) {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [isOpen, setIsOpen] = useState(false);
@@ -562,7 +1042,7 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
   };
 
   return (
-    <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+    <section className={embedded ? '' : 'rounded-3xl border border-slate-100 bg-white p-5 shadow-sm'}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-lg font-black text-slate-900">{title}</h3>
@@ -574,7 +1054,7 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
               : 'ยังไม่มีแบบทดสอบ'}
           </p>
         </div>
-        <button disabled={!quiz || disabled || hasAttempted} onClick={loadQuiz} className="rounded-2xl bg-slate-900 px-5 py-2.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+        <button type="button" disabled={!quiz || disabled || hasAttempted} onClick={loadQuiz} className="rounded-2xl bg-slate-900 px-5 py-2.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
           {hasAttempted ? 'ทำแบบทดสอบแล้ว' : 'เปิดแบบทดสอบ'}
         </button>
       </div>
@@ -614,7 +1094,7 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
             </div>
           ))}
           {questions.length > 0 && (
-            <button onClick={submitQuiz} className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white">
+            <button type="button" onClick={submitQuiz} className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white">
               <Send size={16} /> {isTimeUp ? 'ส่งคำตอบที่ทำไว้' : 'ส่งคำตอบ'}
             </button>
           )}
@@ -624,7 +1104,17 @@ function QuizPanel({ quiz, title, userId, attemptedScore, onSubmitted, disabled 
   );
 }
 
-function EvaluationPanel({ enrollment, questions, onSubmitted }: { enrollment: Enrollment | null; questions: EvaluationQuestion[]; onSubmitted: () => void | Promise<void> }) {
+function EvaluationPanel({
+  enrollment,
+  questions,
+  onSubmitted,
+  embedded,
+}: {
+  enrollment: Enrollment | null;
+  questions: EvaluationQuestion[];
+  onSubmitted: () => void | Promise<void>;
+  embedded?: boolean;
+}) {
   const [answers, setAnswers] = useState<Record<string, string | number | number[]>>({});
 
   useEffect(() => {
@@ -655,7 +1145,7 @@ function EvaluationPanel({ enrollment, questions, onSubmitted }: { enrollment: E
   };
 
   return (
-    <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+    <section className={embedded ? '' : 'rounded-3xl border border-slate-100 bg-white p-5 shadow-sm'}>
       <h3 className="mb-3 flex items-center gap-2 text-lg font-black text-slate-900"><Star className="text-amber-500" /> แบบประเมินหลังอบรม</h3>
       {questions.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm font-bold text-slate-400">หลักสูตรนี้ยังไม่มีแบบประเมิน</p>
@@ -706,7 +1196,7 @@ function EvaluationPanel({ enrollment, questions, onSubmitted }: { enrollment: E
           })}
         </div>
       )}
-      <button disabled={!enrollment || enrollment.status !== 'completed' || Boolean(enrollment.evaluated) || questions.length === 0} onClick={submitEvaluation} className="mt-3 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+      <button type="button" disabled={!enrollment || enrollment.status !== 'completed' || Boolean(enrollment.evaluated) || questions.length === 0} onClick={submitEvaluation} className="mt-3 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
         {enrollment?.evaluated ? 'ส่งแบบประเมินแล้ว' : 'ส่งแบบประเมิน'}
       </button>
       {enrollment && enrollment.status !== 'completed' && <p className="mt-2 text-xs font-bold text-slate-400">ส่งแบบประเมินได้หลังจบการอบรม</p>}
