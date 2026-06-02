@@ -7,10 +7,12 @@ import {
   assertLineGroupId,
   ensureLineNotificationTables,
   getLineMessagingConfigStatus,
+  getLineWebhookCaptureSetting,
   getLineWebhookStatus,
   recordLineWebhookGroups,
   recordLineWebhookEvents,
   seedLineNotificationTopics,
+  setLineWebhookCaptureSetting,
   setLineWebhookEndpoint,
   sendLineTestToGroup,
   sendLineTopicNotification,
@@ -2321,6 +2323,20 @@ app.post('/api/admin/line-webhook/test', async (_req, res) => {
   }
 });
 
+app.put('/api/admin/line-webhook/capture', async (req, res) => {
+  try {
+    const enabled = toBooleanFlag(req.body?.capture_group_ids ?? req.body?.enabled) === 1;
+    const capture_setting = await setLineWebhookCaptureSetting(pool, enabled);
+    res.json({
+      message: enabled ? 'เปิดการตรวจจับ LINE groupId แล้ว' : 'ปิดการตรวจจับ LINE groupId แล้ว',
+      capture_setting,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'บันทึกสถานะตรวจจับ LINE groupId ไม่สำเร็จ' });
+  }
+});
+
 app.post('/webhook/line', async (req, res) => {
   const events = Array.isArray(req.body?.events) ? req.body.events : [];
   const groupIds = events
@@ -2328,9 +2344,17 @@ app.post('/webhook/line', async (req, res) => {
     .filter(Boolean);
   console.log('LINE webhook:', JSON.stringify(req.body));
   if (groupIds.length > 0) console.log('LINE groupId:', [...new Set(groupIds)].join(', '));
-  if (events.length > 0) await recordLineWebhookEvents(pool, events);
-  if (groupIds.length > 0) await recordLineWebhookGroups(pool, groupIds);
-  res.status(200).json({ ok: true, events: events.length, group_ids: [...new Set(groupIds)] });
+  const captureSetting = await getLineWebhookCaptureSetting(pool);
+  if (captureSetting.capture_group_ids) {
+    if (events.length > 0) await recordLineWebhookEvents(pool, events);
+    if (groupIds.length > 0) await recordLineWebhookGroups(pool, groupIds);
+  }
+  res.status(200).json({
+    ok: true,
+    capture_group_ids: captureSetting.capture_group_ids,
+    events: events.length,
+    group_ids: captureSetting.capture_group_ids ? [...new Set(groupIds)] : [],
+  });
 });
 
 app.get('/webhook/line', async (_req, res) => {

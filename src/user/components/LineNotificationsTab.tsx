@@ -52,6 +52,10 @@ type LineWebhookStatus = {
     active?: boolean;
   } | null;
   endpoint_error?: string;
+  capture_setting?: {
+    capture_group_ids?: boolean;
+    updated_at?: string | null;
+  };
   recent_events?: LineWebhookEvent[];
 };
 
@@ -69,11 +73,13 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
   const [creating, setCreating] = useState(false);
   const [settingWebhook, setSettingWebhook] = useState(false);
   const [testingWebhook, setTestingWebhook] = useState(false);
+  const [updatingCapture, setUpdatingCapture] = useState(false);
   const [testingId, setTestingId] = useState<number | null>(null);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupId, setNewGroupId] = useState('');
 
   const activeGroups = useMemo(() => groups.filter(group => group.is_active), [groups]);
+  const captureGroupIds = webhookStatus?.capture_setting?.capture_group_ids !== false;
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -203,6 +209,28 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
     }
   }, [loadSettings, testingWebhook]);
 
+  const toggleWebhookCapture = useCallback(async () => {
+    if (updatingCapture) return;
+    const next = !captureGroupIds;
+    setUpdatingCapture(true);
+    try {
+      const res = await fetch(`${API}/line-webhook/capture`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capture_group_ids: next }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'บันทึกสถานะตรวจจับ groupId ไม่สำเร็จ');
+        return;
+      }
+      toast.success(data.message || (next ? 'เปิดการตรวจจับ groupId แล้ว' : 'ปิดการตรวจจับ groupId แล้ว'));
+      await loadSettings();
+    } finally {
+      setUpdatingCapture(false);
+    }
+  }, [captureGroupIds, loadSettings, updatingCapture]);
+
   const updateGroup = useCallback(async (group: LineGroup, patch: Partial<LineGroup>) => {
     const res = await fetch(`${API}/line-notification-groups/${group.group_ref_id}`, {
       method: 'PUT',
@@ -287,14 +315,27 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
 
       <div className="rounded-2xl border border-white bg-white/80 shadow-[0_8px_30px_rgba(0,0,0,0.04)]">
         <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 lg:flex-row lg:items-center">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <RefreshCw size={16} className="text-blue-600" />
             <span className="text-sm font-bold text-slate-700">Webhook ตรวจจับ groupId</span>
             <span className={`rounded-full px-3 py-1 text-xs font-black ${
               webhookStatus?.endpoint_status?.active ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
             }`}>
-              {webhookStatus?.endpoint_status?.active ? 'เปิดอยู่' : 'ยังไม่เปิด'}
+              {webhookStatus?.endpoint_status?.active ? 'Webhook เปิด' : 'Webhook ยังไม่เปิด'}
             </span>
+            <button
+              onClick={toggleWebhookCapture}
+              disabled={updatingCapture}
+              className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black transition-all disabled:opacity-60 ${
+                captureGroupIds ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+              }`}
+              title="เปิดเฉพาะเวลาต้องการตรวจหา LINE groupId ใหม่"
+            >
+              <span className={`relative h-5 w-9 rounded-full transition-all ${captureGroupIds ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${captureGroupIds ? 'left-4' : 'left-0.5'}`} />
+              </span>
+              {updatingCapture ? 'กำลังบันทึก...' : captureGroupIds ? 'ตรวจจับ groupId เปิด' : 'ตรวจจับ groupId ปิด'}
+            </button>
           </div>
           <div className="ml-auto flex flex-wrap gap-2">
             <button
@@ -346,8 +387,12 @@ export function LineNotificationsTab({ userId }: { userId?: number }) {
 
         <div className="px-5 pb-5">
           {(webhookStatus?.recent_events || []).length === 0 ? (
-            <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
-              ยังไม่พบ webhook จาก LINE ให้กด “ตั้งค่า Webhook” แล้วส่งข้อความในกลุ่มที่มีบอทอยู่ จากนั้นกด “โหลดใหม่”
+            <div className={`rounded-2xl border px-4 py-3 text-sm font-bold ${
+              captureGroupIds ? 'border-amber-100 bg-amber-50 text-amber-800' : 'border-slate-100 bg-slate-50 text-slate-500'
+            }`}>
+              {captureGroupIds
+                ? 'ยังไม่พบ webhook จาก LINE ให้กด “ตั้งค่า Webhook” แล้วส่งข้อความในกลุ่มที่มีบอทอยู่ จากนั้นกด “โหลดใหม่”'
+                : 'ปิดการตรวจจับ groupId อยู่ ระบบจะไม่บันทึกกลุ่มใหม่จากข้อความใน LINE จนกว่าจะเปิดสวิตช์นี้'}
             </div>
           ) : (
             <div className="space-y-2">

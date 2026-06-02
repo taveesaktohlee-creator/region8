@@ -7,6 +7,8 @@ import {
   recordLineWebhookGroups,
   recordLineWebhookEvents,
   seedLineNotificationTopics,
+  getLineWebhookCaptureSetting,
+  setLineWebhookCaptureSetting,
   setLineWebhookEndpoint,
   sendLineTestToGroup,
   testLineWebhookEndpoint,
@@ -243,6 +245,16 @@ async function testWebhook(_req: any, res: any) {
   });
 }
 
+async function updateWebhookCapture(req: any, res: any) {
+  const body = await readBody(req);
+  const enabled = toBooleanFlag(body?.capture_group_ids ?? body?.enabled) === 1;
+  const capture_setting = await setLineWebhookCaptureSetting(pool, enabled);
+  return sendJson(res, 200, {
+    message: enabled ? 'เปิดการตรวจจับ LINE groupId แล้ว' : 'ปิดการตรวจจับ LINE groupId แล้ว',
+    capture_setting,
+  });
+}
+
 async function lineWebhook(req: any, res: any) {
   const body = await readBody(req);
   const events = Array.isArray(body?.events) ? body.events : [];
@@ -251,9 +263,17 @@ async function lineWebhook(req: any, res: any) {
     .filter(Boolean);
   console.log('LINE webhook:', JSON.stringify(body));
   if (groupIds.length > 0) console.log('LINE groupId:', [...new Set(groupIds)].join(', '));
-  if (events.length > 0) await recordLineWebhookEvents(pool, events);
-  if (groupIds.length > 0) await recordLineWebhookGroups(pool, groupIds);
-  return sendJson(res, 200, { ok: true, events: events.length, group_ids: [...new Set(groupIds)] });
+  const captureSetting = await getLineWebhookCaptureSetting(pool);
+  if (captureSetting.capture_group_ids) {
+    if (events.length > 0) await recordLineWebhookEvents(pool, events);
+    if (groupIds.length > 0) await recordLineWebhookGroups(pool, groupIds);
+  }
+  return sendJson(res, 200, {
+    ok: true,
+    capture_group_ids: captureSetting.capture_group_ids,
+    events: events.length,
+    group_ids: captureSetting.capture_group_ids ? [...new Set(groupIds)] : [],
+  });
 }
 
 export default async function handler(req: any, res: any) {
@@ -284,6 +304,7 @@ export default async function handler(req: any, res: any) {
     if (path === 'webhook-status' && req.method === 'GET') return await webhookStatus(req, res);
     if (path === 'webhook-setup' && req.method === 'POST') return await setupWebhook(req, res);
     if (path === 'webhook-test' && req.method === 'POST') return await testWebhook(req, res);
+    if (path === 'webhook-capture' && req.method === 'PUT') return await updateWebhookCapture(req, res);
 
     return sendJson(res, 404, { error: 'ไม่พบ API แจ้งเตือน LINE' });
   } catch (error) {

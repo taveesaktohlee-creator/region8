@@ -147,6 +147,19 @@ export async function ensureLineNotificationTables(db: DbLike) {
       INDEX idx_line_webhook_room_id (room_id)
     ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
   `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS line_webhook_settings (
+      setting_id TINYINT PRIMARY KEY,
+      capture_group_ids TINYINT(1) NOT NULL DEFAULT 1,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+  `);
+
+  await db.query(`
+    INSERT IGNORE INTO line_webhook_settings (setting_id, capture_group_ids)
+    VALUES (1, 1)
+  `);
 }
 
 export async function seedLineNotificationTopics(db: DbLike) {
@@ -241,6 +254,33 @@ export async function getRecentLineWebhookEvents(db: DbLike, limit = 8) {
   return rows;
 }
 
+export async function getLineWebhookCaptureSetting(db: DbLike) {
+  await ensureLineNotificationTables(db);
+  const [rows]: any = await db.query(
+    `SELECT capture_group_ids,
+            DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s') AS updated_at
+     FROM line_webhook_settings
+     WHERE setting_id = 1
+     LIMIT 1`,
+  );
+
+  return {
+    capture_group_ids: Number(rows[0]?.capture_group_ids) === 1,
+    updated_at: rows[0]?.updated_at || null,
+  };
+}
+
+export async function setLineWebhookCaptureSetting(db: DbLike, enabled: boolean) {
+  await ensureLineNotificationTables(db);
+  await db.query(
+    `INSERT INTO line_webhook_settings (setting_id, capture_group_ids)
+     VALUES (1, ?)
+     ON DUPLICATE KEY UPDATE capture_group_ids = VALUES(capture_group_ids)`,
+    [enabled ? 1 : 0],
+  );
+  return await getLineWebhookCaptureSetting(db);
+}
+
 async function lineMessagingRequest(url: string, init: RequestInit = {}) {
   const token = getLineMessagingToken();
   if (!token) throw new Error('ยังไม่ได้ตั้งค่า LINE_MESSAGING_CHANNEL_ACCESS_TOKEN');
@@ -301,6 +341,7 @@ export async function testLineWebhookEndpoint(endpoint = getLineWebhookUrl()) {
 
 export async function getLineWebhookStatus(db: DbLike) {
   const recent_events = await getRecentLineWebhookEvents(db);
+  const capture_setting = await getLineWebhookCaptureSetting(db);
   let endpoint_status: any = null;
   let endpoint_error = '';
   try {
@@ -317,6 +358,7 @@ export async function getLineWebhookStatus(db: DbLike) {
   return {
     endpoint_status,
     endpoint_error,
+    capture_setting,
     recent_events,
   };
 }

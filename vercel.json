@@ -89,6 +89,10 @@
       "destination": "/api/line-notifications?path=webhook-test"
     },
     {
+      "source": "/api/admin/line-webhook/capture",
+      "destination": "/api/line-notifications?path=webhook-capture"
+    },
+    {
       "source": "/webhook/line",
       "destination": "/api/line-notifications?path=webhook"
     },
