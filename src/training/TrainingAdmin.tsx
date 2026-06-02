@@ -528,9 +528,14 @@ export default function TrainingAdmin() {
   }, []);
 
   const loadAllEvaluationReport = useCallback(async () => {
-    const res = await fetch(`${API_BASE}/api/admin/training/evaluation-report`);
-    if (!res.ok) throw new Error('Cannot load evaluation report');
-    setAllEvaluationReport(await res.json());
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/training/evaluation-report`);
+      if (!res.ok) throw new Error('Cannot load evaluation report');
+      setAllEvaluationReport(await res.json());
+    } catch (error) {
+      console.warn('Load all training evaluation report failed:', error);
+      setAllEvaluationReport({ response_count: 0, questions: [], responses: [] });
+    }
   }, []);
 
   const loadQuizPreview = useCallback(async (courseId: number) => {
@@ -595,7 +600,8 @@ export default function TrainingAdmin() {
   }, []);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadCourses(), loadReport(), loadAllEvaluationReport()]);
+    await Promise.all([loadCourses(), loadReport()]);
+    await loadAllEvaluationReport();
   }, [loadAllEvaluationReport, loadCourses, loadReport]);
 
   useEffect(() => {
@@ -623,7 +629,9 @@ export default function TrainingAdmin() {
 
   const handleRefresh = () => {
     setIsRefreshing(true);
-    refreshAll().finally(() => setIsRefreshing(false));
+    refreshAll()
+      .catch(() => toast.error('โหลดข้อมูลระบบอบรมไม่สำเร็จ'))
+      .finally(() => setIsRefreshing(false));
   };
 
   const selectCourse = (course: Course) => {
@@ -892,7 +900,7 @@ export default function TrainingAdmin() {
           </div>
 
           {activeTab === 'report' ? (
-            <ReportSection report={report} evaluationReport={allEvaluationReport} onRefresh={refreshAll} onConfirmAttendance={confirmAttendance} />
+            <ReportSection courses={courses} report={report} evaluationReport={allEvaluationReport} onRefresh={refreshAll} onConfirmAttendance={confirmAttendance} />
           ) : (
             <div className="grid min-w-0 items-start gap-6 2xl:grid-cols-[minmax(0,460px)_minmax(0,1fr)]">
               <section className="relative z-0 min-w-0 overflow-hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -1072,15 +1080,30 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
-function ReportSection({ report, evaluationReport, onRefresh, onConfirmAttendance }: {
+function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirmAttendance }: {
+  courses: Course[];
   report: any[];
   evaluationReport: EvaluationReport | null;
   onRefresh: () => void | Promise<void>;
   onConfirmAttendance: (enrollmentId: number, confirmed: boolean) => void;
 }) {
   const [selectedDivision, setSelectedDivision] = useState('ทั้งหมด');
+  const [selectedReportCourseId, setSelectedReportCourseId] = useState('ทั้งหมด');
   const [reportSearch, setReportSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const courseOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    courses.forEach((course) => {
+      if (course.course_id) options.set(String(course.course_id), course.title || `หลักสูตร #${course.course_id}`);
+    });
+    report.forEach((row) => {
+      const courseId = String(row.course_id || '').trim();
+      if (courseId && !options.has(courseId)) options.set(courseId, row.title || `หลักสูตร #${courseId}`);
+    });
+    return Array.from(options.entries())
+      .map(([courseId, title]) => ({ courseId, title }))
+      .sort((a, b) => a.title.localeCompare(b.title, 'th'));
+  }, [courses, report]);
   const divisionOptions = useMemo(() => {
     const divisions = Array.from(
       new Set(report.map((row) => String(row.Division_Province || '').trim()).filter(Boolean)),
@@ -1090,6 +1113,8 @@ function ReportSection({ report, evaluationReport, onRefresh, onConfirmAttendanc
   const filteredReport = useMemo(() => {
     const needle = reportSearch.trim().toLowerCase();
     return report.filter((row) => {
+      const matchesCourse = selectedReportCourseId === 'ทั้งหมด' || String(row.course_id || '').trim() === selectedReportCourseId;
+      if (!matchesCourse) return false;
       const matchesDivision = selectedDivision === 'ทั้งหมด' || String(row.Division_Province || '').trim() === selectedDivision;
       if (!matchesDivision) return false;
       if (!needle) return true;
@@ -1105,7 +1130,7 @@ function ReportSection({ report, evaluationReport, onRefresh, onConfirmAttendanc
         passResultMeta(row.post_score, row.pass_score).label,
       ].some((value) => String(value || '').toLowerCase().includes(needle));
     });
-  }, [report, reportSearch, selectedDivision]);
+  }, [report, reportSearch, selectedDivision, selectedReportCourseId]);
   const totalPages = Math.max(1, Math.ceil(filteredReport.length / REPORT_PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
   const pageStart = (safePage - 1) * REPORT_PAGE_SIZE;
@@ -1151,6 +1176,8 @@ function ReportSection({ report, evaluationReport, onRefresh, onConfirmAttendanc
   const filteredEvaluationResponses = useMemo(() => {
     const needle = reportSearch.trim().toLowerCase();
     return (evaluationReport?.responses || []).filter((response) => {
+      const matchesCourse = selectedReportCourseId === 'ทั้งหมด' || String(response.course_id || '').trim() === selectedReportCourseId;
+      if (!matchesCourse) return false;
       const matchesDivision = selectedDivision === 'ทั้งหมด' || String(response.Division_Province || '').trim() === selectedDivision;
       if (!matchesDivision) return false;
       if (!needle) return true;
@@ -1165,11 +1192,12 @@ function ReportSection({ report, evaluationReport, onRefresh, onConfirmAttendanc
         ...response.answers.flatMap((answer) => [answer.question_text, answer.answer_value]),
       ].some((value) => String(value || '').toLowerCase().includes(needle));
     });
-  }, [evaluationReport?.responses, reportSearch, selectedDivision]);
+  }, [evaluationReport?.responses, reportSearch, selectedDivision, selectedReportCourseId]);
   const filteredEvaluationQuestions = useMemo(() => {
     const needle = reportSearch.trim().toLowerCase();
     const responseCourseIds = new Set(filteredEvaluationResponses.map((response) => Number(response.course_id)));
     return (evaluationReport?.questions || []).filter((question) => {
+      if (selectedReportCourseId !== 'ทั้งหมด' && String(question.course_id || '').trim() !== selectedReportCourseId) return false;
       if (selectedDivision !== 'ทั้งหมด' && !responseCourseIds.has(Number(question.course_id))) return false;
       if (!needle) return true;
       return [
@@ -1179,11 +1207,11 @@ function ReportSection({ report, evaluationReport, onRefresh, onConfirmAttendanc
         evaluationTypeLabels[question.question_type],
       ].some((value) => String(value || '').toLowerCase().includes(needle));
     });
-  }, [evaluationReport?.questions, filteredEvaluationResponses, reportSearch, selectedDivision]);
+  }, [evaluationReport?.questions, filteredEvaluationResponses, reportSearch, selectedDivision, selectedReportCourseId]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedDivision, reportSearch, report]);
+  }, [selectedDivision, selectedReportCourseId, reportSearch, report]);
 
   return (
     <section className="space-y-5">
@@ -1194,6 +1222,18 @@ function ReportSection({ report, evaluationReport, onRefresh, onConfirmAttendanc
             <p className="text-sm font-semibold text-slate-500">รายชื่อผู้ลงทะเบียน เวลาเข้าอบรม คะแนนก่อน/หลัง และสถานะยืนยัน</p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <label className="text-xs font-black text-slate-500" htmlFor="training-report-course">หลักสูตร</label>
+            <select
+              id="training-report-course"
+              value={selectedReportCourseId}
+              onChange={(event) => setSelectedReportCourseId(event.target.value)}
+              className="min-w-[280px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            >
+              <option value="ทั้งหมด">ทุกหลักสูตร</option>
+              {courseOptions.map((course) => (
+                <option key={course.courseId} value={course.courseId}>{course.title}</option>
+              ))}
+            </select>
             <label className="text-xs font-black text-slate-500" htmlFor="training-report-division">หน่วยงาน</label>
             <select
               id="training-report-division"
