@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_RESET_TOKEN_TTL_MINUTES = 30;
+const APPS_SCRIPT_TIMEOUT_MS = 45_000;
 const GOOGLE_PASSWORD_RESET_SCRIPT_URL =
   process.env.GOOGLE_PASSWORD_RESET_SCRIPT_URL ||
   process.env.GOOGLE_AVATAR_UPLOAD_SCRIPT_URL ||
@@ -61,6 +62,24 @@ function escapeHtml(value: string) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function truncateExternalMessage(value: unknown, fallback = 'ไม่สามารถเชื่อมต่อบริการภายนอกได้') {
+  const raw = typeof value === 'string' ? value : value instanceof Error ? value.message : '';
+  if (/^\s*<!doctype|^\s*<html|<body|service unavailable|temporarily unavailable|502 bad gateway|503 service unavailable/i.test(raw)) {
+    return fallback;
+  }
+  return (raw.replace(/<!doctype[\s\S]*$/i, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || fallback).slice(0, 240);
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), APPS_SCRIPT_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function getAppBaseUrl(req: any) {
@@ -151,23 +170,31 @@ function createMailTransporter(mailConfig: ReturnType<typeof getMailConfig>) {
 }
 
 async function sendPasswordResetEmailViaAppsScript(email: string, displayName: string | null, resetLink: string) {
-  const response = await fetch(GOOGLE_PASSWORD_RESET_SCRIPT_URL, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      action: 'sendPasswordResetEmail',
-      email,
-      displayName,
-      resetLink,
-      expiresMinutes: PASSWORD_RESET_TOKEN_TTL_MINUTES,
-    }),
-  });
+  let response: globalThis.Response;
+  try {
+    response = await fetchWithTimeout(GOOGLE_PASSWORD_RESET_SCRIPT_URL, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'sendPasswordResetEmail',
+        email,
+        displayName,
+        resetLink,
+        expiresMinutes: PASSWORD_RESET_TOKEN_TTL_MINUTES,
+      }),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Google Apps Script ส่งอีเมลใช้เวลาตอบกลับนานเกินไป กรุณาลองใหม่อีกครั้ง', { cause: error });
+    }
+    throw error;
+  }
 
   const text = await response.text();
-  if (!response.ok) throw new Error(text || 'Cannot call Google Apps Script for password reset email');
-  if (/script function not found|<!doctype|<html/i.test(text)) {
-    throw new Error('Google Apps Script ยังไม่รองรับการส่งอีเมลรีเซ็ตรหัสผ่าน โปรดอัปเดตไฟล์ google-apps-script/monitor_data_webapp.gs แล้ว Deploy เป็น New version');
+  if (!response.ok) throw new Error(truncateExternalMessage(text, 'Google Apps Script ส่งอีเมลไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง'));
+  if (/script function not found|<!doctype|<html|service unavailable|temporarily unavailable/i.test(text)) {
+    throw new Error('Google Apps Script ตอบกลับไม่ถูกต้องสำหรับการส่งอีเมลรีเซ็ตรหัสผ่าน โปรดอัปเดต Apps Script แล้ว Deploy เป็น New version');
   }
 
   let parsed: any;
@@ -301,7 +328,7 @@ export default async function handler(req: any, res: any) {
       return;
     }
     if (error instanceof Error && /Google Apps Script|ส่งอีเมลรีเซ็ต|Cannot call Google Apps Script/i.test(error.message)) {
-      sendJson(res, 500, { error: error.message });
+      sendJson(res, 500, { error: truncateExternalMessage(error.message, 'ไม่สามารถส่งอีเมลรีเซ็ตรหัสผ่านได้ กรุณาลองใหม่อีกครั้ง') });
       return;
     }
     sendJson(res, 500, { error: 'เกิดข้อผิดพลาดในการส่งลิงก์รีเซ็ตรหัสผ่าน' });

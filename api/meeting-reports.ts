@@ -19,6 +19,7 @@ const GOOGLE_MONITOR_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwiK3
 const GOOGLE_DRIVE_FOLDER_ID = '1aaQIZ3nUcr0iDLOq8xENFpM_halgcndE';
 const GOOGLE_AVATAR_UPLOAD_SCRIPT_URL = process.env.GOOGLE_AVATAR_UPLOAD_SCRIPT_URL || GOOGLE_MONITOR_SCRIPT_URL;
 const DRIVE_SCRIPT_TIMEOUT_MS = 45_000;
+const DRIVE_UPLOAD_MAX_BYTES = 18 * 1024 * 1024;
 
 type MeetingReportSection = 'office' | 'area';
 type MeetingReportMarkerType = 'point' | 'circle' | 'rect';
@@ -179,6 +180,44 @@ function uploadErrorMessage(message: string) {
   return message;
 }
 
+function truncateExternalMessage(value: unknown, fallback = 'ไม่สามารถเชื่อมต่อบริการภายนอกได้') {
+  const raw = typeof value === 'string' ? value : value instanceof Error ? value.message : '';
+  if (/^\s*<!doctype|^\s*<html|<body|service unavailable|temporarily unavailable|502 bad gateway|503 service unavailable/i.test(raw)) {
+    return fallback;
+  }
+  return (raw.replace(/<!doctype[\s\S]*$/i, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || fallback).slice(0, 240);
+}
+
+function normalizeBase64Payload(value: string) {
+  const raw = value.includes(',') ? value.split(',').pop() || '' : value;
+  return raw.replace(/\s+/g, '');
+}
+
+function getBase64DecodedByteLength(value: string) {
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
+}
+
+function validatePdfBase64(base64: unknown) {
+  if (!base64 || typeof base64 !== 'string') {
+    const error = new Error('ไม่พบไฟล์ PDF ที่ต้องการอัปโหลด') as Error & { status?: number };
+    error.status = 400;
+    throw error;
+  }
+  const normalizedBase64 = normalizeBase64Payload(base64);
+  if (!normalizedBase64 || normalizedBase64.length % 4 === 1 || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalizedBase64)) {
+    const error = new Error('ข้อมูลไฟล์ PDF ไม่ถูกต้อง กรุณาเลือกไฟล์ใหม่') as Error & { status?: number };
+    error.status = 400;
+    throw error;
+  }
+  if (getBase64DecodedByteLength(normalizedBase64) > DRIVE_UPLOAD_MAX_BYTES) {
+    const error = new Error('ไฟล์ PDF มีขนาดใหญ่เกินไป กรุณาลดขนาดไฟล์แล้วลองใหม่') as Error & { status?: number };
+    error.status = 413;
+    throw error;
+  }
+  return normalizedBase64;
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = DRIVE_SCRIPT_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -205,9 +244,9 @@ async function postToDriveScript(payload: Record<string, unknown>) {
     throw error;
   }
   const text = await response.text();
-  if (!response.ok) throw new Error(text || 'Cannot call Google Apps Script');
-  if (/script function not found|<!doctype|<html/i.test(text)) {
-    throw new Error('Google Apps Script ยังไม่รองรับคำสั่งนี้ โปรดอัปเดต Apps Script แล้ว Deploy เป็น New version');
+  if (!response.ok) throw new Error(truncateExternalMessage(text, 'Google Apps Script ไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง'));
+  if (/script function not found|<!doctype|<html|service unavailable|temporarily unavailable/i.test(text)) {
+    throw new Error('Google Apps Script ตอบกลับไม่ถูกต้องหรือไม่พร้อมใช้งาน กรุณาตรวจสอบการ Deploy แล้วลองใหม่อีกครั้ง');
   }
   try {
     return JSON.parse(text);
@@ -719,11 +758,11 @@ async function uploadPdf(body: any, res: any) {
   const userId = toInt(body.user_id);
   if (!userId) return sendJson(res, 400, { error: 'ไม่พบรหัสผู้ใช้งาน' });
   if (!(await requireAdmin(res, userId))) return;
-  if (!body.base64 || typeof body.base64 !== 'string') return sendJson(res, 400, { error: 'ไม่พบไฟล์ PDF ที่ต้องการอัปโหลด' });
   const mimeType = String(body.mime_type || 'application/pdf');
   if (mimeType !== 'application/pdf' && !String(body.file_name || '').toLowerCase().endsWith('.pdf')) {
     return sendJson(res, 400, { error: 'รายงานการประชุมต้องเป็นไฟล์ PDF เท่านั้น' });
   }
+  const normalizedBase64 = validatePdfBase64(body.base64);
   const safeReportName = sanitizeFileName(body.report_title || 'meeting-report', 'meeting-report');
   const safeFileName = sanitizeFileName(body.file_name || `${safeReportName}.pdf`, 'meeting-report.pdf');
   const parsed = await postToDriveScript({
@@ -733,7 +772,7 @@ async function uploadPdf(body: any, res: any) {
     displayName: safeReportName,
     fileName: `${Date.now()}-meeting-report-${safeFileName}`,
     mimeType: 'application/pdf',
-    base64: body.base64,
+    base64: normalizedBase64,
   });
   if (parsed?.ok === false) throw new Error(uploadErrorMessage(parsed.error || 'อัปโหลด PDF ไป Google Drive ไม่สำเร็จ'));
   const uploadPayload = buildDriveUploadPayload(parsed);
@@ -834,8 +873,11 @@ export default async function handler(req: any, res: any) {
     return sendJson(res, 404, { error: 'ไม่พบ API รายงานการประชุมนี้' });
   } catch (error) {
     console.error(error);
-    return sendJson(res, 500, {
-      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดใน API รายงานการประชุม',
+    const status = Number((error as { status?: unknown })?.status) || 500;
+    return sendJson(res, status, {
+      error: error instanceof Error
+        ? truncateExternalMessage(error.message, 'เกิดข้อผิดพลาดใน API รายงานการประชุม')
+        : 'เกิดข้อผิดพลาดใน API รายงานการประชุม',
     });
   }
 }

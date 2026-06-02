@@ -85,9 +85,13 @@ const GOOGLE_DRIVE_AVATAR_FOLDER_ID = '1aaQIZ3nUcr0iDLOq8xENFpM_halgcndE';
 const GOOGLE_AVATAR_UPLOAD_SCRIPT_URL = process.env.GOOGLE_AVATAR_UPLOAD_SCRIPT_URL || GOOGLE_MONITOR_SCRIPT_URL;
 const GOOGLE_PASSWORD_RESET_SCRIPT_URL = process.env.GOOGLE_PASSWORD_RESET_SCRIPT_URL || GOOGLE_AVATAR_UPLOAD_SCRIPT_URL;
 const DRIVE_SCRIPT_TIMEOUT_MS = 45_000;
+const MONITOR_SCRIPT_TIMEOUT_MS = 30_000;
 const PROFILE_AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 const PROFILE_AVATAR_UPLOAD_MAX_BASE64_LENGTH = Math.ceil((PROFILE_AVATAR_UPLOAD_MAX_BYTES * 4) / 3) + 128;
+const DRIVE_UPLOAD_MAX_BYTES = 18 * 1024 * 1024;
 const SUPPORTED_AVATAR_MIME_RE = /^image\/(jpeg|jpg|png|webp|gif|avif|bmp|svg\+xml|tiff|heic|heif)$/i;
+const SUPPORTED_IMAGE_MIME_RE = /^image\/(jpeg|jpg|png|webp|gif|avif|bmp|svg\+xml|tiff|heic|heif)$/i;
+const SUPPORTED_DOCUMENT_MIME_RE = /^(application\/pdf|application\/octet-stream|image\/[a-z0-9.+-]+|text\/plain|application\/vnd\.[a-z0-9.+-]+|application\/msword|application\/vnd\.openxmlformats-officedocument\.[a-z0-9.+-]+)$/i;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_RESET_TOKEN_TTL_MINUTES = 30;
@@ -213,23 +217,33 @@ async function createMailTransporter(mailConfig: ReturnType<typeof getMailConfig
 }
 
 async function sendPasswordResetEmailViaAppsScript(email: string, displayName: string | null, resetLink: string) {
-  const response = await fetch(GOOGLE_PASSWORD_RESET_SCRIPT_URL, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      action: 'sendPasswordResetEmail',
-      email,
-      displayName,
-      resetLink,
-      expiresMinutes: PASSWORD_RESET_TOKEN_TTL_MINUTES,
-    }),
-  });
+  let response: globalThis.Response;
+  try {
+    response = await fetchWithTimeout(GOOGLE_PASSWORD_RESET_SCRIPT_URL, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'sendPasswordResetEmail',
+        email,
+        displayName,
+        resetLink,
+        expiresMinutes: PASSWORD_RESET_TOKEN_TTL_MINUTES,
+      }),
+    }, DRIVE_SCRIPT_TIMEOUT_MS);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Google Apps Script ส่งอีเมลใช้เวลาตอบกลับนานเกินไป กรุณาลองใหม่อีกครั้ง', { cause: error });
+    }
+    throw error;
+  }
 
   const text = await response.text();
-  if (!response.ok) throw new Error(text || 'Cannot call Google Apps Script for password reset email');
-  if (/script function not found|<!doctype|<html/i.test(text)) {
-    throw new Error('Google Apps Script ยังไม่รองรับการส่งอีเมลรีเซ็ตรหัสผ่าน โปรดอัปเดตไฟล์ google-apps-script/monitor_data_webapp.gs แล้ว Deploy เป็น New version');
+  if (!response.ok) {
+    throw new Error(truncateExternalMessage(text, 'Google Apps Script ส่งอีเมลไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง'));
+  }
+  if (isHtmlLikeResponse(text)) {
+    throw new Error('Google Apps Script ตอบกลับไม่ถูกต้องสำหรับการส่งอีเมลรีเซ็ตรหัสผ่าน โปรดอัปเดต Apps Script แล้ว Deploy เป็น New version');
   }
 
   let parsed: any;
@@ -1236,6 +1250,9 @@ async function getPrimaryOnlineLessonDuration(courseId: number) {
 
 function truncateExternalMessage(value: unknown, fallback = 'ไม่สามารถเชื่อมต่อบริการภายนอกได้') {
   const raw = typeof value === 'string' ? value : value instanceof Error ? value.message : '';
+  if (/^\s*<!doctype|^\s*<html|service unavailable|temporarily unavailable|502 bad gateway|503 service unavailable/i.test(raw)) {
+    return fallback;
+  }
   const withoutHtml = raw
     .replace(/<!doctype[\s\S]*$/i, '')
     .replace(/<[^>]+>/g, ' ')
@@ -1253,6 +1270,75 @@ function normalizeBase64Payload(value: string) {
 function getBase64DecodedByteLength(value: string) {
   const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
+}
+
+function validateBase64Upload({
+  base64,
+  mimeType,
+  maxBytes = DRIVE_UPLOAD_MAX_BYTES,
+  allowedMime,
+  missingMessage = 'ไม่พบไฟล์ที่ต้องการอัปโหลด',
+  mimeMessage = 'ชนิดไฟล์ที่อัปโหลดไม่ถูกต้อง',
+  invalidMessage = 'ข้อมูลไฟล์ไม่ถูกต้อง กรุณาเลือกไฟล์ใหม่',
+  tooLargeMessage = 'ไฟล์มีขนาดใหญ่เกินไป กรุณาลดขนาดไฟล์แล้วลองใหม่',
+}: {
+  base64: unknown;
+  mimeType: unknown;
+  maxBytes?: number;
+  allowedMime?: RegExp | ((value: string) => boolean);
+  missingMessage?: string;
+  mimeMessage?: string;
+  invalidMessage?: string;
+  tooLargeMessage?: string;
+}) {
+  if (!base64 || typeof base64 !== 'string') {
+    const error = new Error(missingMessage) as Error & { status?: number };
+    error.status = 400;
+    throw error;
+  }
+
+  const safeMimeType = String(mimeType || '').trim().toLowerCase();
+  if (allowedMime) {
+    const ok = typeof allowedMime === 'function' ? allowedMime(safeMimeType) : allowedMime.test(safeMimeType);
+    if (!safeMimeType || !ok) {
+      const error = new Error(mimeMessage) as Error & { status?: number };
+      error.status = 400;
+      throw error;
+    }
+  }
+
+  const normalizedBase64 = normalizeBase64Payload(base64);
+  if (
+    !normalizedBase64 ||
+    normalizedBase64.length % 4 === 1 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(normalizedBase64)
+  ) {
+    const error = new Error(invalidMessage) as Error & { status?: number };
+    error.status = 400;
+    throw error;
+  }
+
+  const decodedBytes = getBase64DecodedByteLength(normalizedBase64);
+  if (decodedBytes > maxBytes) {
+    const error = new Error(tooLargeMessage) as Error & { status?: number };
+    error.status = 413;
+    throw error;
+  }
+
+  return {
+    normalizedBase64,
+    decodedBytes,
+    mimeType: safeMimeType,
+  };
+}
+
+function getHttpErrorStatus(error: unknown, fallback = 500) {
+  const status = Number((error as { status?: unknown })?.status);
+  return Number.isInteger(status) && status >= 400 && status <= 599 ? status : fallback;
+}
+
+function isHtmlLikeResponse(text: string) {
+  return /script function not found|<!doctype|<html|<body|service unavailable|temporarily unavailable/i.test(text);
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = DRIVE_SCRIPT_TIMEOUT_MS) {
@@ -1420,10 +1506,10 @@ async function postToDriveScript(payload: Record<string, unknown>) {
 
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(truncateExternalMessage(text, 'Cannot call Google Apps Script'));
+    throw new Error(truncateExternalMessage(text, 'Google Apps Script ไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง'));
   }
-  if (/script function not found|<!doctype|<html/i.test(text)) {
-    throw new Error('Google Apps Script ยังไม่รองรับคำสั่งนี้ โปรดอัปเดต Apps Script แล้ว Deploy เป็น New version');
+  if (isHtmlLikeResponse(text)) {
+    throw new Error('Google Apps Script ตอบกลับไม่ถูกต้องหรือไม่พร้อมใช้งาน กรุณาตรวจสอบการ Deploy แล้วลองใหม่อีกครั้ง');
   }
 
   try {
@@ -2415,24 +2501,17 @@ app.post('/api/users/profile/avatar-drive', async (req, res) => {
       base64,
     } = req.body || {};
 
-    if (!base64 || typeof base64 !== 'string') {
-      return res.status(400).json({ error: 'ไม่พบไฟล์รูปภาพที่ต้องการอัปโหลด' });
-    }
-
-    if (!mime_type || typeof mime_type !== 'string' || !SUPPORTED_AVATAR_MIME_RE.test(mime_type)) {
-      return res.status(400).json({ error: 'ไฟล์ที่อัปโหลดต้องเป็นรูปภาพที่รองรับเท่านั้น' });
-    }
-
-    const normalizedBase64 = normalizeBase64Payload(base64);
-    if (!normalizedBase64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalizedBase64)) {
-      return res.status(400).json({ error: 'ข้อมูลรูปภาพไม่ถูกต้อง กรุณาเลือกรูปใหม่' });
-    }
-
-    const decodedBytes = getBase64DecodedByteLength(normalizedBase64);
-    if (
-      normalizedBase64.length > PROFILE_AVATAR_UPLOAD_MAX_BASE64_LENGTH ||
-      decodedBytes > PROFILE_AVATAR_UPLOAD_MAX_BYTES
-    ) {
+    const upload = validateBase64Upload({
+      base64,
+      mimeType: mime_type,
+      maxBytes: PROFILE_AVATAR_UPLOAD_MAX_BYTES,
+      allowedMime: SUPPORTED_AVATAR_MIME_RE,
+      missingMessage: 'ไม่พบไฟล์รูปภาพที่ต้องการอัปโหลด',
+      mimeMessage: 'ไฟล์ที่อัปโหลดต้องเป็นรูปภาพที่รองรับเท่านั้น',
+      invalidMessage: 'ข้อมูลรูปภาพไม่ถูกต้อง กรุณาเลือกรูปใหม่',
+      tooLargeMessage: 'รูปประจำตัวมีขนาดใหญ่เกินไป กรุณาเลือกรูปใหม่หรือครอปรูปให้เล็กลง',
+    });
+    if (upload.normalizedBase64.length > PROFILE_AVATAR_UPLOAD_MAX_BASE64_LENGTH) {
       return res.status(413).json({ error: 'รูปประจำตัวมีขนาดใหญ่เกินไป กรุณาเลือกรูปใหม่หรือครอปรูปให้เล็กลง' });
     }
 
@@ -2444,8 +2523,8 @@ app.post('/api/users/profile/avatar-drive', async (req, res) => {
       userId: user_id || '',
       displayName: display_name || '',
       fileName: `${Date.now()}-${safeFileName}`,
-      mimeType: mime_type,
-      base64: normalizedBase64,
+      mimeType: upload.mimeType,
+      base64: upload.normalizedBase64,
     });
 
     if (parsed?.ok === false) {
@@ -2475,7 +2554,7 @@ app.post('/api/users/profile/avatar-drive', async (req, res) => {
     const message = error instanceof Error
       ? error.message
       : 'ไม่สามารถอัปโหลดรูปประจำตัวไปยัง Google Drive ได้';
-    res.status(500).json({
+    res.status(getHttpErrorStatus(error)).json({
       error: getAvatarUploadErrorMessage(truncateExternalMessage(message)),
     });
   }
@@ -2485,7 +2564,7 @@ app.post('/api/users/profile/avatar-drive', async (req, res) => {
 app.get('/api/google-drive/files/:fileId', async (req, res) => {
   try {
     const fileId = extractGoogleDriveFileId(req.params.fileId);
-    if (!fileId) return res.status(400).send('Invalid Google Drive file id');
+    if (!fileId) return res.status(400).json({ error: 'รหัสไฟล์ Google Drive ไม่ถูกต้อง' });
 
     const parsed = await postToDriveScript({
       action: 'getDriveFile',
@@ -2493,21 +2572,29 @@ app.get('/api/google-drive/files/:fileId', async (req, res) => {
     });
 
     if (parsed?.ok === false) {
-      return res.status(404).send(parsed.error || 'Cannot load Google Drive file');
+      return res.status(404).json({ error: parsed.error || 'ไม่สามารถโหลดไฟล์จาก Google Drive ได้' });
     }
 
     const mimeType = String(parsed.mimeType || 'application/octet-stream');
     const base64 = String(parsed.base64 || '');
-    if (!base64) return res.status(404).send('Google Drive file is empty');
+    if (!base64) return res.status(404).json({ error: 'ไฟล์จาก Google Drive ไม่มีข้อมูล' });
+    const normalizedBase64 = normalizeBase64Payload(base64);
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalizedBase64)) {
+      return res.status(502).json({ error: 'Google Drive ส่งข้อมูลไฟล์กลับมาไม่ถูกต้อง' });
+    }
 
-    const bytes = Buffer.from(base64, 'base64');
+    const bytes = Buffer.from(normalizedBase64, 'base64');
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.setHeader('Content-Length', bytes.length);
     res.send(bytes);
   } catch (error) {
     console.error(error);
-    res.status(500).send(error instanceof Error ? error.message : 'Cannot load Google Drive file');
+    res.status(getHttpErrorStatus(error)).json({
+      error: error instanceof Error
+        ? truncateExternalMessage(error.message, 'ไม่สามารถโหลดไฟล์จาก Google Drive ได้')
+        : 'ไม่สามารถโหลดไฟล์จาก Google Drive ได้',
+    });
   }
 });
 
@@ -2521,13 +2608,14 @@ app.post('/api/admin/training/cover-drive', async (req, res) => {
       base64,
     } = req.body || {};
 
-    if (!base64 || typeof base64 !== 'string') {
-      return res.status(400).json({ error: 'ไม่พบไฟล์รูปปกที่ต้องการอัปโหลด' });
-    }
-
-    if (!mime_type || typeof mime_type !== 'string' || !mime_type.startsWith('image/')) {
-      return res.status(400).json({ error: 'ไฟล์รูปปกต้องเป็นรูปภาพเท่านั้น' });
-    }
+    const upload = validateBase64Upload({
+      base64,
+      mimeType: mime_type,
+      allowedMime: SUPPORTED_IMAGE_MIME_RE,
+      missingMessage: 'ไม่พบไฟล์รูปปกที่ต้องการอัปโหลด',
+      mimeMessage: 'ไฟล์รูปปกต้องเป็นรูปภาพเท่านั้น',
+      invalidMessage: 'ข้อมูลรูปปกไม่ถูกต้อง กรุณาเลือกรูปใหม่',
+    });
 
     const safeCourseName = sanitizeAvatarFileName(course_title || 'training-course', 'training-course');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeCourseName}-cover.webp`, 'training-cover.webp');
@@ -2537,8 +2625,8 @@ app.post('/api/admin/training/cover-drive', async (req, res) => {
       userId: 'training-cover',
       displayName: safeCourseName,
       fileName: `${Date.now()}-course-cover-${safeFileName}`,
-      mimeType: mime_type,
-      base64,
+      mimeType: upload.mimeType,
+      base64: upload.normalizedBase64,
     });
 
     if (parsed?.ok === false) {
@@ -2553,9 +2641,9 @@ app.post('/api/admin/training/cover-drive', async (req, res) => {
     res.json(uploadPayload);
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(getHttpErrorStatus(error)).json({
       error: error instanceof Error
-        ? error.message
+        ? truncateExternalMessage(error.message, 'ไม่สามารถอัปโหลดรูปปกหลักสูตรไปยัง Google Drive ได้')
         : 'ไม่สามารถอัปโหลดรูปปกหลักสูตรไปยัง Google Drive ได้',
     });
   }
@@ -2571,9 +2659,14 @@ app.post('/api/admin/training/material-drive', async (req, res) => {
       base64,
     } = req.body || {};
 
-    if (!base64 || typeof base64 !== 'string') {
-      return res.status(400).json({ error: 'ไม่พบไฟล์เอกสารที่ต้องการอัปโหลด' });
-    }
+    const upload = validateBase64Upload({
+      base64,
+      mimeType: mime_type || 'application/octet-stream',
+      allowedMime: (value) => SUPPORTED_DOCUMENT_MIME_RE.test(value),
+      missingMessage: 'ไม่พบไฟล์เอกสารที่ต้องการอัปโหลด',
+      mimeMessage: 'ชนิดไฟล์เอกสารไม่ถูกต้อง',
+      invalidMessage: 'ข้อมูลไฟล์เอกสารไม่ถูกต้อง กรุณาเลือกไฟล์ใหม่',
+    });
 
     const safeCourseName = sanitizeAvatarFileName(course_title || 'training-course', 'training-course');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeCourseName}-material`, 'training-material');
@@ -2583,8 +2676,8 @@ app.post('/api/admin/training/material-drive', async (req, res) => {
       userId: 'training-material',
       displayName: safeCourseName,
       fileName: `${Date.now()}-course-material-${safeFileName}`,
-      mimeType: String(mime_type || 'application/octet-stream'),
-      base64,
+      mimeType: upload.mimeType || 'application/octet-stream',
+      base64: upload.normalizedBase64,
     });
 
     if (parsed?.ok === false) {
@@ -2599,9 +2692,9 @@ app.post('/api/admin/training/material-drive', async (req, res) => {
     res.json(uploadPayload);
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(getHttpErrorStatus(error)).json({
       error: error instanceof Error
-        ? error.message
+        ? truncateExternalMessage(error.message, 'ไม่สามารถอัปโหลดเอกสารประกอบไปยัง Google Drive ได้')
         : 'ไม่สามารถอัปโหลดเอกสารประกอบไปยัง Google Drive ได้',
     });
   }
@@ -2619,10 +2712,10 @@ app.post('/api/users/profile/avatar-drive/delete', async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(getHttpErrorStatus(error)).json({
       ok: false,
       error: error instanceof Error
-        ? error.message
+        ? truncateExternalMessage(error.message, 'ไม่สามารถลบรูปประจำตัวเดิมจาก Google Drive ได้')
         : 'ไม่สามารถลบรูปประจำตัวเดิมจาก Google Drive ได้',
     });
   }
@@ -2735,13 +2828,27 @@ app.put('/api/monitor-records/:id', async (req, res) => {
 // Proxy ข้อมูล Google Sheets สำหรับหน้าบันทึกกำกับติดตามกลุ่มเทคฯ
 app.get('/api/google-monitor-data', async (_req, res) => {
   try {
-    const response = await fetch(GOOGLE_MONITOR_SCRIPT_URL, { method: 'GET', redirect: 'follow' });
+    const response = await fetchWithTimeout(GOOGLE_MONITOR_SCRIPT_URL, { method: 'GET', redirect: 'follow' }, MONITOR_SCRIPT_TIMEOUT_MS);
     const text = await response.text();
-    if (!response.ok) throw new Error(text || 'Cannot fetch Google Sheets data');
-    res.type('application/json').send(text);
+    if (!response.ok) {
+      throw new Error(truncateExternalMessage(text, 'Google Apps Script ไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง'));
+    }
+    if (isHtmlLikeResponse(text)) {
+      throw new Error('Google Apps Script ตอบกลับไม่ถูกต้อง กรุณาตรวจสอบการ Deploy แล้วลองใหม่อีกครั้ง');
+    }
+
+    try {
+      res.json(JSON.parse(text));
+    } catch {
+      throw new Error('Google Apps Script ส่งข้อมูลกลับมาไม่ใช่ JSON กรุณาตรวจสอบ Apps Script');
+    }
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'ไม่สามารถดึงข้อมูลจาก Google Sheets ได้' });
+    res.status(getHttpErrorStatus(error)).json({
+      error: error instanceof Error
+        ? truncateExternalMessage(error.message, 'ไม่สามารถดึงข้อมูลจาก Google Sheets ได้')
+        : 'ไม่สามารถดึงข้อมูลจาก Google Sheets ได้',
+    });
   }
 });
 
@@ -2752,16 +2859,18 @@ app.post('/api/google-monitor-data', async (req, res) => {
       return res.status(400).json({ error: 'ไม่พบข้อมูลที่ต้องการบันทึกลง Google Sheets' });
     }
 
-    const response = await fetch(GOOGLE_MONITOR_SCRIPT_URL, {
+    const response = await fetchWithTimeout(GOOGLE_MONITOR_SCRIPT_URL, {
       method: 'POST',
       redirect: 'follow',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(req.body),
-    });
+    }, MONITOR_SCRIPT_TIMEOUT_MS);
     const text = await response.text();
-    if (!response.ok) throw new Error(text || 'Cannot write Google Sheets data');
-    if (/script function not found|<!doctype|<html/i.test(text)) {
-      throw new Error('Google Apps Script ยังไม่รองรับการบันทึกแบบ POST');
+    if (!response.ok) {
+      throw new Error(truncateExternalMessage(text, 'Google Apps Script ไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง'));
+    }
+    if (isHtmlLikeResponse(text)) {
+      throw new Error('Google Apps Script ตอบกลับไม่ถูกต้องหรือยังไม่รองรับการบันทึกแบบ POST');
     }
 
     try {
@@ -2778,9 +2887,9 @@ app.post('/api/google-monitor-data', async (req, res) => {
     }
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(getHttpErrorStatus(error)).json({
       error: error instanceof Error
-        ? error.message
+        ? truncateExternalMessage(error.message, 'Google Apps Script ยังไม่มี doPost(e) สำหรับบันทึกข้อมูล กรุณาอัปเดตและ Deploy Apps Script ใหม่')
         : 'Google Apps Script ยังไม่มี doPost(e) สำหรับบันทึกข้อมูล กรุณาอัปเดตและ Deploy Apps Script ใหม่',
     });
   }
@@ -3686,12 +3795,14 @@ app.delete('/api/admin/knowledge/items/:id', async (req, res) => {
 app.post('/api/admin/knowledge/cover-drive', async (req, res) => {
   try {
     const { item_title, file_name, mime_type, base64 } = req.body || {};
-    if (!base64 || typeof base64 !== 'string') {
-      return res.status(400).json({ error: 'ไม่พบไฟล์รูปปกที่ต้องการอัปโหลด' });
-    }
-    if (!mime_type || typeof mime_type !== 'string' || !mime_type.startsWith('image/')) {
-      return res.status(400).json({ error: 'ไฟล์รูปปกต้องเป็นรูปภาพเท่านั้น' });
-    }
+    const upload = validateBase64Upload({
+      base64,
+      mimeType: mime_type,
+      allowedMime: SUPPORTED_IMAGE_MIME_RE,
+      missingMessage: 'ไม่พบไฟล์รูปปกที่ต้องการอัปโหลด',
+      mimeMessage: 'ไฟล์รูปปกต้องเป็นรูปภาพเท่านั้น',
+      invalidMessage: 'ข้อมูลรูปปกไม่ถูกต้อง กรุณาเลือกรูปใหม่',
+    });
 
     const safeItemName = sanitizeAvatarFileName(item_title || 'knowledge-item', 'knowledge-item');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeItemName}-cover.webp`, 'knowledge-cover.webp');
@@ -3701,8 +3812,8 @@ app.post('/api/admin/knowledge/cover-drive', async (req, res) => {
       userId: 'knowledge-cover',
       displayName: safeItemName,
       fileName: `${Date.now()}-knowledge-cover-${safeFileName}`,
-      mimeType: mime_type,
-      base64,
+      mimeType: upload.mimeType,
+      base64: upload.normalizedBase64,
     });
 
     if (parsed?.ok === false) {
@@ -3717,9 +3828,9 @@ app.post('/api/admin/knowledge/cover-drive', async (req, res) => {
     res.json(uploadPayload);
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(getHttpErrorStatus(error)).json({
       error: error instanceof Error
-        ? error.message
+        ? truncateExternalMessage(error.message, 'ไม่สามารถอัปโหลดรูปปกคลังความรู้ไปยัง Google Drive ได้')
         : 'ไม่สามารถอัปโหลดรูปปกคลังความรู้ไปยัง Google Drive ได้',
     });
   }
@@ -3728,13 +3839,15 @@ app.post('/api/admin/knowledge/cover-drive', async (req, res) => {
 app.post('/api/admin/knowledge/pdf-drive', async (req, res) => {
   try {
     const { item_title, file_name, mime_type, base64 } = req.body || {};
-    if (!base64 || typeof base64 !== 'string') {
-      return res.status(400).json({ error: 'ไม่พบไฟล์ PDF ที่ต้องการอัปโหลด' });
-    }
     const safeMimeType = String(mime_type || 'application/pdf');
-    if (safeMimeType !== 'application/pdf' && !String(file_name || '').toLowerCase().endsWith('.pdf')) {
-      return res.status(400).json({ error: 'เอกสารคลังความรู้ต้องเป็นไฟล์ PDF เท่านั้น' });
-    }
+    const upload = validateBase64Upload({
+      base64,
+      mimeType: safeMimeType,
+      allowedMime: (value) => value === 'application/pdf' || (value === 'application/octet-stream' && String(file_name || '').toLowerCase().endsWith('.pdf')),
+      missingMessage: 'ไม่พบไฟล์ PDF ที่ต้องการอัปโหลด',
+      mimeMessage: 'เอกสารคลังความรู้ต้องเป็นไฟล์ PDF เท่านั้น',
+      invalidMessage: 'ข้อมูลไฟล์ PDF ไม่ถูกต้อง กรุณาเลือกไฟล์ใหม่',
+    });
 
     const safeItemName = sanitizeAvatarFileName(item_title || 'knowledge-item', 'knowledge-item');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeItemName}.pdf`, 'knowledge.pdf');
@@ -3745,7 +3858,7 @@ app.post('/api/admin/knowledge/pdf-drive', async (req, res) => {
       displayName: safeItemName,
       fileName: `${Date.now()}-knowledge-pdf-${safeFileName}`,
       mimeType: 'application/pdf',
-      base64,
+      base64: upload.normalizedBase64,
     });
 
     if (parsed?.ok === false) {
@@ -3760,9 +3873,9 @@ app.post('/api/admin/knowledge/pdf-drive', async (req, res) => {
     res.json(uploadPayload);
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(getHttpErrorStatus(error)).json({
       error: error instanceof Error
-        ? error.message
+        ? truncateExternalMessage(error.message, 'ไม่สามารถอัปโหลด PDF คลังความรู้ไปยัง Google Drive ได้')
         : 'ไม่สามารถอัปโหลด PDF คลังความรู้ไปยัง Google Drive ได้',
     });
   }
@@ -4285,13 +4398,15 @@ app.post('/api/admin/meeting-reports/pdf-drive', async (req, res) => {
     const userId = toInt(user_id);
     if (!userId) return res.status(400).json({ error: 'ไม่พบรหัสผู้ใช้งาน' });
     if (!(await requireMeetingReportAdmin(res, userId))) return;
-    if (!base64 || typeof base64 !== 'string') {
-      return res.status(400).json({ error: 'ไม่พบไฟล์ PDF ที่ต้องการอัปโหลด' });
-    }
     const safeMimeType = String(mime_type || 'application/pdf');
-    if (safeMimeType !== 'application/pdf' && !String(file_name || '').toLowerCase().endsWith('.pdf')) {
-      return res.status(400).json({ error: 'รายงานการประชุมต้องเป็นไฟล์ PDF เท่านั้น' });
-    }
+    const upload = validateBase64Upload({
+      base64,
+      mimeType: safeMimeType,
+      allowedMime: (value) => value === 'application/pdf' || (value === 'application/octet-stream' && String(file_name || '').toLowerCase().endsWith('.pdf')),
+      missingMessage: 'ไม่พบไฟล์ PDF ที่ต้องการอัปโหลด',
+      mimeMessage: 'รายงานการประชุมต้องเป็นไฟล์ PDF เท่านั้น',
+      invalidMessage: 'ข้อมูลไฟล์ PDF ไม่ถูกต้อง กรุณาเลือกไฟล์ใหม่',
+    });
 
     const safeReportName = sanitizeAvatarFileName(report_title || 'meeting-report', 'meeting-report');
     const safeFileName = sanitizeAvatarFileName(file_name || `${safeReportName}.pdf`, 'meeting-report.pdf');
@@ -4302,7 +4417,7 @@ app.post('/api/admin/meeting-reports/pdf-drive', async (req, res) => {
       displayName: safeReportName,
       fileName: `${Date.now()}-meeting-report-${safeFileName}`,
       mimeType: 'application/pdf',
-      base64,
+      base64: upload.normalizedBase64,
     });
 
     if (parsed?.ok === false) {
@@ -4317,9 +4432,9 @@ app.post('/api/admin/meeting-reports/pdf-drive', async (req, res) => {
     res.json(uploadPayload);
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(getHttpErrorStatus(error)).json({
       error: error instanceof Error
-        ? error.message
+        ? truncateExternalMessage(error.message, 'ไม่สามารถอัปโหลด PDF รายงานการประชุมไปยัง Google Drive ได้')
         : 'ไม่สามารถอัปโหลด PDF รายงานการประชุมไปยัง Google Drive ได้',
     });
   }
@@ -6230,6 +6345,38 @@ app.get('/api/usage/user-history/:userId', async (req, res) => {
     console.error(error);
     res.json([]);
   }
+});
+
+app.use((err: unknown, _req: Request, res: ExpressResponse, _next: NextFunction) => {
+  console.error('Unhandled Express error:', err);
+  if (res.headersSent) return;
+
+  const bodyError = err as { status?: number; type?: string } | undefined;
+  if (bodyError?.type === 'entity.too.large' || bodyError?.status === 413) {
+    return res.status(413).json({
+      error: 'ไฟล์หรือข้อมูลที่ส่งมามีขนาดใหญ่เกินไป กรุณาลดขนาดไฟล์แล้วลองใหม่',
+    });
+  }
+
+  if (err instanceof SyntaxError) {
+    return res.status(400).json({
+      error: 'รูปแบบ JSON ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง',
+    });
+  }
+
+  return res.status(getHttpErrorStatus(err)).json({
+    error: err instanceof Error
+      ? truncateExternalMessage(err.message, 'เกิดข้อผิดพลาดในระบบ กรุณาลองใหม่อีกครั้ง')
+      : 'เกิดข้อผิดพลาดในระบบ กรุณาลองใหม่อีกครั้ง',
+  });
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
 });
 
 const PORT = process.env.PORT || 3001;

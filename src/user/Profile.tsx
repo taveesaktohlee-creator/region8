@@ -9,7 +9,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import { DIVISION_PROVINCE_OPTIONS, PERSONNEL_TYPE_OPTIONS, POSITION_OPTIONS } from './userProfileOptions';
 
 const MAX_AVATAR_BYTES = 30 * 1024 * 1024;
-const MAX_AVATAR_UPLOAD_BYTES = 1024 * 1024;
+const MAX_AVATAR_UPLOAD_BYTES = 2 * 1024 * 1024;
 const AVATAR_EDITOR_FRAME_SIZE = 128;
 const AVATAR_MIN_ZOOM = 1;
 const AVATAR_MAX_ZOOM = 3;
@@ -30,8 +30,41 @@ const SUPPORTED_AVATAR_TYPES = [
 const SUPPORTED_AVATAR_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'svg', 'tif', 'tiff', 'heic', 'heif'];
 const AVATAR_ACCEPT = [...SUPPORTED_AVATAR_TYPES, ...SUPPORTED_AVATAR_EXTENSIONS.map((ext) => `.${ext}`)].join(',');
 
+function extractGoogleDriveFileId(value?: string | null) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const proxyMatch = raw.match(/\/api\/google-drive\/files\/([^/?#]+)/);
+  if (proxyMatch?.[1]) return decodeURIComponent(proxyMatch[1]);
+
+  try {
+    const url = new URL(raw, window.location.origin);
+    const idFromQuery = url.searchParams.get('id');
+    if (idFromQuery) return idFromQuery;
+    const fileMatch = url.pathname.match(/\/file\/d\/([^/]+)/);
+    if (fileMatch?.[1]) return fileMatch[1];
+  } catch {
+    // Plain file ids are handled below.
+  }
+
+  return /^[a-zA-Z0-9_-]{20,}$/.test(raw) ? raw : '';
+}
+
+function normalizeAvatarUrl(value?: string | null) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^data:image\//i.test(raw)) return raw;
+
+  const fileId = extractGoogleDriveFileId(raw);
+  if (fileId) return `${API_BASE}/api/google-drive/files/${encodeURIComponent(fileId)}`;
+
+  if (/^\/api\//i.test(raw)) return `${API_BASE}${raw}`;
+  return raw;
+}
+
 function getAvatarUrl(name?: string, avatarDataUrl?: string | null) {
-  if (avatarDataUrl) return avatarDataUrl;
+  const normalizedAvatarUrl = normalizeAvatarUrl(avatarDataUrl);
+  if (normalizedAvatarUrl) return normalizedAvatarUrl;
   return `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'User')}&background=3b82f6&color=fff&size=200&bold=true`;
 }
 
@@ -80,6 +113,12 @@ async function readJsonResponse(response: Response): Promise<ApiJsonResponse> {
   try {
     return JSON.parse(text) as ApiJsonResponse;
   } catch {
+    if (/^\s*<!doctype|^\s*<html|<body|service unavailable|temporarily unavailable|502 bad gateway|503 service unavailable/i.test(text)) {
+      return {
+        error: 'เซิร์ฟเวอร์ไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง',
+      };
+    }
+
     const plain = text
       .replace(/<!doctype[\s\S]*$/i, '')
       .replace(/<[^>]+>/g, ' ')
@@ -87,9 +126,17 @@ async function readJsonResponse(response: Response): Promise<ApiJsonResponse> {
       .trim();
 
     return {
-      error: plain || 'เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง',
+      error: (plain || 'เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง').slice(0, 180),
     };
   }
+}
+
+function getSafeToastMessage(error: unknown, fallback: string) {
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  if (/^\s*<!doctype|^\s*<html|<body|service unavailable|temporarily unavailable|502 bad gateway|503 service unavailable/i.test(raw)) {
+    return fallback;
+  }
+  return raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180) || fallback;
 }
 
 function encodeCanvasToWebp(canvas: HTMLCanvasElement, quality: number) {
@@ -271,7 +318,7 @@ export default function Profile() {
       resetPendingAvatarState(data.avatar_data_url || '');
     } catch (err) {
       console.error(err);
-      toast.error(err instanceof Error ? err.message : 'ไม่สามารถโหลดข้อมูลได้');
+      toast.error(getSafeToastMessage(err, 'ไม่สามารถโหลดข้อมูลได้'));
     } finally {
       setIsLoading(false);
     }
@@ -343,7 +390,7 @@ export default function Profile() {
 
       window.location.href = String(data.authUrl);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'ไม่สามารถเชื่อมบัญชี LINE ได้');
+      toast.error(getSafeToastMessage(error, 'ไม่สามารถเชื่อมบัญชี LINE ได้'));
     } finally {
       setIsLineConnecting(false);
     }
@@ -446,7 +493,7 @@ export default function Profile() {
     toast.info('ลบรูปประจำตัวแล้ว กดบันทึกเพื่อยืนยัน');
   };
 
-  const handleAvatarPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handleAvatarPointerDown = (event: React.PointerEvent<HTMLElement>) => {
     if (!avatarSourceDataUrl) return;
 
     event.preventDefault();
@@ -461,7 +508,7 @@ export default function Profile() {
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  const handleAvatarPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handleAvatarPointerMove = (event: React.PointerEvent<HTMLElement>) => {
     const drag = avatarDragRef.current;
     if (!drag.active || drag.pointerId !== event.pointerId) return;
 
@@ -472,7 +519,7 @@ export default function Profile() {
     }));
   };
 
-  const handleAvatarPointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handleAvatarPointerEnd = (event: React.PointerEvent<HTMLElement>) => {
     const drag = avatarDragRef.current;
     if (drag.pointerId === event.pointerId) {
       avatarDragRef.current.active = false;
@@ -499,7 +546,7 @@ export default function Profile() {
       }
     } catch (error) {
       console.warn('Delete previous avatar failed:', error);
-      toast.warning(error instanceof Error ? error.message : 'บันทึกสำเร็จ แต่ลบรูปเดิมจาก Google Drive ไม่สำเร็จ');
+      toast.warning(getSafeToastMessage(error, 'บันทึกสำเร็จ แต่ลบรูปเดิมจาก Google Drive ไม่สำเร็จ'));
     }
   };
 
@@ -582,7 +629,7 @@ export default function Profile() {
       setIsModalOpen(false);
     } catch (err) {
       console.error(err);
-      toast.error(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการบันทึก');
+      toast.error(getSafeToastMessage(err, 'เกิดข้อผิดพลาดในการบันทึก'));
     } finally {
       setIsSaving(false);
     }
@@ -630,6 +677,7 @@ export default function Profile() {
               <h2 className="text-1xl font-black text-slate-800">ข้อมูลส่วนตัว</h2>
             </div>
             <button
+              type="button"
               onClick={openEditModal}
               className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-xl shadow hover:bg-blue-700 transition-all"
             >
@@ -648,13 +696,13 @@ export default function Profile() {
                   onError={(event) => {
                     event.currentTarget.src = getAvatarUrl(profileData?.Name_Surname);
                   }}
-                  className="w-28 h-28 rounded-full border-4 border-white shadow-lg object-contain bg-white"
+                  className="size-28 rounded-full border-4 border-white bg-white object-contain shadow-lg"
                   alt="Avatar"
                 />
                 <button
                   type="button"
                   onClick={openEditModal}
-                  className="absolute -bottom-1 -right-1 flex h-9 w-9 items-center justify-center rounded-full border-4 border-white bg-blue-600 text-white shadow-lg transition hover:bg-blue-700"
+                  className="absolute -bottom-1 -right-1 flex size-9 items-center justify-center rounded-full border-4 border-white bg-blue-600 text-white shadow-lg transition hover:bg-blue-700"
                   aria-label="เปลี่ยนรูปประจำตัว"
                 >
                   <Camera size={15} />
@@ -693,7 +741,7 @@ export default function Profile() {
                 <div className="sm:col-span-2 rounded-xl border border-green-100 bg-green-50/70 p-4">
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-start gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#06C755] text-white shadow-sm">
+                      <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[#06C755] text-white shadow-sm">
                         <MessageCircle size={20} />
                       </div>
                       <div>
@@ -743,15 +791,14 @@ export default function Profile() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100">
               <h3 className="text-lg font-bold text-slate-800">แก้ไขข้อมูลส่วนตัว</h3>
-              <button onClick={closeEditModal} className="p-2 rounded-full hover:bg-slate-100 transition"><X size={20} /></button>
+              <button type="button" onClick={closeEditModal} className="p-2 rounded-full hover:bg-slate-100 transition"><X size={20} /></button>
             </div>
             <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="sm:col-span-2 rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-50 to-white p-4">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
                   <div className="flex flex-col items-center gap-2">
-                    <div
-                      role="button"
-                      tabIndex={0}
+                    <button
+                      type="button"
                       onPointerDown={handleAvatarPointerDown}
                       onPointerMove={handleAvatarPointerMove}
                       onPointerUp={handleAvatarPointerEnd}
@@ -786,7 +833,7 @@ export default function Profile() {
                           กำลังจัดรูป...
                         </div>
                       )}
-                    </div>
+                    </button>
                     {avatarSourceDataUrl && (
                       <span className="text-[11px] font-semibold text-slate-500">ลากรูปเพื่อจัดตำแหน่ง</span>
                     )}
@@ -861,11 +908,14 @@ export default function Profile() {
                 { key: 'Division_Province', label: 'ส่วนงาน / จังหวัด', options: DIVISION_PROVINCE_OPTIONS },
                 { key: 'Department', label: 'หน่วยงาน' },
                 { key: 'type', label: 'ประเภทพนักงาน', options: PERSONNEL_TYPE_OPTIONS },
-              ].map((field) => (
+              ].map((field) => {
+                const fieldId = `profile-${field.key}`;
+                return (
                 <div key={field.key} className="flex flex-col gap-1">
-                  <label className="text-xs font-bold text-slate-500">{field.label}</label>
+                  <label htmlFor={fieldId} className="text-xs font-bold text-slate-500">{field.label}</label>
                   {field.options ? (
                     <select
+                      id={fieldId}
                       value={editForm[field.key] || ''}
                       onChange={(e) => setEditForm({ ...editForm, [field.key]: e.target.value })}
                       className="border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400 transition"
@@ -877,6 +927,7 @@ export default function Profile() {
                     </select>
                   ) : (
                     <input
+                      id={fieldId}
                       type={field.inputType || 'text'}
                       value={editForm[field.key] || ''}
                       onChange={(e) => setEditForm({ ...editForm, [field.key]: e.target.value })}
@@ -884,20 +935,24 @@ export default function Profile() {
                     />
                   )}
                 </div>
-              ))}
+                );
+              })}
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-bold text-slate-500">ชื่อผู้ใช้งาน (Username)</label>
+                <label htmlFor="profile-username" className="text-xs font-bold text-slate-500">ชื่อผู้ใช้งาน (Username)</label>
                 <input
+                  id="profile-username"
                   type="text"
                   value={editForm.username || ''}
+                  readOnly
                   disabled
                   className="border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-400 bg-slate-50 cursor-not-allowed"
                 />
               </div>
             </div>
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-100">
-              <button onClick={closeEditModal} className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition">ยกเลิก</button>
+              <button type="button" onClick={closeEditModal} className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition">ยกเลิก</button>
               <button
+                type="button"
                 onClick={handleSave}
                 disabled={isSaving}
                 className="px-5 py-2.5 rounded-xl bg-blue-600 text-white font-semibold shadow transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
