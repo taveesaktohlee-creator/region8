@@ -393,63 +393,65 @@ function ReportDashboard({ items, reportData }: { items: MeetingReportItem[]; re
           <TabButton active={activeTable === 'comments'} onClick={() => { setActiveTable('comments'); resetRowFilters(); }} icon={<MessageSquare size={16} />} label="แจ้งแก้ไข" />
         </div>
       </div>
-      <div className="mb-5 grid gap-3 xl:grid-cols-[auto_minmax(240px,420px)_minmax(220px,360px)_minmax(260px,1fr)_auto] xl:items-center">
-        <div className="grid gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-3">
+      <div className="mb-5 grid gap-3">
+        <div className="grid w-full max-w-3xl gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-3">
           <TabButton active={sectionFilter === 'all'} onClick={() => { setSectionFilter('all'); resetRowFilters(); }} icon={<ClipboardList size={16} />} label="ทั้งหมด" />
           <TabButton active={sectionFilter === 'office'} onClick={() => { setSectionFilter('office'); resetRowFilters(); }} icon={<ClipboardList size={16} />} label="สำนักงาน" />
           <TabButton active={sectionFilter === 'area'} onClick={() => { setSectionFilter('area'); resetRowFilters(); }} icon={<ClipboardList size={16} />} label="สำนักงานในพื้นที่" />
         </div>
-        <label className="grid gap-1 text-xs font-black text-slate-500 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
-          <span>รายงานประชุมครั้งที่</span>
-          <select
-            value={reportFilter}
-            onChange={(event) => {
-              setReportFilter(event.target.value);
-              resetRowFilters();
+        <div className="grid gap-3 lg:grid-cols-[minmax(280px,1fr)_minmax(220px,320px)] xl:grid-cols-[minmax(320px,1.1fr)_minmax(240px,340px)_minmax(280px,1fr)_auto] xl:items-end">
+          <label className="grid min-w-0 gap-1 text-xs font-black text-slate-500">
+            <span>รายงานประชุมครั้งที่</span>
+            <select
+              value={reportFilter}
+              onChange={(event) => {
+                setReportFilter(event.target.value);
+                resetRowFilters();
+              }}
+              className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none focus:ring-2 focus:ring-blue-200"
+            >
+              <option value="all">ทั้งหมด</option>
+              {reportOptions.map((report) => (
+                <option key={report.reportId} value={report.reportId}>
+                  {report.title}{report.meetingDate ? ` (${formatMeetingReportDate(report.meetingDate)})` : ''} · {sectionLabels[report.section]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid min-w-0 gap-1 text-xs font-black text-slate-500">
+            <span>หน่วยงาน</span>
+            <select
+              value={unitFilter}
+              onChange={(event) => setUnitFilter(event.target.value)}
+              className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none focus:ring-2 focus:ring-blue-200"
+            >
+              <option value="all">ทั้งหมด</option>
+              {unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+            </select>
+          </label>
+          <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <Search size={18} className="shrink-0 text-slate-400" />
+            <input
+              aria-label="ค้นหาข้อมูลรายงานหลังบ้าน"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="ค้นหาผู้ใช้ เรื่อง หรือหมวดหมู่..."
+              className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none placeholder:text-slate-400"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setReportFilter('all');
+              setUnitFilter('all');
+              setQuery('');
             }}
-            className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none focus:ring-2 focus:ring-blue-200"
+            className="inline-flex h-[46px] cursor-pointer items-center justify-center rounded-2xl bg-slate-100 px-4 text-slate-600 hover:bg-slate-200"
+            title="ล้างตัวกรอง"
           >
-            <option value="all">ทั้งหมด</option>
-            {reportOptions.map((report) => (
-              <option key={report.reportId} value={report.reportId}>
-                {report.title}{report.meetingDate ? ` (${formatMeetingReportDate(report.meetingDate)})` : ''} · {sectionLabels[report.section]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="grid gap-1 text-xs font-black text-slate-500 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
-          <span>หน่วยงาน</span>
-          <select
-            value={unitFilter}
-            onChange={(event) => setUnitFilter(event.target.value)}
-            className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none focus:ring-2 focus:ring-blue-200"
-          >
-            <option value="all">ทั้งหมด</option>
-            {unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
-          </select>
-        </label>
-        <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
-          <Search size={18} className="shrink-0 text-slate-400" />
-          <input
-            aria-label="ค้นหาข้อมูลรายงานหลังบ้าน"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="ค้นหาผู้ใช้ เรื่อง หรือหมวดหมู่..."
-            className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none placeholder:text-slate-400"
-          />
+            <RefreshCcw size={18} />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setReportFilter('all');
-            setUnitFilter('all');
-            setQuery('');
-          }}
-          className="inline-flex cursor-pointer items-center justify-center rounded-2xl bg-slate-100 px-4 py-3 text-slate-600 hover:bg-slate-200"
-          title="ล้างตัวกรอง"
-        >
-          <RefreshCcw size={18} />
-        </button>
       </div>
       {activeTable === 'reads' && <ReadTable rows={filteredRows as MeetingReportReadRow[]} />}
       {activeTable === 'acks' && <AckTable rows={filteredRows as MeetingReportAckRow[]} />}
