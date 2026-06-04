@@ -133,6 +133,43 @@ function isGoogleInsufficientScope(data: any) {
   return code === 403 && (status === 'PERMISSION_DENIED' || message.includes('insufficient') || message.includes('scope'));
 }
 
+function getGooglePersonName(person: any) {
+  const primaryName = (person?.names || []).find((name: any) => name.metadata?.primary) || person?.names?.[0];
+  return String(primaryName?.displayName || primaryName?.unstructuredName || '').trim();
+}
+
+function getGoogleBirthdayOccurrences(person: any, startWindow: Date, endWindow: Date) {
+  const personId = String(person?.resourceName || '').replace(/^people\//, '') || 'unknown';
+  const name = getGooglePersonName(person);
+  const startYear = startWindow.getFullYear();
+  const endYear = endWindow.getFullYear();
+  const occurrences: Array<{ eventId: string; title: string; startAt: string; endAt: string }> = [];
+
+  for (const birthday of person?.birthdays || []) {
+    const date = birthday?.date;
+    const month = Number(date?.month || 0);
+    const day = Number(date?.day || 0);
+    if (!month || !day) continue;
+
+    for (let year = startYear; year <= endYear; year += 1) {
+      const occurrence = new Date(year, month - 1, day);
+      if (occurrence.getFullYear() !== year || occurrence.getMonth() !== month - 1 || occurrence.getDate() !== day) continue;
+      const occurrenceEnd = new Date(occurrence);
+      occurrenceEnd.setDate(occurrenceEnd.getDate() + 1);
+      if (occurrenceEnd <= startWindow || occurrence >= endWindow) continue;
+      const dateKey = formatBangkokDateTime(occurrence).slice(0, 10);
+      occurrences.push({
+        eventId: `${personId}:${month}-${day}:${year}`,
+        title: name ? `สุขสันต์วันเกิด ${name}` : 'วันเกิด',
+        startAt: `${dateKey} 00:00:00`,
+        endAt: `${addDaysToDateString(dateKey, 1)} 00:00:00`,
+      });
+    }
+  }
+
+  return occurrences;
+}
+
 function getAppBaseUrl(req: any) {
   const configured = process.env.APP_BASE_URL?.trim();
   if (configured) return configured.replace(/\/+$/, '');
@@ -577,6 +614,7 @@ async function googleConnectUrl(req: any, res: any) {
   url.searchParams.set('scope', [
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/tasks.readonly',
+    'https://www.googleapis.com/auth/contacts.readonly',
   ].join(' '));
   url.searchParams.set('access_type', 'offline');
   url.searchParams.set('prompt', 'consent');
@@ -683,7 +721,10 @@ async function googleSync(req: any, res: any) {
     const timeMaxDate = new Date(Date.now() + lookaheadDays * 24 * 60 * 60 * 1000);
     const googleEmail = connections[0].google_email || 'Google Calendar';
 
-    const calendarListResponse = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader', {
+    const calendarListUrl = new URL('https://www.googleapis.com/calendar/v3/users/me/calendarList');
+    calendarListUrl.searchParams.set('minAccessRole', 'reader');
+    calendarListUrl.searchParams.set('showHidden', 'true');
+    const calendarListResponse = await fetch(calendarListUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const calendarListData: any = await calendarListResponse.json();
@@ -695,7 +736,7 @@ async function googleSync(req: any, res: any) {
     }
 
     const calendars = (calendarListData.items || [])
-      .filter((calendar: any) => calendar.hidden !== true)
+      .filter((calendar: any) => calendar.deleted !== true)
       .map((calendar: any) => ({
         id: String(calendar.id || 'primary'),
         summary: String(calendar.summary || calendar.id || 'Google Calendar'),
@@ -846,14 +887,66 @@ async function googleSync(req: any, res: any) {
       }
     }
 
+    let contactsScopeMissing = false;
+    const peopleUrl = new URL('https://people.googleapis.com/v1/people/me/connections');
+    peopleUrl.searchParams.set('personFields', 'names,birthdays');
+    peopleUrl.searchParams.set('pageSize', '1000');
+    let peoplePageToken = '';
+    do {
+      if (peoplePageToken) peopleUrl.searchParams.set('pageToken', peoplePageToken);
+      else peopleUrl.searchParams.delete('pageToken');
+      const peopleResponse = await fetch(peopleUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const peopleData: any = await peopleResponse.json();
+      if (!peopleResponse.ok) {
+        contactsScopeMissing = isGoogleInsufficientScope(peopleData);
+        if (!contactsScopeMissing) {
+          console.warn('Google Contacts birthdays sync skipped', peopleData.error?.message || peopleData.error);
+        }
+        break;
+      }
+
+      for (const person of peopleData.connections || []) {
+        const birthdays = getGoogleBirthdayOccurrences(person, timeMinDate, timeMaxDate);
+        for (const birthday of birthdays) {
+          await pool.query(
+            `INSERT INTO activity_events
+             (title, description, location, start_at, end_at, all_day, color,
+              source, visibility, created_by_user_id, created_by_name,
+              google_calendar_id, google_event_id, google_html_link)
+             VALUES (?, '', '', ?, ?, 1, ?, 'google', 'private', ?, 'Google Contacts', 'google-birthdays', ?, '')
+             ON DUPLICATE KEY UPDATE
+               title = VALUES(title),
+               start_at = VALUES(start_at),
+               end_at = VALUES(end_at),
+               all_day = VALUES(all_day),
+               color = VALUES(color),
+               created_by_name = VALUES(created_by_name)`,
+            [
+              birthday.title,
+              birthday.startAt,
+              birthday.endAt,
+              '#60a5fa',
+              userId,
+              birthday.eventId,
+            ],
+          );
+          inserted += 1;
+        }
+      }
+      peoplePageToken = String(peopleData.nextPageToken || '');
+    } while (peoplePageToken);
+
     await pool.query('UPDATE activity_google_connections SET last_synced_at = NOW() WHERE user_id = ?', [userId]);
     return sendJson(res, 200, {
-      message: taskScopeMissing
-        ? 'ซิงก์ Google Calendar เรียบร้อยแล้ว หากต้องการดึง Google Tasks กรุณาเชื่อม Google Calendar ใหม่อีกครั้ง'
+      message: taskScopeMissing || contactsScopeMissing
+        ? 'ซิงก์ Google Calendar เรียบร้อยแล้ว หากต้องการดึงงานและวันเกิด กรุณาเชื่อม Google Calendar ใหม่อีกครั้ง'
         : 'ซิงก์ Google Calendar เรียบร้อยแล้ว',
       synced_count: inserted,
       calendar_count: calendars.length,
       task_scope_missing: taskScopeMissing,
+      contacts_scope_missing: contactsScopeMissing,
     });
   } catch (error) {
     if (isActivityGoogleReconnectRequired(error)) {
