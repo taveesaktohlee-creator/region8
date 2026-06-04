@@ -115,6 +115,24 @@ function buildGoogleEventRange(event: any) {
   return { allDay, startAt, endAt };
 }
 
+function buildGoogleTaskRange(task: any) {
+  if (!task?.due) return { startAt: '', endAt: '' };
+  const parsedDue = new Date(task.due);
+  if (Number.isNaN(parsedDue.getTime())) return { startAt: '', endAt: '' };
+  const dueDate = formatBangkokDateTime(parsedDue).slice(0, 10);
+  return {
+    startAt: `${dueDate} 00:00:00`,
+    endAt: `${addDaysToDateString(dueDate, 1)} 00:00:00`,
+  };
+}
+
+function isGoogleInsufficientScope(data: any) {
+  const code = Number(data?.error?.code || 0);
+  const status = String(data?.error?.status || '').toUpperCase();
+  const message = String(data?.error?.message || data?.error_description || data?.error || '').toLowerCase();
+  return code === 403 && (status === 'PERMISSION_DENIED' || message.includes('insufficient') || message.includes('scope'));
+}
+
 function getAppBaseUrl(req: any) {
   const configured = process.env.APP_BASE_URL?.trim();
   if (configured) return configured.replace(/\/+$/, '');
@@ -556,7 +574,10 @@ async function googleConnectUrl(req: any, res: any) {
   url.searchParams.set('client_id', config.clientId);
   url.searchParams.set('redirect_uri', config.redirectUri);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', 'https://www.googleapis.com/auth/calendar.readonly');
+  url.searchParams.set('scope', [
+    'https://www.googleapis.com/auth/calendar.readonly',
+    'https://www.googleapis.com/auth/tasks.readonly',
+  ].join(' '));
   url.searchParams.set('access_type', 'offline');
   url.searchParams.set('prompt', 'consent');
   url.searchParams.set('state', state);
@@ -674,7 +695,7 @@ async function googleSync(req: any, res: any) {
     }
 
     const calendars = (calendarListData.items || [])
-      .filter((calendar: any) => calendar.selected !== false && calendar.hidden !== true)
+      .filter((calendar: any) => calendar.hidden !== true)
       .map((calendar: any) => ({
         id: String(calendar.id || 'primary'),
         summary: String(calendar.summary || calendar.id || 'Google Calendar'),
@@ -696,63 +717,144 @@ async function googleSync(req: any, res: any) {
 
     let inserted = 0;
     for (const calendar of calendars) {
-      const eventsUrl = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.id)}/events`);
-      eventsUrl.searchParams.set('timeMin', timeMinDate.toISOString());
-      eventsUrl.searchParams.set('timeMax', timeMaxDate.toISOString());
-      eventsUrl.searchParams.set('singleEvents', 'true');
-      eventsUrl.searchParams.set('orderBy', 'startTime');
-      eventsUrl.searchParams.set('maxResults', '2500');
-      const calendarResponse = await fetch(eventsUrl, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const calendarData: any = await calendarResponse.json();
-      if (!calendarResponse.ok) {
-        console.warn('Google Calendar sync skipped calendar', calendar.id, calendarData.error?.message || calendarData.error);
-        continue;
+      let pageToken = '';
+      do {
+        const eventsUrl = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.id)}/events`);
+        eventsUrl.searchParams.set('timeMin', timeMinDate.toISOString());
+        eventsUrl.searchParams.set('timeMax', timeMaxDate.toISOString());
+        eventsUrl.searchParams.set('singleEvents', 'true');
+        eventsUrl.searchParams.set('orderBy', 'startTime');
+        eventsUrl.searchParams.set('maxResults', '2500');
+        if (pageToken) eventsUrl.searchParams.set('pageToken', pageToken);
+        const calendarResponse = await fetch(eventsUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const calendarData: any = await calendarResponse.json();
+        if (!calendarResponse.ok) {
+          console.warn('Google Calendar sync skipped calendar', calendar.id, calendarData.error?.message || calendarData.error);
+          break;
+        }
+
+        for (const event of calendarData.items || []) {
+          if (event.status === 'cancelled') continue;
+          const { allDay, startAt, endAt } = buildGoogleEventRange(event);
+          if (!event.id || !startAt || !endAt) continue;
+
+          await pool.query(
+            `INSERT INTO activity_events
+             (title, description, location, start_at, end_at, all_day, color,
+              source, visibility, created_by_user_id, created_by_name,
+              google_calendar_id, google_event_id, google_html_link)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'google', 'private', ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               title = VALUES(title),
+               description = VALUES(description),
+               location = VALUES(location),
+               start_at = VALUES(start_at),
+               end_at = VALUES(end_at),
+               all_day = VALUES(all_day),
+               color = VALUES(color),
+               created_by_name = VALUES(created_by_name),
+               google_html_link = VALUES(google_html_link)`,
+            [
+              String(event.summary || '(ไม่มีชื่อกิจกรรม)').trim(),
+              String(event.description || '').trim(),
+              String(event.location || '').trim(),
+              startAt,
+              endAt,
+              allDay ? 1 : 0,
+              calendar.color,
+              userId,
+              calendar.summary || googleEmail,
+              calendar.id,
+              String(event.id),
+              String(event.htmlLink || ''),
+            ],
+          );
+          inserted += 1;
+        }
+        pageToken = String(calendarData.nextPageToken || '');
+      } while (pageToken);
+    }
+
+    let taskScopeMissing = false;
+    const taskListsResponse = await fetch('https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=100', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const taskListsData: any = await taskListsResponse.json();
+    if (!taskListsResponse.ok) {
+      taskScopeMissing = isGoogleInsufficientScope(taskListsData);
+      if (!taskScopeMissing) {
+        console.warn('Google Tasks sync skipped', taskListsData.error?.message || taskListsData.error);
       }
+    } else {
+      for (const taskList of taskListsData.items || []) {
+        let pageToken = '';
+        do {
+          const tasksUrl = new URL(`https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(String(taskList.id))}/tasks`);
+          tasksUrl.searchParams.set('showCompleted', 'false');
+          tasksUrl.searchParams.set('showHidden', 'false');
+          tasksUrl.searchParams.set('dueMin', timeMinDate.toISOString());
+          tasksUrl.searchParams.set('dueMax', timeMaxDate.toISOString());
+          tasksUrl.searchParams.set('maxResults', '100');
+          if (pageToken) tasksUrl.searchParams.set('pageToken', pageToken);
+          const tasksResponse = await fetch(tasksUrl, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          const tasksData: any = await tasksResponse.json();
+          if (!tasksResponse.ok) {
+            console.warn('Google Tasks sync skipped task list', taskList.id, tasksData.error?.message || tasksData.error);
+            break;
+          }
 
-      for (const event of calendarData.items || []) {
-        if (event.status === 'cancelled') continue;
-        const { allDay, startAt, endAt } = buildGoogleEventRange(event);
-        if (!event.id || !startAt || !endAt) continue;
-
-        await pool.query(
-          `INSERT INTO activity_events
-           (title, description, location, start_at, end_at, all_day, color,
-            source, visibility, created_by_user_id, created_by_name,
-            google_calendar_id, google_event_id, google_html_link)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'google', 'private', ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE
-             title = VALUES(title),
-             description = VALUES(description),
-             location = VALUES(location),
-             start_at = VALUES(start_at),
-             end_at = VALUES(end_at),
-             all_day = VALUES(all_day),
-             color = VALUES(color),
-             created_by_name = VALUES(created_by_name),
-             google_html_link = VALUES(google_html_link)`,
-          [
-            String(event.summary || '(ไม่มีชื่อกิจกรรม)').trim(),
-            String(event.description || '').trim(),
-            String(event.location || '').trim(),
-            startAt,
-            endAt,
-            allDay ? 1 : 0,
-            calendar.color,
-            userId,
-            calendar.summary || googleEmail,
-            calendar.id,
-            String(event.id),
-            String(event.htmlLink || ''),
-          ],
-        );
-        inserted += 1;
+          for (const task of tasksData.items || []) {
+            if (task.status === 'completed' || task.deleted || task.hidden) continue;
+            const { startAt, endAt } = buildGoogleTaskRange(task);
+            if (!task.id || !startAt || !endAt) continue;
+            await pool.query(
+              `INSERT INTO activity_events
+               (title, description, location, start_at, end_at, all_day, color,
+                source, visibility, created_by_user_id, created_by_name,
+                google_calendar_id, google_event_id, google_html_link)
+               VALUES (?, ?, '', ?, ?, 1, ?, 'google', 'private', ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 title = VALUES(title),
+                 description = VALUES(description),
+                 start_at = VALUES(start_at),
+                 end_at = VALUES(end_at),
+                 all_day = VALUES(all_day),
+                 color = VALUES(color),
+                 created_by_name = VALUES(created_by_name),
+                 google_html_link = VALUES(google_html_link)`,
+              [
+                String(task.title || '(ไม่มีชื่องาน)').trim(),
+                String(task.notes || '').trim(),
+                startAt,
+                endAt,
+                '#f59e0b',
+                userId,
+                `Google Tasks${taskList.title ? ` · ${taskList.title}` : ''}`,
+                `google-tasks:${taskList.id}`,
+                String(task.id),
+                String(task.webViewLink || ''),
+              ],
+            );
+            inserted += 1;
+          }
+          pageToken = String(tasksData.nextPageToken || '');
+        } while (pageToken);
       }
     }
 
     await pool.query('UPDATE activity_google_connections SET last_synced_at = NOW() WHERE user_id = ?', [userId]);
-    return sendJson(res, 200, { message: 'ซิงก์ Google Calendar เรียบร้อยแล้ว', synced_count: inserted, calendar_count: calendars.length });
+    return sendJson(res, 200, {
+      message: taskScopeMissing
+        ? 'ซิงก์ Google Calendar เรียบร้อยแล้ว หากต้องการดึง Google Tasks กรุณาเชื่อม Google Calendar ใหม่อีกครั้ง'
+        : 'ซิงก์ Google Calendar เรียบร้อยแล้ว',
+      synced_count: inserted,
+      calendar_count: calendars.length,
+      task_scope_missing: taskScopeMissing,
+    });
   } catch (error) {
     if (isActivityGoogleReconnectRequired(error)) {
       if (userId) await clearActivityGoogleConnection(userId);
