@@ -56,7 +56,7 @@ function normalizeAvatarUrl(value?: string | null) {
   if (/^data:image\//i.test(raw)) return raw;
 
   const fileId = extractGoogleDriveFileId(raw);
-  if (fileId) return `${API_BASE}/api/google-drive/files/${encodeURIComponent(fileId)}`;
+  if (fileId) return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w512`;
 
   if (/^\/api\//i.test(raw)) return `${API_BASE}${raw}`;
   return raw;

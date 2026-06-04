@@ -326,7 +326,7 @@ export default function KnowledgeAdmin() {
           </div>
 
           {activeTab === 'report' ? (
-            <ReportSection report={report} onRefresh={loadReport} />
+            <ReportSection items={items} report={report} onRefresh={loadReport} />
           ) : (
             <div className="grid min-w-0 items-start gap-6 2xl:grid-cols-[minmax(0,460px)_minmax(0,1fr)]">
               <section className="min-w-0 overflow-hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -468,10 +468,24 @@ function UploadPanel({ title, note, icon, previewUrl = '', fileText = '', button
   );
 }
 
-function ReportSection({ report, onRefresh }: { report: KnowledgeReportRow[]; onRefresh: () => void }) {
+function ReportSection({ items, report, onRefresh }: { items: KnowledgeItem[]; report: KnowledgeReportRow[]; onRefresh: () => void }) {
   const [selectedDivision, setSelectedDivision] = useState('ทั้งหมด');
+  const [selectedItemId, setSelectedItemId] = useState('ทั้งหมด');
   const [reportSearch, setReportSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const itemOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    items.forEach((item) => {
+      if (item.item_id) options.set(String(item.item_id), item.title || `เรื่อง #${item.item_id}`);
+    });
+    report.forEach((row) => {
+      const itemId = String(row.item_id || '').trim();
+      if (itemId && !options.has(itemId)) options.set(itemId, row.title || `เรื่อง #${itemId}`);
+    });
+    return Array.from(options.entries())
+      .map(([itemId, title]) => ({ itemId, title }))
+      .sort((a, b) => a.title.localeCompare(b.title, 'th'));
+  }, [items, report]);
   const divisionOptions = useMemo(() => {
     const divisions = Array.from(
       new Set(report.map((row) => String(row.Division_Province || '').trim()).filter(Boolean)),
@@ -481,6 +495,8 @@ function ReportSection({ report, onRefresh }: { report: KnowledgeReportRow[]; on
   const filteredReport = useMemo(() => {
     const needle = reportSearch.trim().toLowerCase();
     return report.filter((row) => {
+      const matchesItem = selectedItemId === 'ทั้งหมด' || String(row.item_id || '').trim() === selectedItemId;
+      if (!matchesItem) return false;
       const matchesDivision = selectedDivision === 'ทั้งหมด' || String(row.Division_Province || '').trim() === selectedDivision;
       if (!matchesDivision) return false;
       if (!needle) return true;
@@ -493,7 +509,7 @@ function ReportSection({ report, onRefresh }: { report: KnowledgeReportRow[]; on
         row.category,
       ].some((value) => String(value || '').toLowerCase().includes(needle));
     });
-  }, [report, reportSearch, selectedDivision]);
+  }, [report, reportSearch, selectedDivision, selectedItemId]);
   const totalPages = Math.max(1, Math.ceil(filteredReport.length / REPORT_PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
   const pageStart = (safePage - 1) * REPORT_PAGE_SIZE;
@@ -501,7 +517,7 @@ function ReportSection({ report, onRefresh }: { report: KnowledgeReportRow[]; on
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedDivision, reportSearch, report]);
+  }, [selectedDivision, selectedItemId, reportSearch, report]);
 
   return (
     <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -511,6 +527,18 @@ function ReportSection({ report, onRefresh }: { report: KnowledgeReportRow[]; on
           <p className="text-sm font-semibold text-slate-500">รายชื่อผู้เปิดอ่าน จำนวนครั้ง และเวลาที่อ่านจริง</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <label className="text-xs font-black text-slate-500" htmlFor="knowledge-report-item">เรื่อง</label>
+          <select
+            id="knowledge-report-item"
+            value={selectedItemId}
+            onChange={(event) => setSelectedItemId(event.target.value)}
+            className="min-w-[300px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+          >
+            <option value="ทั้งหมด">ทุกเรื่อง</option>
+            {itemOptions.map((item) => (
+              <option key={item.itemId} value={item.itemId}>{item.title}</option>
+            ))}
+          </select>
           <label className="text-xs font-black text-slate-500" htmlFor="knowledge-report-division">หน่วยงาน</label>
           <select
             id="knowledge-report-division"

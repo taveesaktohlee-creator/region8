@@ -232,7 +232,7 @@ export default function MeetingReportAdmin() {
           </div>
 
           {activeTab === 'report' ? (
-            <ReportDashboard reportData={reportData} />
+            <ReportDashboard items={items} reportData={reportData} />
           ) : (
             <div className="grid min-w-0 items-start gap-6 2xl:grid-cols-[minmax(0,460px)_minmax(0,1fr)]">
               <section className="min-w-0 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -241,7 +241,7 @@ export default function MeetingReportAdmin() {
                     <h2 className="text-xl font-black text-slate-900">รายละเอียดรายงาน</h2>
                     <p className="text-sm font-semibold text-slate-500">เลือกประเภทและอัปโหลด PDF ไป Google Drive</p>
                   </div>
-                  <button onClick={resetForm} className="rounded-2xl bg-blue-600 p-3 text-white"><Plus size={18} /></button>
+                  <button type="button" onClick={resetForm} className="rounded-2xl bg-blue-600 p-3 text-white"><Plus size={18} /></button>
                 </div>
                 <div className="grid gap-3">
                   <SectionSwitch value={form.section} onChange={(value) => updateForm('section', value)} />
@@ -263,6 +263,7 @@ export default function MeetingReportAdmin() {
                     onChange={handlePdfUpload}
                   />
                   <button
+                    type="button"
                     onClick={() => void saveItem()}
                     disabled={isSavingItem || isUploadingPdf}
                     className="mt-2 inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
@@ -281,7 +282,7 @@ export default function MeetingReportAdmin() {
                   </div>
                   <div className="flex min-w-0 items-center gap-2 rounded-2xl border border-slate-200 px-3 py-2 lg:min-w-80">
                     <Search size={16} className="text-slate-400" />
-                    <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ค้นหารายงาน..." className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none" />
+                    <input aria-label="ค้นหารายงานการประชุม" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ค้นหารายงาน..." className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none" />
                   </div>
                 </div>
                 <div className="grid gap-3">
@@ -289,7 +290,7 @@ export default function MeetingReportAdmin() {
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm font-bold text-slate-400">ยังไม่มีรายงานในส่วนนี้</div>
                   ) : filteredItems.map((item) => (
                     <div key={item.report_id} className={`grid gap-3 rounded-2xl border p-4 transition md:grid-cols-[minmax(0,1fr)_auto] ${selectedReportId === item.report_id ? 'border-blue-200 bg-blue-50' : 'border-slate-100 bg-slate-50'}`}>
-                      <button onClick={() => selectItem(item)} className="min-w-0 text-left">
+                      <button type="button" onClick={() => selectItem(item)} className="min-w-0 text-left">
                         <p className="break-words font-black text-slate-900">{item.title}</p>
                         <p className="mt-1 text-xs font-bold text-slate-500">
                           {sectionLabels[item.section]} · {statusLabels[(item.status || 'published') as MeetingReportStatus]} · {formatMeetingReportDate(item.meeting_date || item.published_at || item.updated_at)}
@@ -300,7 +301,7 @@ export default function MeetingReportAdmin() {
                       </button>
                       <div className="flex items-start gap-2">
                         {item.report_id && <a href={`/meeting-reports/${item.report_id}`} className="rounded-xl bg-white p-3 text-blue-600 ring-1 ring-slate-200"><FileText size={16} /></a>}
-                        <button onClick={() => void deleteItem(item.report_id)} className="rounded-xl bg-red-50 p-3 text-red-600"><Trash2 size={16} /></button>
+                        <button type="button" onClick={() => void deleteItem(item.report_id)} className="rounded-xl bg-red-50 p-3 text-red-600"><Trash2 size={16} /></button>
                       </div>
                     </div>
                   ))}
@@ -316,37 +317,68 @@ export default function MeetingReportAdmin() {
   );
 }
 
-function ReportDashboard({ reportData }: { reportData: MeetingReportAdminData }) {
+function ReportDashboard({ items, reportData }: { items: MeetingReportItem[]; reportData: MeetingReportAdminData }) {
   const [activeTable, setActiveTable] = useState<ReportTable>('reads');
   const [sectionFilter, setSectionFilter] = useState<ReportSectionFilter>('all');
+  const [reportFilter, setReportFilter] = useState('all');
   const [unitFilter, setUnitFilter] = useState('all');
   const [query, setQuery] = useState('');
   const rows = activeTable === 'reads' ? reportData.reads : activeTable === 'acks' ? reportData.acknowledgements : reportData.comments;
-  const sectionRows = useMemo(() => (
-    rows.filter((row) => sectionFilter === 'all' || row.section === sectionFilter)
-  ), [rows, sectionFilter]);
+  const reportOptions = useMemo(() => {
+    const options = new Map<string, { reportId: string; title: string; section: MeetingReportSection; meetingDate?: string | null }>();
+    const addOption = (reportId: number | string | undefined, title?: string, section?: MeetingReportSection, meetingDate?: string | null) => {
+      const normalizedId = String(reportId || '').trim();
+      if (!normalizedId || options.has(normalizedId)) return;
+      options.set(normalizedId, {
+        reportId: normalizedId,
+        title: title || `รายงาน #${normalizedId}`,
+        section: section || 'office',
+        meetingDate,
+      });
+    };
+
+    items.forEach((item) => {
+      addOption(item.report_id, item.title, item.section, item.meeting_date || item.published_at || item.updated_at);
+    });
+    [...reportData.reads, ...reportData.acknowledgements, ...reportData.comments].forEach((row) => {
+      addOption(row.report_id, row.title, row.section, row.meeting_date);
+    });
+
+    return Array.from(options.values()).sort((a, b) => {
+      const aTime = a.meetingDate ? Date.parse(a.meetingDate) || 0 : 0;
+      const bTime = b.meetingDate ? Date.parse(b.meetingDate) || 0 : 0;
+      return bTime - aTime || a.title.localeCompare(b.title, 'th');
+    });
+  }, [items, reportData]);
+  const scopedRows = useMemo(() => (
+    rows.filter((row) => {
+      if (sectionFilter !== 'all' && row.section !== sectionFilter) return false;
+      if (reportFilter !== 'all' && String(row.report_id) !== reportFilter) return false;
+      return true;
+    })
+  ), [reportFilter, rows, sectionFilter]);
   const unitOptions = useMemo(() => {
     const units = new Set<string>();
-    sectionRows.forEach((row) => {
+    scopedRows.forEach((row) => {
       const unit = getReportRowUnit(row);
       if (unit) units.add(unit);
     });
     return Array.from(units).sort((a, b) => a.localeCompare(b, 'th'));
-  }, [sectionRows]);
+  }, [scopedRows]);
   const filteredRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return sectionRows.filter((row) => {
+    return scopedRows.filter((row) => {
       const unit = getReportRowUnit(row);
       if (unitFilter !== 'all' && unit !== unitFilter) return false;
       if (!needle) return true;
       return getReportRowSearchText(row).toLowerCase().includes(needle);
     });
-  }, [query, sectionRows, unitFilter]);
+  }, [query, scopedRows, unitFilter]);
 
-  useEffect(() => {
+  const resetRowFilters = () => {
     setUnitFilter('all');
     setQuery('');
-  }, [activeTable, sectionFilter]);
+  };
 
   return (
     <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -356,17 +388,35 @@ function ReportDashboard({ reportData }: { reportData: MeetingReportAdminData })
           <p className="text-sm font-semibold text-slate-500">ตรวจสอบการเปิดอ่าน เวลาอ่านจริง การรับทราบ และข้อความแจ้งแก้ไข</p>
         </div>
         <div className="grid gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-3">
-          <TabButton active={activeTable === 'reads'} onClick={() => setActiveTable('reads')} icon={<FileText size={16} />} label="การอ่าน" />
-          <TabButton active={activeTable === 'acks'} onClick={() => setActiveTable('acks')} icon={<CheckCircle2 size={16} />} label="รับทราบ" />
-          <TabButton active={activeTable === 'comments'} onClick={() => setActiveTable('comments')} icon={<MessageSquare size={16} />} label="แจ้งแก้ไข" />
+          <TabButton active={activeTable === 'reads'} onClick={() => { setActiveTable('reads'); resetRowFilters(); }} icon={<FileText size={16} />} label="การอ่าน" />
+          <TabButton active={activeTable === 'acks'} onClick={() => { setActiveTable('acks'); resetRowFilters(); }} icon={<CheckCircle2 size={16} />} label="รับทราบ" />
+          <TabButton active={activeTable === 'comments'} onClick={() => { setActiveTable('comments'); resetRowFilters(); }} icon={<MessageSquare size={16} />} label="แจ้งแก้ไข" />
         </div>
       </div>
-      <div className="mb-5 grid gap-3 xl:grid-cols-[auto_minmax(220px,360px)_minmax(260px,1fr)_auto] xl:items-center">
+      <div className="mb-5 grid gap-3 xl:grid-cols-[auto_minmax(240px,420px)_minmax(220px,360px)_minmax(260px,1fr)_auto] xl:items-center">
         <div className="grid gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-3">
-          <TabButton active={sectionFilter === 'all'} onClick={() => setSectionFilter('all')} icon={<ClipboardList size={16} />} label="ทั้งหมด" />
-          <TabButton active={sectionFilter === 'office'} onClick={() => setSectionFilter('office')} icon={<ClipboardList size={16} />} label="สำนักงาน" />
-          <TabButton active={sectionFilter === 'area'} onClick={() => setSectionFilter('area')} icon={<ClipboardList size={16} />} label="สำนักงานในพื้นที่" />
+          <TabButton active={sectionFilter === 'all'} onClick={() => { setSectionFilter('all'); resetRowFilters(); }} icon={<ClipboardList size={16} />} label="ทั้งหมด" />
+          <TabButton active={sectionFilter === 'office'} onClick={() => { setSectionFilter('office'); resetRowFilters(); }} icon={<ClipboardList size={16} />} label="สำนักงาน" />
+          <TabButton active={sectionFilter === 'area'} onClick={() => { setSectionFilter('area'); resetRowFilters(); }} icon={<ClipboardList size={16} />} label="สำนักงานในพื้นที่" />
         </div>
+        <label className="grid gap-1 text-xs font-black text-slate-500 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+          <span>รายงานประชุมครั้งที่</span>
+          <select
+            value={reportFilter}
+            onChange={(event) => {
+              setReportFilter(event.target.value);
+              resetRowFilters();
+            }}
+            className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none focus:ring-2 focus:ring-blue-200"
+          >
+            <option value="all">ทั้งหมด</option>
+            {reportOptions.map((report) => (
+              <option key={report.reportId} value={report.reportId}>
+                {report.title}{report.meetingDate ? ` (${formatMeetingReportDate(report.meetingDate)})` : ''} · {sectionLabels[report.section]}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="grid gap-1 text-xs font-black text-slate-500 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
           <span>หน่วยงาน</span>
           <select
@@ -381,6 +431,7 @@ function ReportDashboard({ reportData }: { reportData: MeetingReportAdminData })
         <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
           <Search size={18} className="shrink-0 text-slate-400" />
           <input
+            aria-label="ค้นหาข้อมูลรายงานหลังบ้าน"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="ค้นหาผู้ใช้ เรื่อง หรือหมวดหมู่..."
@@ -390,6 +441,7 @@ function ReportDashboard({ reportData }: { reportData: MeetingReportAdminData })
         <button
           type="button"
           onClick={() => {
+            setReportFilter('all');
             setUnitFilter('all');
             setQuery('');
           }}
@@ -501,9 +553,9 @@ function usePagedRows<T>(rows: T[]) {
       <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 text-sm font-bold text-slate-500 sm:flex-row sm:items-center sm:justify-between">
         <span>แสดง {(start + 1).toLocaleString('th-TH')}-{(start + pageRows.length).toLocaleString('th-TH')} จาก {rows.length.toLocaleString('th-TH')} รายการ</span>
         <div className="flex items-center gap-2">
-          <button onClick={() => setPage(Math.max(1, safePage - 1))} disabled={safePage <= 1} className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:opacity-40">ก่อนหน้า</button>
+          <button type="button" onClick={() => setPage(Math.max(1, safePage - 1))} disabled={safePage <= 1} className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:opacity-40">ก่อนหน้า</button>
           <span className="rounded-xl bg-slate-100 px-4 py-2 font-black text-slate-700">{safePage.toLocaleString('th-TH')} / {totalPages.toLocaleString('th-TH')}</span>
-          <button onClick={() => setPage(Math.min(totalPages, safePage + 1))} disabled={safePage >= totalPages} className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:opacity-40">ถัดไป</button>
+          <button type="button" onClick={() => setPage(Math.min(totalPages, safePage + 1))} disabled={safePage >= totalPages} className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:opacity-40">ถัดไป</button>
         </div>
       </div>
     ),
@@ -592,6 +644,7 @@ function UploadPanel({ fileText, buttonText, disabled, onChange }: {
 function Input({ value, onChange, placeholder, type = 'text' }: { value: string; onChange: (value: string) => void; placeholder: string; type?: string }) {
   return (
     <input
+      aria-label={placeholder}
       type={type}
       value={value}
       onChange={(event) => onChange(event.target.value)}
@@ -604,6 +657,7 @@ function Input({ value, onChange, placeholder, type = 'text' }: { value: string;
 function Textarea({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
   return (
     <textarea
+      aria-label={placeholder}
       value={value}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
