@@ -440,7 +440,11 @@ export default function ActivityCalendar() {
         }
         throw new Error(data.error || 'ซิงก์ Google Calendar ไม่สำเร็จ');
       }
-      toast.success(data.message);
+      if (data.task_service_disabled || data.contacts_service_disabled || data.task_scope_missing || data.contacts_scope_missing) {
+        toast.warning(data.message || 'ซิงก์ Google Calendar แล้ว แต่ยังดึงงานหรือวันเกิดไม่ได้', { autoClose: 7000 });
+      } else {
+        toast.success(data.message);
+      }
       await loadEvents();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'ซิงก์ Google Calendar ไม่สำเร็จ');

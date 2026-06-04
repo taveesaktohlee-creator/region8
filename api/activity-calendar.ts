@@ -133,6 +133,15 @@ function isGoogleInsufficientScope(data: any) {
   return code === 403 && (status === 'PERMISSION_DENIED' || message.includes('insufficient') || message.includes('scope'));
 }
 
+function isGoogleServiceDisabled(data: any, service: string) {
+  const details = Array.isArray(data?.error?.details) ? data.error.details : [];
+  const message = String(data?.error?.message || data?.error_description || data?.error || '').toLowerCase();
+  return details.some((detail: any) => (
+    detail?.reason === 'SERVICE_DISABLED' &&
+    String(detail?.metadata?.service || '').toLowerCase() === service.toLowerCase()
+  )) || (message.includes('disabled') && message.includes(service.toLowerCase()));
+}
+
 function getGooglePersonName(person: any) {
   const primaryName = (person?.names || []).find((name: any) => name.metadata?.primary) || person?.names?.[0];
   return String(primaryName?.displayName || primaryName?.unstructuredName || '').trim();
@@ -168,6 +177,14 @@ function getGoogleBirthdayOccurrences(person: any, startWindow: Date, endWindow:
   }
 
   return occurrences;
+}
+
+function isGoogleTaskInWindow(task: any, startWindow: Date, endWindow: Date) {
+  const { startAt, endAt } = buildGoogleTaskRange(task);
+  if (!startAt || !endAt) return false;
+  const start = new Date(startAt.replace(' ', 'T'));
+  const end = new Date(endAt.replace(' ', 'T'));
+  return !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end > startWindow && start < endWindow;
 }
 
 function getAppBaseUrl(req: any) {
@@ -819,13 +836,15 @@ async function googleSync(req: any, res: any) {
     }
 
     let taskScopeMissing = false;
+    let taskServiceDisabled = false;
     const taskListsResponse = await fetch('https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=100', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const taskListsData: any = await taskListsResponse.json();
     if (!taskListsResponse.ok) {
-      taskScopeMissing = isGoogleInsufficientScope(taskListsData);
-      if (!taskScopeMissing) {
+      taskServiceDisabled = isGoogleServiceDisabled(taskListsData, 'tasks.googleapis.com');
+      taskScopeMissing = !taskServiceDisabled && isGoogleInsufficientScope(taskListsData);
+      if (!taskScopeMissing && !taskServiceDisabled) {
         console.warn('Google Tasks sync skipped', taskListsData.error?.message || taskListsData.error);
       }
     } else {
@@ -834,9 +853,7 @@ async function googleSync(req: any, res: any) {
         do {
           const tasksUrl = new URL(`https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(String(taskList.id))}/tasks`);
           tasksUrl.searchParams.set('showCompleted', 'false');
-          tasksUrl.searchParams.set('showHidden', 'false');
-          tasksUrl.searchParams.set('dueMin', timeMinDate.toISOString());
-          tasksUrl.searchParams.set('dueMax', timeMaxDate.toISOString());
+          tasksUrl.searchParams.set('showHidden', 'true');
           tasksUrl.searchParams.set('maxResults', '100');
           if (pageToken) tasksUrl.searchParams.set('pageToken', pageToken);
           const tasksResponse = await fetch(tasksUrl, {
@@ -850,6 +867,7 @@ async function googleSync(req: any, res: any) {
 
           for (const task of tasksData.items || []) {
             if (task.status === 'completed' || task.deleted || task.hidden) continue;
+            if (!isGoogleTaskInWindow(task, timeMinDate, timeMaxDate)) continue;
             const { startAt, endAt } = buildGoogleTaskRange(task);
             if (!task.id || !startAt || !endAt) continue;
             await pool.query(
@@ -888,6 +906,7 @@ async function googleSync(req: any, res: any) {
     }
 
     let contactsScopeMissing = false;
+    let contactsServiceDisabled = false;
     const peopleUrl = new URL('https://people.googleapis.com/v1/people/me/connections');
     peopleUrl.searchParams.set('personFields', 'names,birthdays');
     peopleUrl.searchParams.set('pageSize', '1000');
@@ -900,8 +919,9 @@ async function googleSync(req: any, res: any) {
       });
       const peopleData: any = await peopleResponse.json();
       if (!peopleResponse.ok) {
-        contactsScopeMissing = isGoogleInsufficientScope(peopleData);
-        if (!contactsScopeMissing) {
+        contactsServiceDisabled = isGoogleServiceDisabled(peopleData, 'people.googleapis.com');
+        contactsScopeMissing = !contactsServiceDisabled && isGoogleInsufficientScope(peopleData);
+        if (!contactsScopeMissing && !contactsServiceDisabled) {
           console.warn('Google Contacts birthdays sync skipped', peopleData.error?.message || peopleData.error);
         }
         break;
@@ -939,14 +959,22 @@ async function googleSync(req: any, res: any) {
     } while (peoplePageToken);
 
     await pool.query('UPDATE activity_google_connections SET last_synced_at = NOW() WHERE user_id = ?', [userId]);
+    const disabledServices = [
+      taskServiceDisabled ? 'Google Tasks API' : '',
+      contactsServiceDisabled ? 'People API' : '',
+    ].filter(Boolean);
     return sendJson(res, 200, {
-      message: taskScopeMissing || contactsScopeMissing
+      message: disabledServices.length > 0
+        ? `ซิงก์ Google Calendar แล้ว แต่ยังไม่ได้เปิด ${disabledServices.join(' และ ')} ใน Google Cloud จึงยังดึงงาน/วันเกิดไม่ได้`
+        : taskScopeMissing || contactsScopeMissing
         ? 'ซิงก์ Google Calendar เรียบร้อยแล้ว หากต้องการดึงงานและวันเกิด กรุณาเชื่อม Google Calendar ใหม่อีกครั้ง'
         : 'ซิงก์ Google Calendar เรียบร้อยแล้ว',
       synced_count: inserted,
       calendar_count: calendars.length,
       task_scope_missing: taskScopeMissing,
       contacts_scope_missing: contactsScopeMissing,
+      task_service_disabled: taskServiceDisabled,
+      contacts_service_disabled: contactsServiceDisabled,
     });
   } catch (error) {
     if (isActivityGoogleReconnectRequired(error)) {
