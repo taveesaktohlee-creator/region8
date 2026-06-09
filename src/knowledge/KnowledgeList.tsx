@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BookOpen, Eye, Filter, LibraryBig, Search } from 'lucide-react';
+import { BookOpen, Calendar, Eye, Filter, LibraryBig, Search, Tag } from 'lucide-react';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
@@ -76,7 +76,7 @@ export default function KnowledgeList() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f8fafc] text-slate-900">
+    <div className="flex h-screen overflow-hidden bg-[#f5f5f7] text-slate-900">
       <LeftSide userData={userData} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} handleLogout={handleLogout} />
 
       <main className="z-10 flex h-full flex-1 flex-col overflow-y-auto">
@@ -84,7 +84,7 @@ export default function KnowledgeList() {
 
         <div className="mx-auto flex w-full max-w-[1540px] flex-1 flex-col gap-8 px-4 py-8 sm:px-8 lg:px-10">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div>
+            <div className="border-l-4 border-blue-600 pl-4">
               <p className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
                 <LibraryBig size={14} /> คลังความรู้ สตท.8
               </p>
@@ -140,11 +140,15 @@ export default function KnowledgeList() {
                   </div>
                   <div className="flex min-h-[210px] flex-col p-6">
                     <h2 className="line-clamp-2 text-2xl font-black leading-snug text-slate-900">{item.title}</h2>
-                    <p className="mt-3 line-clamp-1 text-lg font-semibold text-slate-400">{item.category || 'คลังความรู้'}</p>
+                    <p className="mt-3 flex items-center gap-2 line-clamp-1 text-lg font-semibold text-slate-400">
+                      <Tag size={16} className="text-blue-500" /> {item.category || 'คลังความรู้'}
+                    </p>
                     <div className="mt-auto flex items-center justify-between pt-8 text-sm font-bold text-slate-400">
-                      <span>{formatThaiDate(item.published_at || item.updated_at)}</span>
-                      <span className="inline-flex items-center gap-2">
-                        <Eye size={18} /> {Number(item.view_count || 0).toLocaleString('th-TH')}
+                      <span className="flex items-center gap-1.5">
+                        <Calendar size={16} className="text-slate-400" /> {formatThaiDate(item.published_at || item.updated_at)}
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Eye size={16} className="text-slate-400" /> {Number(item.view_count || 0).toLocaleString('th-TH')}
                       </span>
                     </div>
                   </div>

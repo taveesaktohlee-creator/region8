@@ -212,7 +212,7 @@ export default function MeetingReportAdmin() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f8fafc] text-slate-900">
+    <div className="flex h-screen overflow-hidden bg-[#f5f5f7] text-slate-900">
       <ToastContainer position="top-right" autoClose={2600} />
       <LeftSide userData={userData} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} handleLogout={handleLogout} />
 
@@ -220,9 +220,9 @@ export default function MeetingReportAdmin() {
         <Header setIsSidebarOpen={setIsSidebarOpen} handleRefresh={handleRefresh} isRefreshing={isRefreshing} handleLogout={handleLogout} />
 
         <div className="mx-auto flex w-full max-w-[1540px] flex-col gap-6 px-4 py-8 sm:px-8">
-          <div className="flex flex-col gap-4 rounded-3xl border border-slate-100 bg-white p-4 shadow-sm lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h1 className="flex items-center gap-2 text-2xl font-black text-slate-900"><ClipboardList className="text-blue-600" /> จัดการรายงานการประชุม</h1>
+          <div className="flex flex-col gap-4 rounded-[18px] border border-[#e0e0e0] bg-white p-6 lg:flex-row lg:items-center lg:justify-between">
+            <div className="border-l-4 border-blue-600 pl-4">
+              <h1 className="text-2xl font-black text-slate-900">จัดการรายงานการประชุม</h1>
               <p className="text-sm font-semibold text-slate-500">อัปโหลด PDF แจ้งเวียน แยกสำนักงาน/สำนักงานในพื้นที่ และตรวจสอบการอ่าน</p>
             </div>
             <div className="grid gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-2">
@@ -381,10 +381,10 @@ function ReportDashboard({ items, reportData }: { items: MeetingReportItem[]; re
   };
 
   return (
-    <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+    <section className="rounded-[18px] border border-[#e0e0e0] bg-white p-6">
       <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="text-blue-600" /> รายงานหลังบ้าน</h2>
+        <div className="border-l-4 border-blue-600 pl-4">
+          <h2 className="text-xl font-black text-slate-900">รายงานหลังบ้าน</h2>
           <p className="text-sm font-semibold text-slate-500">ตรวจสอบการเปิดอ่าน เวลาอ่านจริง การรับทราบ และข้อความแจ้งแก้ไข</p>
         </div>
         <div className="grid gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-3">
@@ -408,7 +408,7 @@ function ReportDashboard({ items, reportData }: { items: MeetingReportItem[]; re
                 setReportFilter(event.target.value);
                 resetRowFilters();
               }}
-              className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none focus:ring-2 focus:ring-blue-200"
+              className="min-w-0 rounded-2xl border border-[#e0e0e0] bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none transition-all duration-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
             >
               <option value="all">ทั้งหมด</option>
               {reportOptions.map((report) => (
@@ -423,20 +423,20 @@ function ReportDashboard({ items, reportData }: { items: MeetingReportItem[]; re
             <select
               value={unitFilter}
               onChange={(event) => setUnitFilter(event.target.value)}
-              className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none focus:ring-2 focus:ring-blue-200"
+              className="min-w-0 rounded-2xl border border-[#e0e0e0] bg-white px-4 py-3 text-sm font-black text-slate-800 outline-none transition-all duration-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
             >
               <option value="all">ทั้งหมด</option>
               {unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
             </select>
           </label>
-          <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-[#e0e0e0] bg-white px-4 py-3">
             <Search size={18} className="shrink-0 text-slate-400" />
             <input
               aria-label="ค้นหาข้อมูลรายงานหลังบ้าน"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="ค้นหาผู้ใช้ เรื่อง หรือหมวดหมู่..."
-              className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none placeholder:text-slate-400"
+              className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none transition-all duration-300 placeholder:text-slate-400"
             />
           </div>
           <button
@@ -446,7 +446,7 @@ function ReportDashboard({ items, reportData }: { items: MeetingReportItem[]; re
               setUnitFilter('all');
               setQuery('');
             }}
-            className="inline-flex h-[46px] cursor-pointer items-center justify-center rounded-2xl bg-slate-100 px-4 text-slate-600 hover:bg-slate-200"
+            className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#e0e0e0] bg-[#fafafc] text-slate-600 transition-all duration-300 hover:border-[#cccccc] hover:bg-slate-50"
             title="ล้างตัวกรอง"
           >
             <RefreshCcw size={18} />
@@ -555,9 +555,9 @@ function usePagedRows<T>(rows: T[]) {
       <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 text-sm font-bold text-slate-500 sm:flex-row sm:items-center sm:justify-between">
         <span>แสดง {(start + 1).toLocaleString('th-TH')}-{(start + pageRows.length).toLocaleString('th-TH')} จาก {rows.length.toLocaleString('th-TH')} รายการ</span>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={() => setPage(Math.max(1, safePage - 1))} disabled={safePage <= 1} className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:opacity-40">ก่อนหน้า</button>
-          <span className="rounded-xl bg-slate-100 px-4 py-2 font-black text-slate-700">{safePage.toLocaleString('th-TH')} / {totalPages.toLocaleString('th-TH')}</span>
-          <button type="button" onClick={() => setPage(Math.min(totalPages, safePage + 1))} disabled={safePage >= totalPages} className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:opacity-40">ถัดไป</button>
+          <button type="button" onClick={() => setPage(Math.max(1, safePage - 1))} disabled={safePage <= 1} className="rounded-[11px] border border-[#e0e0e0] bg-[#fafafc] px-4 py-2 font-black text-slate-600 transition-all duration-300 hover:bg-slate-50 hover:border-[#cccccc] disabled:cursor-not-allowed disabled:opacity-40">ก่อนหน้า</button>
+          <span className="rounded-[11px] border border-[#e0e0e0] bg-slate-50 px-4 py-2 font-black text-slate-700">{safePage.toLocaleString('th-TH')} / {totalPages.toLocaleString('th-TH')}</span>
+          <button type="button" onClick={() => setPage(Math.min(totalPages, safePage + 1))} disabled={safePage >= totalPages} className="rounded-[11px] border border-[#e0e0e0] bg-[#fafafc] px-4 py-2 font-black text-slate-600 transition-all duration-300 hover:bg-slate-50 hover:border-[#cccccc] disabled:cursor-not-allowed disabled:opacity-40">ถัดไป</button>
         </div>
       </div>
     ),
@@ -569,7 +569,7 @@ function DataTable({ headers, emptyText, children }: { headers: string[]; emptyT
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
-        <thead className="bg-slate-50 text-xs font-black text-slate-500">
+        <thead className="bg-[#f5f5f7] border-b border-[#e0e0e0] text-xs font-black text-slate-500">
           <tr>{headers.map((header) => <th key={header} className="px-4 py-3">{header}</th>)}</tr>
         </thead>
         <tbody>
@@ -607,8 +607,8 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition ${
-        active ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition-all duration-300 ${
+        active ? 'bg-white text-blue-700 border border-[#e0e0e0] shadow-sm' : 'text-slate-500 hover:text-slate-900 border border-transparent'
       }`}
     >
       {icon}

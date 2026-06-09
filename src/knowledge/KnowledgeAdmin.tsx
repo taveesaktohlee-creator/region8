@@ -306,7 +306,7 @@ export default function KnowledgeAdmin() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f8fafc] text-slate-900">
+    <div className="flex h-screen overflow-hidden bg-[#f5f5f7] text-slate-900">
       <ToastContainer position="top-right" autoClose={2800} />
       <LeftSide userData={userData} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} handleLogout={handleLogout} />
 
@@ -314,9 +314,9 @@ export default function KnowledgeAdmin() {
         <Header setIsSidebarOpen={setIsSidebarOpen} handleRefresh={handleRefresh} isRefreshing={isRefreshing} handleLogout={handleLogout} />
 
         <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 px-4 py-8 sm:px-8">
-          <div className="flex flex-col gap-4 rounded-3xl border border-slate-100 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="flex items-center gap-2 text-2xl font-black text-slate-900"><LibraryBig className="text-blue-600" /> จัดการคลังความรู้</h1>
+          <div className="flex flex-col gap-4 rounded-[18px] border border-[#e0e0e0] bg-white p-6 sm:flex-row sm:items-center sm:justify-between">
+            <div className="border-l-4 border-blue-600 pl-4">
+              <h1 className="text-2xl font-black text-slate-900">จัดการคลังความรู้</h1>
               <p className="text-sm font-semibold text-slate-500">เพิ่มเรื่อง อัปโหลดรูปปก/PDF และดูรายงานการเปิดอ่าน</p>
             </div>
             <div className="grid gap-2 rounded-2xl bg-slate-100 p-1 sm:grid-cols-2">
@@ -427,8 +427,8 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   return (
     <button
       onClick={onClick}
-      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition ${
-        active ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition-all duration-300 ${
+        active ? 'bg-white text-blue-700 border border-[#e0e0e0] shadow-sm' : 'text-slate-500 hover:text-slate-900 border border-transparent'
       }`}
     >
       {icon}
@@ -520,53 +520,65 @@ function ReportSection({ items, report, onRefresh }: { items: KnowledgeItem[]; r
   }, [selectedDivision, selectedItemId, reportSearch, report]);
 
   return (
-    <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="text-blue-600" /> รายงานการอ่าน</h2>
-          <p className="text-sm font-semibold text-slate-500">รายชื่อผู้เปิดอ่าน จำนวนครั้ง และเวลาที่อ่านจริง</p>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+    <section className="rounded-[18px] border border-[#e0e0e0] bg-white p-6">
+      <div className="mb-5 border-l-4 border-blue-600 pl-4">
+        <h2 className="text-xl font-black text-slate-900">รายงานการอ่าน</h2>
+        <p className="text-sm font-semibold text-slate-500">รายชื่อผู้เปิดอ่าน จำนวนครั้ง และเวลาที่อ่านจริง</p>
+      </div>
+      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-12 items-end">
+        <div className="sm:col-span-6 lg:col-span-4 flex flex-col gap-1.5">
           <label className="text-xs font-black text-slate-500" htmlFor="knowledge-report-item">เรื่อง</label>
           <select
             id="knowledge-report-item"
             value={selectedItemId}
             onChange={(event) => setSelectedItemId(event.target.value)}
-            className="min-w-[300px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            className="h-12 w-full rounded-2xl border border-[#e0e0e0] bg-white px-4 text-sm font-black text-slate-700 outline-none transition-all duration-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
           >
             <option value="ทั้งหมด">ทุกเรื่อง</option>
             {itemOptions.map((item) => (
               <option key={item.itemId} value={item.itemId}>{item.title}</option>
             ))}
           </select>
+        </div>
+        <div className="sm:col-span-6 lg:col-span-3 flex flex-col gap-1.5">
           <label className="text-xs font-black text-slate-500" htmlFor="knowledge-report-division">หน่วยงาน</label>
           <select
             id="knowledge-report-division"
             value={selectedDivision}
             onChange={(event) => setSelectedDivision(event.target.value)}
-            className="min-w-[260px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            className="h-12 w-full rounded-2xl border border-[#e0e0e0] bg-white px-4 text-sm font-black text-slate-700 outline-none transition-all duration-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
           >
             {divisionOptions.map((division) => (
               <option key={division} value={division}>{division}</option>
             ))}
           </select>
-          <label className="sr-only" htmlFor="knowledge-report-search">ค้นหารายงานการอ่าน</label>
-          <div className="relative min-w-[260px]">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+        </div>
+        <div className="sm:col-span-10 lg:col-span-4 flex flex-col gap-1.5">
+          <label className="text-xs font-black text-slate-500" htmlFor="knowledge-report-search">ค้นหา</label>
+          <div className="relative w-full">
+            <Search className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <input
               id="knowledge-report-search"
               value={reportSearch}
               onChange={(event) => setReportSearch(event.target.value)}
               placeholder="ค้นหาผู้ใช้ เรื่อง หรือหมวดหมู่..."
-              className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+              className="h-12 w-full rounded-2xl border border-[#e0e0e0] bg-white pl-11 pr-4 text-sm font-black text-slate-700 outline-none transition-all duration-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
             />
           </div>
-          <button onClick={onRefresh} className="rounded-xl bg-slate-100 p-3 text-slate-600"><RefreshCw size={16} /></button>
+        </div>
+        <div className="sm:col-span-2 lg:col-span-1 flex justify-start sm:justify-end">
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#e0e0e0] bg-[#fafafc] text-slate-600 transition-all duration-300 hover:border-[#cccccc] hover:bg-slate-50"
+          >
+            <RefreshCw size={16} />
+          </button>
         </div>
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs font-black text-slate-500">
+          <thead className="bg-[#f5f5f7] border-b border-[#e0e0e0] text-xs font-black text-slate-500">
             <tr>
               <th className="px-4 py-3">ผู้ใช้งาน</th>
               <th className="px-4 py-3">เรื่อง</th>
@@ -635,18 +647,18 @@ function ReportPagination({
           type="button"
           onClick={() => onPageChange(Math.max(1, currentPage - 1))}
           disabled={currentPage <= 1}
-          className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-[11px] border border-[#e0e0e0] bg-[#fafafc] px-4 py-2 font-black text-slate-600 transition-all duration-300 hover:bg-slate-50 hover:border-[#cccccc] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ก่อนหน้า
         </button>
-        <span className="rounded-xl bg-slate-100 px-4 py-2 font-black text-slate-700">
+        <span className="rounded-[11px] border border-[#e0e0e0] bg-slate-50 px-4 py-2 font-black text-slate-700">
           {currentPage.toLocaleString('th-TH')} / {totalPages.toLocaleString('th-TH')}
         </span>
         <button
           type="button"
           onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
           disabled={currentPage >= totalPages}
-          className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-[11px] border border-[#e0e0e0] bg-[#fafafc] px-4 py-2 font-black text-slate-600 transition-all duration-300 hover:bg-slate-50 hover:border-[#cccccc] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ถัดไป
         </button>

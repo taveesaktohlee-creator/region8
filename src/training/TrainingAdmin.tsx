@@ -1015,7 +1015,7 @@ export default function TrainingAdmin() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f8fafc] text-slate-900">
+    <div className="flex h-screen overflow-hidden bg-[#f5f5f7] text-slate-900">
       <ToastContainer position="top-right" autoClose={2800} />
       <LeftSide userData={userData} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} handleLogout={handleLogout} />
 
@@ -1023,8 +1023,8 @@ export default function TrainingAdmin() {
         <Header setIsSidebarOpen={setIsSidebarOpen} handleRefresh={handleRefresh} isRefreshing={isRefreshing} handleLogout={handleLogout} />
 
         <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 px-4 py-8 sm:px-8">
-          <div className="flex flex-col gap-4 rounded-3xl border border-slate-100 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-            <div>
+          <div className="flex flex-col gap-4 rounded-[18px] border border-[#e0e0e0] bg-white p-6 sm:flex-row sm:items-center sm:justify-between">
+            <div className="border-l-4 border-blue-600 pl-4">
               <h1 className="text-2xl font-black text-slate-900">จัดการระบบอบรม</h1>
               <p className="text-sm font-semibold text-slate-500">รายงานผู้ลงทะเบียน จัดการหลักสูตร บทเรียน เอกสาร และข้อสอบ</p>
             </div>
@@ -1232,8 +1232,8 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition ${
-        active ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition-all duration-300 ${
+        active ? 'bg-white text-blue-700 border border-[#e0e0e0] shadow-sm' : 'text-slate-500 hover:text-slate-900 border border-transparent'
       }`}
     >
       {icon}
@@ -1376,10 +1376,10 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
 
   return (
     <section className="space-y-5">
-      <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+      <div className="rounded-[18px] border border-[#e0e0e0] bg-white p-6">
         <div className="mb-5 grid min-w-0 gap-4 xl:grid-cols-[minmax(240px,0.8fr)_minmax(0,2fr)] xl:items-start">
-          <div className="min-w-0">
-            <h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="text-blue-600" /> รายงานผู้ลงทะเบียน</h2>
+          <div className="min-w-0 border-l-4 border-blue-600 pl-4">
+            <h2 className="text-xl font-black text-slate-900">รายงานผู้ลงทะเบียน</h2>
             <p className="text-sm font-semibold text-slate-500">รายชื่อผู้ลงทะเบียน เวลาเข้าอบรม คะแนนก่อน/หลัง และสถานะยืนยัน</p>
           </div>
           <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto]">
@@ -1392,7 +1392,7 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
                   setSelectedReportCourseId(event.target.value);
                   setCurrentPage(1);
                 }}
-                className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                className="h-12 w-full min-w-0 rounded-2xl border border-[#e0e0e0] bg-white px-4 text-sm font-black text-slate-700 outline-none transition-all duration-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
               >
                 <option value="ทั้งหมด">ทุกหลักสูตร</option>
                 {courseOptions.map((course) => (
@@ -1409,14 +1409,20 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
                   setSelectedDivision(event.target.value);
                   setCurrentPage(1);
                 }}
-                className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                className="h-12 w-full min-w-0 rounded-2xl border border-[#e0e0e0] bg-white px-4 text-sm font-black text-slate-700 outline-none transition-all duration-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
               >
                 {divisionOptions.map((division) => (
                   <option key={division} value={division}>{division}</option>
                 ))}
               </select>
             </div>
-            <button type="button" onClick={onRefresh} className="mt-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-600"><RefreshCw size={16} /></button>
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="mt-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#e0e0e0] bg-[#fafafc] text-slate-600 transition-all duration-300 hover:border-[#cccccc] hover:bg-slate-50"
+            >
+              <RefreshCw size={16} />
+            </button>
             <div className="grid min-w-0 gap-1 md:col-span-3">
               <label className="text-xs font-black text-slate-500" htmlFor="training-report-search">ค้นหา</label>
               <div className="relative min-w-0">
@@ -1429,7 +1435,7 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
                     setCurrentPage(1);
                   }}
                   placeholder="ค้นหาผู้ลงทะเบียน หลักสูตร สถานะ หรือคำตอบประเมิน..."
-                  className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                  className="h-12 w-full min-w-0 rounded-2xl border border-[#e0e0e0] bg-white py-3 pl-10 pr-4 text-sm font-black text-slate-700 outline-none transition-all duration-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
                 />
               </div>
             </div>
@@ -1437,16 +1443,16 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
         </div>
 
         <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <ReportStatCard title="ผู้ลงทะเบียน" value={quizSummary.total.toLocaleString('th-TH')} detail={`สำเร็จ ${quizSummary.completedCount.toLocaleString('th-TH')} คน`} />
-          <ReportStatCard title="เฉลี่ยก่อนเรียน" value={formatPercent(quizSummary.avgPre)} detail={`เข้าสอบ ${quizSummary.preTaken.toLocaleString('th-TH')} คน`} />
-          <ReportStatCard title="เฉลี่ยหลังเรียน" value={formatPercent(quizSummary.avgPost)} detail={`เข้าสอบ ${quizSummary.postTaken.toLocaleString('th-TH')} คน`} />
+          <ReportStatCard title="ผู้ลงทะเบียน" value={quizSummary.total.toLocaleString('th-TH')} detail={`สำเร็จ ${quizSummary.completedCount.toLocaleString('th-TH')} คน`} tone="blue" />
+          <ReportStatCard title="เฉลี่ยก่อนเรียน" value={formatPercent(quizSummary.avgPre)} detail={`เข้าสอบ ${quizSummary.preTaken.toLocaleString('th-TH')} คน`} tone="amber" />
+          <ReportStatCard title="เฉลี่ยหลังเรียน" value={formatPercent(quizSummary.avgPost)} detail={`เข้าสอบ ${quizSummary.postTaken.toLocaleString('th-TH')} คน`} tone="orange" />
           <ReportStatCard title="อัตราความสำเร็จ" value={formatPercent(quizSummary.passRate)} detail="ผ่านเกณฑ์แบบทดสอบหลังเรียน" tone="emerald" />
-          <ReportStatCard title="คะแนนพัฒนาขึ้น" value={formatPercent(quizSummary.improvementRate)} detail={`จบอบรม ${formatPercent(quizSummary.completionRate)}`} tone="blue" />
+          <ReportStatCard title="คะแนนพัฒนาขึ้น" value={formatPercent(quizSummary.improvementRate)} detail={`จบอบรม ${formatPercent(quizSummary.completionRate)}`} tone="purple" />
         </div>
 
         <div className="overflow-x-auto">
           <table className="min-w-full text-left text-sm">
-            <thead className="bg-slate-50 text-xs font-black text-slate-500">
+            <thead className="bg-[#f5f5f7] border-b border-[#e0e0e0] text-xs font-black text-slate-500">
               <tr>
                 <th className="px-4 py-3">ผู้เข้าอบรม</th>
                 <th className="px-4 py-3">หลักสูตร</th>
@@ -1479,7 +1485,15 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <button type="button" onClick={() => onConfirmAttendance(row.enrollment_id, !row.attendance_confirmed)} className={`rounded-xl px-3 py-2 text-xs font-black ${row.attendance_confirmed ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                      <button
+                        type="button"
+                        onClick={() => onConfirmAttendance(row.enrollment_id, !row.attendance_confirmed)}
+                        className={`rounded-[11px] border px-3 py-2 text-xs font-black transition-all duration-300 ${
+                          row.attendance_confirmed
+                            ? 'bg-emerald-50 border-emerald-100 text-emerald-700 hover:bg-emerald-100/50'
+                            : 'bg-[#fafafc] border-[#e0e0e0] text-slate-600 hover:bg-slate-50 hover:border-[#cccccc]'
+                        }`}
+                      >
                         {row.attendance_confirmed ? 'ยืนยันแล้ว' : 'ยืนยันเข้าอบรม'}
                       </button>
                     </td>
@@ -1516,18 +1530,32 @@ function ReportStatCard({
   title: string;
   value: string;
   detail: string;
-  tone?: 'slate' | 'blue' | 'emerald';
+  tone?: 'slate' | 'blue' | 'emerald' | 'amber' | 'orange' | 'purple';
 }) {
-  const toneClass = tone === 'emerald'
-    ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-    : tone === 'blue'
-      ? 'border-blue-100 bg-blue-50 text-blue-700'
-      : 'border-slate-100 bg-slate-50 text-slate-700';
+  let toneClass = 'border-t-slate-500 bg-slate-50/20 text-slate-700';
+  let valueColor = 'text-slate-900';
+  if (tone === 'blue') {
+    toneClass = 'border-t-blue-500 bg-blue-50/25 border-slate-100';
+    valueColor = 'text-blue-700';
+  } else if (tone === 'emerald') {
+    toneClass = 'border-t-emerald-500 bg-emerald-50/25 border-slate-100';
+    valueColor = 'text-emerald-700';
+  } else if (tone === 'amber') {
+    toneClass = 'border-t-amber-500 bg-amber-50/25 border-slate-100';
+    valueColor = 'text-amber-700';
+  } else if (tone === 'orange') {
+    toneClass = 'border-t-orange-500 bg-orange-50/25 border-slate-100';
+    valueColor = 'text-orange-700';
+  } else if (tone === 'purple') {
+    toneClass = 'border-t-purple-500 bg-purple-50/25 border-slate-100';
+    valueColor = 'text-purple-700';
+  }
+
   return (
-    <div className={`rounded-2xl border px-4 py-3 ${toneClass}`}>
-      <p className="text-xs font-black opacity-80">{title}</p>
-      <p className="mt-1 text-2xl font-black">{value}</p>
-      <p className="mt-1 text-xs font-bold opacity-75">{detail}</p>
+    <div className={`rounded-[18px] border border-t-4 px-4 py-3 shadow-[0_2px_8px_rgba(0,0,0,0.01)] transition-all duration-300 hover:shadow-[0_4px_16px_rgba(0,0,0,0.03)] ${toneClass}`}>
+      <p className="text-xs font-black text-slate-500">{title}</p>
+      <p className={`mt-1 text-2xl font-black ${valueColor}`}>{value}</p>
+      <p className="mt-1 text-xs font-bold text-slate-400">{detail}</p>
     </div>
   );
 }
@@ -1646,18 +1674,18 @@ function ReportPagination({
           type="button"
           onClick={() => onPageChange(Math.max(1, currentPage - 1))}
           disabled={currentPage <= 1}
-          className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-[11px] border border-[#e0e0e0] bg-[#fafafc] px-4 py-2 font-black text-slate-600 transition-all duration-300 hover:bg-slate-50 hover:border-[#cccccc] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ก่อนหน้า
         </button>
-        <span className="rounded-xl bg-slate-100 px-4 py-2 font-black text-slate-700">
+        <span className="rounded-[11px] border border-[#e0e0e0] bg-slate-50 px-4 py-2 font-black text-slate-700">
           {currentPage.toLocaleString('th-TH')} / {totalPages.toLocaleString('th-TH')}
         </span>
         <button
           type="button"
           onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
           disabled={currentPage >= totalPages}
-          className="rounded-xl border border-slate-200 px-4 py-2 font-black text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-[11px] border border-[#e0e0e0] bg-[#fafafc] px-4 py-2 font-black text-slate-600 transition-all duration-300 hover:bg-slate-50 hover:border-[#cccccc] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ถัดไป
         </button>

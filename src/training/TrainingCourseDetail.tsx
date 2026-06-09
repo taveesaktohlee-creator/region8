@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Award, CalendarCheck, CheckCircle2, Clock, ExternalLink, FileText, GraduationCap, PlayCircle, Send, Star, Users, Video } from 'lucide-react';
+import { ArrowLeft, Award, CalendarCheck, CheckCircle2, Clock, ExternalLink, GraduationCap, PlayCircle, Send, Star, Users, Video } from 'lucide-react';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
@@ -154,8 +154,8 @@ function getEnrollmentStatusLabel(enrollment: Enrollment | null, passScore?: num
 
 function InfoBlock({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-      <h3 className="mb-3 text-lg font-black text-slate-900">{title}</h3>
+    <section className="rounded-[18px] border border-[#e0e0e0] bg-white p-6 transition-all duration-300 hover:border-[#cccccc]">
+      <h3 className="mb-3 border-l-4 border-blue-600 pl-3 text-lg font-black text-slate-900">{title}</h3>
       <div className="whitespace-pre-line text-sm font-medium leading-7 text-slate-600">{children || '-'}</div>
     </section>
   );
@@ -407,7 +407,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f8fafc] text-slate-900">
+    <div className="flex h-screen overflow-hidden bg-[#f5f5f7] text-slate-900">
       <ToastContainer position="top-right" autoClose={2800} />
       <LeftSide userData={userData} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} handleLogout={handleLogout} />
 
@@ -469,10 +469,10 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
           <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
             <div className="flex flex-col gap-5">
               <div className="grid gap-3 sm:grid-cols-4">
-                <Stat icon={<Clock />} label="เวลาเรียน" value={formatMinutes(course.duration_minutes)} />
-                <Stat icon={<CalendarCheck />} label="เวลาที่เข้าอบรม" value={formatSeconds(displayedAttendedSeconds)} />
-                <Stat icon={<Award />} label="คะแนนก่อนเรียน" value={formatScore(enrollment?.pre_score)} />
-                <Stat icon={<CheckCircle2 />} label="คะแนนหลังเรียน" value={hasPostQuizResult ? `${formatScore(enrollment?.post_score)} ${getPassResult(enrollment?.post_score, course.pass_score)}` : '-'} />
+                <Stat icon={<Clock size={20} className="text-amber-500" />} label="เวลาเรียน" value={formatMinutes(course.duration_minutes)} />
+                <Stat icon={<CalendarCheck size={20} className="text-blue-500" />} label="เวลาที่เข้าอบรม" value={formatSeconds(displayedAttendedSeconds)} />
+                <Stat icon={<Award size={20} className="text-purple-500" />} label="คะแนนก่อนเรียน" value={formatScore(enrollment?.pre_score)} />
+                <Stat icon={<CheckCircle2 size={20} className="text-emerald-500" />} label="คะแนนหลังเรียน" value={hasPostQuizResult ? `${formatScore(enrollment?.post_score)} ${getPassResult(enrollment?.post_score, course.pass_score)}` : '-'} />
               </div>
 
               {firstVideo && (
@@ -532,29 +532,60 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
 
             <aside className="flex flex-col gap-5">
               {hasEnteredTraining && (
-                <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-                  <h3 className="mb-4 flex items-center gap-2 text-lg font-black"><FileText className="text-blue-600" /> เอกสารประกอบ</h3>
+                <section className="rounded-[18px] border border-[#e0e0e0] bg-white p-6 transition-all duration-300 hover:border-[#cccccc]">
+                  <h3 className="mb-4 border-l-4 border-blue-600 pl-3 text-lg font-black text-slate-900">
+                    เอกสารประกอบ
+                  </h3>
                   <div className="space-y-3">
                     {materials.length === 0 ? (
                       <p className="text-sm font-semibold text-slate-400">ยังไม่มีเอกสารประกอบ</p>
                     ) : materials.map((material) => (
-                      <a key={material.material_id} href={getTrainingFileUrl(material.drive_url)} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 hover:border-blue-200 hover:bg-blue-50">
-                        {material.title}
-                        <ExternalLink size={15} />
+                      <a
+                        key={material.material_id}
+                        href={getTrainingFileUrl(material.drive_url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center justify-between rounded-[11px] border border-[#e0e0e0] bg-[#fafafc] px-4 py-3 text-sm font-bold text-slate-700 transition-all duration-300 hover:border-blue-300 hover:bg-blue-50/20 hover:text-blue-600"
+                      >
+                        <span className="truncate pr-2">{material.title}</span>
+                        <ExternalLink size={15} className="shrink-0 text-blue-600" />
                       </a>
                     ))}
                   </div>
                 </section>
               )}
-              <section className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
-                <h3 className="text-lg font-black text-blue-900">สถานะของคุณ</h3>
-                <p className="mt-2 text-sm font-bold text-blue-700">
-                  {getEnrollmentStatusLabel(enrollment, course.pass_score)}
-                </p>
-                {enrollment?.certificate_code && (
-                  <p className="mt-3 rounded-2xl bg-white px-4 py-3 text-xs font-black text-slate-700">เลขใบรับรอง: {enrollment.certificate_code}</p>
-                )}
-              </section>
+              {(() => {
+                let statusBg = "bg-white border-[#e0e0e0]";
+                let statusTextColor = "text-slate-600";
+                if (enrollment) {
+                  if (enrollment.status === 'completed') {
+                    const result = getPassResult(enrollment.post_score, course.pass_score);
+                    if (result === 'ไม่ผ่าน') {
+                      statusBg = "bg-rose-50/40 border-rose-200/50";
+                      statusTextColor = "text-rose-600";
+                    } else {
+                      statusBg = "bg-emerald-50/40 border-emerald-200/50";
+                      statusTextColor = "text-emerald-600";
+                    }
+                  } else {
+                    statusBg = "bg-blue-50/40 border-blue-200/50";
+                    statusTextColor = "text-blue-600";
+                  }
+                }
+                return (
+                  <section className={`rounded-[18px] border p-6 transition-all duration-300 hover:border-[#cccccc] ${statusBg}`}>
+                    <h3 className="text-lg font-black border-l-4 border-blue-600 pl-3 text-slate-900">สถานะของคุณ</h3>
+                    <p className={`mt-3 text-sm font-bold ${statusTextColor}`}>
+                      {getEnrollmentStatusLabel(enrollment, course.pass_score)}
+                    </p>
+                    {enrollment?.certificate_code && (
+                      <p className="mt-3 rounded-[11px] border border-[#e0e0e0]/60 bg-white px-4 py-2.5 text-xs font-black text-slate-700">
+                        เลขใบรับรอง: {enrollment.certificate_code}
+                      </p>
+                    )}
+                  </section>
+                );
+              })()}
             </aside>
           </div>
         </div>
@@ -567,8 +598,8 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
 
 function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-      <div className="mb-3 text-blue-600">{icon}</div>
+    <div className="rounded-[18px] border border-[#e0e0e0] bg-white p-6 transition-all duration-300 hover:border-[#cccccc]">
+      <div className="mb-3 flex items-center">{icon}</div>
       <p className="text-xl font-black text-slate-900">{value}</p>
       <p className="text-xs font-bold text-slate-400">{label}</p>
     </div>
