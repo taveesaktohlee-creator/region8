@@ -5555,12 +5555,16 @@ app.put('/api/admin/training/questions/:questionId', async (req, res) => {
     const quizType = req.body.quiz_type === 'pre' ? 'pre' : 'post';
     const questionText = String(req.body.question_text || '').trim();
     const choices = Array.isArray(req.body.choices)
-      ? req.body.choices.map((choice: unknown) => String(choice || '').trim()).filter(Boolean)
+      ? req.body.choices
+          .map((choice: unknown, index: number) => ({ choiceText: String(choice || '').trim(), originalIndex: index }))
+          .filter((choice: { choiceText: string }) => Boolean(choice.choiceText))
       : [];
-    const correctIndex = Math.max(0, Math.min(toInt(req.body.correct_index), choices.length - 1));
+    const correctOriginalIndex = toInt(req.body.correct_index);
+    const hasCorrectChoice = choices.some((choice: { originalIndex: number }) => choice.originalIndex === correctOriginalIndex);
     if (!questionId) return res.status(400).json({ error: 'ไม่พบรหัสข้อสอบ' });
     if (!courseId) return res.status(400).json({ error: 'ไม่พบรหัสหลักสูตร' });
     if (!questionText || choices.length < 2) return res.status(400).json({ error: 'กรุณาระบุคำถามและตัวเลือกอย่างน้อย 2 ตัวเลือก' });
+    if (!hasCorrectChoice) return res.status(400).json({ error: 'กรุณาเลือกคำตอบที่ถูกต้องจากตัวเลือกที่มีข้อความ' });
 
     await pool.query(
       `INSERT INTO training_quizzes (course_id, quiz_type, title, pass_score)
@@ -5579,7 +5583,12 @@ app.put('/api/admin/training/questions/:questionId', async (req, res) => {
     await pool.query('DELETE FROM training_choices WHERE question_id = ?', [questionId]);
     await pool.query(
       'INSERT INTO training_choices (question_id, choice_text, is_correct, sort_order) VALUES ?',
-      [choices.map((choice: string, index: number) => [questionId, choice, index === correctIndex ? 1 : 0, index + 1])],
+      [choices.map((choice: { choiceText: string; originalIndex: number }, index: number) => [
+        questionId,
+        choice.choiceText,
+        choice.originalIndex === correctOriginalIndex ? 1 : 0,
+        index + 1,
+      ])],
     );
     res.json({ message: 'แก้ไขข้อสอบเรียบร้อยแล้ว' });
   } catch (error) {
