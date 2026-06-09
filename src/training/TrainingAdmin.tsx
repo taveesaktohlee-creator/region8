@@ -789,27 +789,35 @@ export default function TrainingAdmin() {
     if (choices.length < 2) return toast.warning('กรุณาระบุตัวเลือกอย่างน้อย 2 ตัวเลือก');
     if (!selectedAnswerText) return toast.warning('กรุณาเลือกคำตอบที่ถูกต้องจากตัวเลือกที่มีข้อความ');
 
-    const url = editingQuestionId
-      ? `${API_BASE}/api/admin/training/questions/${editingQuestionId}`
-      : `${API_BASE}/api/admin/training/courses/${selectedCourseId}/questions`;
+    const payload = {
+      ...questionForm,
+      question_text: questionText,
+      choices: questionForm.choices,
+      course_id: selectedCourseId,
+    };
     try {
       setIsSavingQuestion(true);
-      const res = await fetch(url, {
+      const requestInit = {
         method: editingQuestionId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...questionForm,
-          question_text: questionText,
-          choices: questionForm.choices,
-          course_id: selectedCourseId,
-        }),
-      });
-      const data = await readJsonResponse(res);
+        body: JSON.stringify(payload),
+      };
+      const { response: res, data } = editingQuestionId
+        ? await fetchJsonWithFallback(
+            `${API_BASE}/api/admin/training/questions/${editingQuestionId}`,
+            `${API_BASE}/training-evaluation-proxy?mode=quiz-question&questionId=${editingQuestionId}`,
+            requestInit,
+          )
+        : {
+            response: await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/questions`, requestInit),
+            data: null as any,
+          };
+      const responseData = editingQuestionId ? data : await readJsonResponse(res);
       if (!res.ok) {
         const fallbackMessage = editingQuestionId ? 'แก้ไขข้อสอบไม่สำเร็จ' : 'เพิ่มข้อสอบไม่สำเร็จ';
-        throw new Error(data.error || fallbackMessage);
+        throw new Error(responseData?.error || fallbackMessage);
       }
-      toast.success(data.message || (editingQuestionId ? 'แก้ไขข้อสอบเรียบร้อยแล้ว' : 'เพิ่มข้อสอบเรียบร้อยแล้ว'));
+      toast.success(responseData?.message || (editingQuestionId ? 'แก้ไขข้อสอบเรียบร้อยแล้ว' : 'เพิ่มข้อสอบเรียบร้อยแล้ว'));
       setQuestionForm(defaultQuestionForm);
       setEditingQuestionId(null);
       await loadQuizPreview(selectedCourseId).catch(() => undefined);
@@ -841,8 +849,11 @@ export default function TrainingAdmin() {
     if (!selectedCourseId) return;
     const confirmed = await confirmDialog({ text: 'ต้องการลบข้อสอบนี้หรือไม่' });
     if (!confirmed) return;
-    const res = await fetch(`${API_BASE}/api/admin/training/questions/${questionId}`, { method: 'DELETE' });
-    const data = await res.json();
+    const { response: res, data } = await fetchJsonWithFallback(
+      `${API_BASE}/api/admin/training/questions/${questionId}`,
+      `${API_BASE}/training-evaluation-proxy?mode=quiz-question&questionId=${questionId}`,
+      { method: 'DELETE' },
+    );
     if (!res.ok) return toast.error(data.error || 'ลบข้อสอบไม่สำเร็จ');
     toast.success(data.message);
     if (editingQuestionId === questionId) cancelQuestionEdit();

@@ -9,10 +9,6 @@
       "destination": "/api/training-evaluation"
     },
     {
-      "source": "/api/admin/training/questions/:path*",
-      "destination": "/api/training-questions?path=:path*"
-    },
-    {
       "source": "/api/activity-calendar/:path*",
       "destination": "/api/activity-calendar?path=:path*"
     },

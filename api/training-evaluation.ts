@@ -1,6 +1,7 @@
 import mysql from 'mysql2/promise';
 
 type EvaluationQuestionType = 'rating' | 'single_choice' | 'multiple_choice' | 'text';
+type QuizType = 'pre' | 'post';
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || '157.85.98.50',
@@ -53,6 +54,10 @@ function normalizeQuestionType(value: unknown): EvaluationQuestionType {
   return 'rating';
 }
 
+function normalizeQuizType(value: unknown): QuizType {
+  return value === 'pre' ? 'pre' : 'post';
+}
+
 async function ensureEvaluationTables() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS training_evaluation_questions (
@@ -99,6 +104,111 @@ async function ensureEvaluationTables() {
       FOREIGN KEY (question_id) REFERENCES training_evaluation_questions(question_id) ON DELETE CASCADE
     ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
   `);
+}
+
+async function ensureTrainingQuestionTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS training_quizzes (
+      quiz_id INT AUTO_INCREMENT PRIMARY KEY,
+      course_id INT NOT NULL,
+      quiz_type ENUM('pre','post') NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      pass_score INT DEFAULT 70,
+      time_limit_minutes INT DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_training_quiz_type (course_id, quiz_type),
+      FOREIGN KEY (course_id) REFERENCES training_courses(course_id) ON DELETE CASCADE
+    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS training_questions (
+      question_id INT AUTO_INCREMENT PRIMARY KEY,
+      quiz_id INT NOT NULL,
+      question_text TEXT NOT NULL,
+      sort_order INT DEFAULT 0,
+      FOREIGN KEY (quiz_id) REFERENCES training_quizzes(quiz_id) ON DELETE CASCADE
+    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS training_choices (
+      choice_id INT AUTO_INCREMENT PRIMARY KEY,
+      question_id INT NOT NULL,
+      choice_text TEXT NOT NULL,
+      is_correct TINYINT(1) DEFAULT 0,
+      sort_order INT DEFAULT 0,
+      FOREIGN KEY (question_id) REFERENCES training_questions(question_id) ON DELETE CASCADE
+    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+  `);
+}
+
+async function updateQuizQuestion(questionId: number, body: any) {
+  const courseId = toInt(body.course_id);
+  const quizType = normalizeQuizType(body.quiz_type);
+  const questionText = String(body.question_text || '').trim();
+  const choices = Array.isArray(body.choices)
+    ? body.choices
+        .map((choice: unknown, index: number) => ({ choiceText: String(choice || '').trim(), originalIndex: index }))
+        .filter((choice: { choiceText: string }) => Boolean(choice.choiceText))
+    : [];
+  const correctOriginalIndex = toInt(body.correct_index);
+  const hasCorrectChoice = choices.some((choice: { originalIndex: number }) => choice.originalIndex === correctOriginalIndex);
+
+  if (!questionId) return { status: 400, payload: { error: 'ไม่พบรหัสข้อสอบ' } };
+  if (!courseId) return { status: 400, payload: { error: 'ไม่พบรหัสหลักสูตร' } };
+  if (!questionText) return { status: 400, payload: { error: 'กรุณาระบุคำถาม' } };
+  if (choices.length < 2) return { status: 400, payload: { error: 'กรุณาระบุตัวเลือกอย่างน้อย 2 ตัวเลือก' } };
+  if (!hasCorrectChoice) return { status: 400, payload: { error: 'กรุณาเลือกคำตอบที่ถูกต้องจากตัวเลือกที่มีข้อความ' } };
+
+  await ensureTrainingQuestionTables();
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.query(
+      `INSERT INTO training_quizzes (course_id, quiz_type, title, pass_score)
+       VALUES (?, ?, ?, 70)
+       ON DUPLICATE KEY UPDATE quiz_id = LAST_INSERT_ID(quiz_id)`,
+      [courseId, quizType, quizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน'],
+    );
+    const [quizRows]: any = await connection.query('SELECT LAST_INSERT_ID() AS quiz_id');
+    const quizId = quizRows[0]?.quiz_id;
+
+    const [result]: any = await connection.query(
+      'UPDATE training_questions SET quiz_id = ?, question_text = ?, sort_order = ? WHERE question_id = ?',
+      [quizId, questionText, toInt(body.sort_order), questionId],
+    );
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return { status: 404, payload: { error: 'ไม่พบข้อสอบที่ต้องการแก้ไข' } };
+    }
+
+    await connection.query('DELETE FROM training_choices WHERE question_id = ?', [questionId]);
+    await connection.query(
+      'INSERT INTO training_choices (question_id, choice_text, is_correct, sort_order) VALUES ?',
+      [choices.map((choice: { choiceText: string; originalIndex: number }, index: number) => [
+        questionId,
+        choice.choiceText,
+        choice.originalIndex === correctOriginalIndex ? 1 : 0,
+        index + 1,
+      ])],
+    );
+    await connection.commit();
+    return { status: 200, payload: { message: 'แก้ไขข้อสอบเรียบร้อยแล้ว' } };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function deleteQuizQuestion(questionId: number) {
+  if (!questionId) return { status: 400, payload: { error: 'ไม่พบรหัสข้อสอบ' } };
+  await ensureTrainingQuestionTables();
+  const [result]: any = await pool.query('DELETE FROM training_questions WHERE question_id = ?', [questionId]);
+  if (result.affectedRows === 0) return { status: 404, payload: { error: 'ไม่พบข้อสอบที่ต้องการลบ' } };
+  return { status: 200, payload: { message: 'ลบข้อสอบเรียบร้อยแล้ว' } };
 }
 
 async function getQuestions(courseId: number) {
@@ -269,10 +379,27 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    await ensureEvaluationTables();
     const courseId = toInt(req.query.courseId);
     const questionId = toInt(req.query.questionId);
     const enrollmentId = toInt(req.query.enrollmentId);
+    const mode = String(req.query.mode || '');
+
+    if (mode === 'quiz-question') {
+      if (req.method === 'PUT') {
+        const body = await readBody(req);
+        const result = await updateQuizQuestion(questionId, body);
+        return sendJson(res, result.status, result.payload);
+      }
+
+      if (req.method === 'DELETE') {
+        const result = await deleteQuizQuestion(questionId);
+        return sendJson(res, result.status, result.payload);
+      }
+
+      return sendJson(res, 405, { error: 'Method not allowed' });
+    }
+
+    await ensureEvaluationTables();
 
     if (req.method === 'GET') {
       if (!courseId) return sendJson(res, 400, { error: 'ไม่พบรหัสหลักสูตร' });
