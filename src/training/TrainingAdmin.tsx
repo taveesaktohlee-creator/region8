@@ -112,7 +112,7 @@ type EvaluationFormState = {
 };
 
 type QuizQuestionFormState = {
-  quiz_type: QuizType;
+  quiz_type: QuizType | '';
   question_text: string;
   choices: string[];
   correct_index: number;
@@ -151,7 +151,7 @@ const defaultQuizSettings = {
 };
 
 const defaultQuestionForm: QuizQuestionFormState = {
-  quiz_type: 'post',
+  quiz_type: '',
   question_text: '',
   choices: ['', '', '', ''],
   correct_index: 0,
@@ -415,6 +415,16 @@ function formatPercent(value?: number | null) {
   return `${Number(value).toFixed(2)}%`;
 }
 
+function toEnabledBoolean(value: unknown, fallback = true) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  const text = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(text)) return true;
+  if (['0', 'false', 'no', 'off'].includes(text)) return false;
+  return fallback;
+}
+
 function enrollmentStatusMeta(status?: string) {
   if (status === 'completed') return { label: 'สำเร็จการอบรม', className: 'bg-emerald-50 text-emerald-700 border-emerald-100' };
   if (status === 'in_progress') return { label: 'กำลังอบรม', className: 'bg-blue-50 text-blue-700 border-blue-100' };
@@ -662,7 +672,12 @@ export default function TrainingAdmin() {
 
   const selectCourse = (course: Course) => {
     setSelectedCourseId(course.course_id || null);
-    setForm({ ...emptyCourse, ...course, certificate_enabled: Boolean(course.certificate_enabled) });
+    setForm({
+      ...emptyCourse,
+      ...course,
+      post_quiz_enabled: toEnabledBoolean(course.post_quiz_enabled, true),
+      certificate_enabled: toEnabledBoolean(course.certificate_enabled, true),
+    });
     setQuestionForm(defaultQuestionForm);
     setEditingQuestionId(null);
     setEvaluationForm(defaultEvaluationForm);
@@ -696,10 +711,15 @@ export default function TrainingAdmin() {
       : `${API_BASE}/api/admin/training/courses`;
     setIsSavingCourse(true);
     try {
+      const payload = {
+        ...form,
+        post_quiz_enabled: toEnabledBoolean(form.post_quiz_enabled, true),
+        certificate_enabled: toEnabledBoolean(form.certificate_enabled, true),
+      };
       const res = await fetch(url, {
         method: selectedCourseId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) return toast.error(data.error || 'บันทึกหลักสูตรไม่สำเร็จ');
@@ -779,6 +799,7 @@ export default function TrainingAdmin() {
 
   const saveQuestion = async () => {
     if (!selectedCourseId) return toast.warning('กรุณาเลือกหลักสูตรก่อนเพิ่มข้อสอบ');
+    if (!questionForm.quiz_type) return toast.warning('กรุณาเลือกแบบทดสอบก่อนเรียนหรือหลังเรียน');
     const questionText = questionForm.question_text.trim();
     const choices = questionForm.choices.flatMap((choice) => {
       const trimmedChoice = choice.trim();
@@ -1125,33 +1146,39 @@ export default function TrainingAdmin() {
                     onSubmit={saveQuestion}
                     submitLabel={isSavingQuestion ? 'กำลังบันทึก...' : editingQuestionId ? 'บันทึกการแก้ไข' : 'เพิ่มข้อมูล'}
                     disabled={isSavingQuestion}
+                    className="xl:col-span-2 2xl:col-span-3"
                   >
-                    <select value={questionForm.quiz_type} onChange={(e) => setQuestionForm({ ...questionForm, quiz_type: e.target.value as QuizType })} className="min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none">
-                      <option value="pre">ก่อนเรียน</option>
-                      <option value="post">หลังเรียน</option>
-                    </select>
-                    <Input value={questionForm.question_text} onChange={(v) => setQuestionForm({ ...questionForm, question_text: v })} placeholder="คำถาม" />
-                    {questionForm.choices.map((choice, index) => (
-                      <div key={`quiz-choice-${index + 1}-${questionForm.choices.length}`} className="flex gap-2">
-                        <input aria-label={`กำหนดตัวเลือก ${index + 1} เป็นคำตอบถูก`} type="radio" checked={questionForm.correct_index === index} onChange={() => setQuestionForm({ ...questionForm, correct_index: index })} />
-                        <Input value={choice} onChange={(v) => {
-                          const next = [...questionForm.choices];
-                          next[index] = v;
-                          setQuestionForm({ ...questionForm, choices: next });
-                        }} placeholder={`ตัวเลือก ${index + 1}`} />
+                    <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[minmax(300px,0.78fr)_minmax(0,1.22fr)]">
+                      <div className="grid min-w-0 gap-3">
+                        <select value={questionForm.quiz_type} onChange={(e) => setQuestionForm({ ...questionForm, quiz_type: e.target.value as QuizType | '' })} className="min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none">
+                          <option value="">กรุณาเลือก</option>
+                          <option value="pre">ก่อนเรียน</option>
+                          <option value="post">หลังเรียน</option>
+                        </select>
+                        <Input value={questionForm.question_text} onChange={(v) => setQuestionForm({ ...questionForm, question_text: v })} placeholder="คำถาม" />
+                        {questionForm.choices.map((choice, index) => (
+                          <div key={`quiz-choice-${index + 1}-${questionForm.choices.length}`} className="flex gap-2">
+                            <input aria-label={`กำหนดตัวเลือก ${index + 1} เป็นคำตอบถูก`} type="radio" checked={questionForm.correct_index === index} onChange={() => setQuestionForm({ ...questionForm, correct_index: index })} />
+                            <Input value={choice} onChange={(v) => {
+                              const next = [...questionForm.choices];
+                              next[index] = v;
+                              setQuestionForm({ ...questionForm, choices: next });
+                            }} placeholder={`ตัวเลือก ${index + 1}`} />
+                          </div>
+                        ))}
+                        {editingQuestionId && (
+                          <button type="button" onClick={cancelQuestionEdit} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600">
+                            ยกเลิกการแก้ไข
+                          </button>
+                        )}
                       </div>
-                    ))}
-                    {editingQuestionId && (
-                      <button type="button" onClick={cancelQuestionEdit} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600">
-                        ยกเลิกการแก้ไข
-                      </button>
-                    )}
-                    <QuizQuestionSummary
-                      quizzes={quizPreview || []}
-                      activeQuizType={questionForm.quiz_type}
-                      onEdit={editQuestion}
-                      onDelete={deleteQuestion}
-                    />
+                      <QuizQuestionSummary
+                        quizzes={quizPreview || []}
+                        activeQuizType={questionForm.quiz_type}
+                        onEdit={editQuestion}
+                        onDelete={deleteQuestion}
+                      />
+                    </div>
                   </QuickPanel>
                 </section>
 
@@ -1753,43 +1780,53 @@ function EvaluationQuestionForm({ form, setForm, disabled, disabledReason, editi
 
 function QuizQuestionSummary({ quizzes, activeQuizType, onEdit, onDelete }: {
   quizzes: AdminQuiz[];
-  activeQuizType: QuizType;
+  activeQuizType: QuizType | '';
   onEdit: (quizType: QuizType, question: AdminQuiz['questions'][number]) => void;
   onDelete: (questionId: number) => void;
 }) {
-  const quiz = quizzes.find((item) => item.quiz_type === activeQuizType);
-  const title = activeQuizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน';
+  const visibleQuizzes = activeQuizType ? quizzes.filter((item) => item.quiz_type === activeQuizType) : quizzes;
+  const totalQuestions = visibleQuizzes.reduce((sum, quiz) => sum + quiz.questions.length, 0);
+  const title = activeQuizType ? (activeQuizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน') : 'ข้อสอบทั้งหมด';
 
   return (
     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <p className="text-xs font-black text-slate-600">ข้อสอบที่บันทึกไว้ · {title}</p>
-        <span className="rounded-full bg-white px-2 py-1 text-[11px] font-black text-slate-500">{quiz?.questions.length || 0} ข้อ</span>
+        <span className="rounded-full bg-white px-2 py-1 text-[11px] font-black text-slate-500">{totalQuestions} ข้อ</span>
       </div>
-      {!quiz || quiz.questions.length === 0 ? (
+      {totalQuestions === 0 ? (
         <p className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-4 text-center text-xs font-bold text-slate-400">ยังไม่มีข้อสอบในส่วนนี้</p>
       ) : (
         <div className="grid gap-2">
-          {quiz.questions.map((question, index) => (
-            <div key={question.question_id} className="rounded-xl bg-white p-3 ring-1 ring-slate-100">
-              <div className="flex items-start justify-between gap-2">
-                <p className="min-w-0 flex-1 break-words text-xs font-black text-slate-800">{index + 1}. {question.question_text}</p>
-                <div className="flex shrink-0 gap-1">
-                  <button type="button" onClick={() => onEdit(activeQuizType, question)} className="rounded-lg bg-blue-50 p-2 text-blue-600" title="แก้ไขข้อสอบ">
-                    <Edit3 size={13} />
-                  </button>
-                  <button type="button" onClick={() => onDelete(question.question_id)} className="rounded-lg bg-red-50 p-2 text-red-600" title="ลบข้อสอบ">
-                    <Trash2 size={13} />
-                  </button>
+          {visibleQuizzes.map((quiz) => (
+            <div key={quiz.quiz_id || quiz.quiz_type} className="grid gap-2">
+              {!activeQuizType && (
+                <p className="rounded-xl bg-white px-3 py-2 text-xs font-black text-blue-700 ring-1 ring-blue-50">
+                  {quiz.quiz_type === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน'}
+                </p>
+              )}
+              {quiz.questions.map((question, index) => (
+                <div key={question.question_id} className="rounded-xl bg-white p-3 ring-1 ring-slate-100">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="min-w-0 flex-1 break-words text-xs font-black text-slate-800">{index + 1}. {question.question_text}</p>
+                    <div className="flex shrink-0 gap-1">
+                      <button type="button" onClick={() => onEdit(quiz.quiz_type, question)} className="rounded-lg bg-blue-50 p-2 text-blue-600" title="แก้ไขข้อสอบ">
+                        <Edit3 size={13} />
+                      </button>
+                      <button type="button" onClick={() => onDelete(question.question_id)} className="rounded-lg bg-red-50 p-2 text-red-600" title="ลบข้อสอบ">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-2 grid gap-1">
+                    {question.choices.map((choice) => (
+                      <p key={choice.choice_id} className={`rounded-lg px-2 py-1 text-[11px] font-bold ${choice.is_correct ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-50 text-slate-500'}`}>
+                        {choice.choice_text}{choice.is_correct ? ' · คำตอบถูก' : ''}
+                      </p>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <div className="mt-2 grid gap-1">
-                {question.choices.map((choice) => (
-                  <p key={choice.choice_id} className={`rounded-lg px-2 py-1 text-[11px] font-bold ${choice.is_correct ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-50 text-slate-500'}`}>
-                    {choice.choice_text}{choice.is_correct ? ' · คำตอบถูก' : ''}
-                  </p>
-                ))}
-              </div>
+              ))}
             </div>
           ))}
         </div>
@@ -2115,7 +2152,7 @@ function CourseForm({
           </span>
           <input
             type="checkbox"
-            checked={Number(form.post_quiz_enabled ?? 1) === 1}
+            checked={toEnabledBoolean(form.post_quiz_enabled, true)}
             onChange={(event) => update('post_quiz_enabled', event.target.checked)}
             className="h-5 w-5 accent-blue-600"
           />
@@ -2139,16 +2176,17 @@ function CourseForm({
   );
 }
 
-function QuickPanel({ title, icon, children, onSubmit, submitLabel = 'เพิ่มข้อมูล', disabled = false }: {
+function QuickPanel({ title, icon, children, onSubmit, submitLabel = 'เพิ่มข้อมูล', disabled = false, className = '' }: {
   title: string;
   icon: React.ReactNode;
   children: React.ReactNode;
   onSubmit: () => void;
   submitLabel?: string;
   disabled?: boolean;
+  className?: string;
 }) {
   return (
-    <section className="min-w-0 overflow-hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+    <section className={`min-w-0 overflow-hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm ${className}`}>
       <h3 className="mb-3 flex items-center gap-2 text-base font-black text-slate-900">{icon} {title}</h3>
       <div className="grid min-w-0 gap-3">{children}</div>
       <button type="button" onClick={onSubmit} disabled={disabled} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">

@@ -491,6 +491,11 @@ function toBooleanFlag(value: unknown) {
   return ['1', 'true', 'yes', 'on'].includes(text) ? 1 : 0;
 }
 
+function toBooleanFlagWithDefault(value: unknown, fallback = 1) {
+  if (value === undefined || value === null || value === '') return fallback;
+  return toBooleanFlag(value);
+}
+
 function normalizeCourseType(value: unknown) {
   const text = String(value || '').trim();
   if (['online', 'zoom', 'onsite'].includes(text)) return text;
@@ -5310,8 +5315,8 @@ app.post('/api/admin/training/courses', async (req, res) => {
         String(body.zoom_url || '').trim(),
         String(body.location || '').trim(),
         toInt(body.pass_score, 70),
-        body.post_quiz_enabled === false ? 0 : 1,
-        body.certificate_enabled === false ? 0 : 1,
+        toBooleanFlagWithDefault(body.post_quiz_enabled, 1),
+        toBooleanFlagWithDefault(body.certificate_enabled, 1),
       ],
     );
     if (status === 'open') {
@@ -5366,8 +5371,8 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
         String(body.zoom_url || '').trim(),
         String(body.location || '').trim(),
         toInt(body.pass_score, 70),
-        body.post_quiz_enabled === false ? 0 : 1,
-        body.certificate_enabled === false ? 0 : 1,
+        toBooleanFlagWithDefault(body.post_quiz_enabled, 1),
+        toBooleanFlagWithDefault(body.certificate_enabled, 1),
         courseId,
       ],
     );
