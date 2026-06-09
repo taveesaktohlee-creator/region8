@@ -273,7 +273,11 @@ async function readJsonResponse(response: Response) {
   try {
     return JSON.parse(text);
   } catch {
-    return { error: text };
+    const trimmed = text.trim();
+    if (/^<!doctype html/i.test(trimmed) || /^<html/i.test(trimmed)) {
+      return { error: 'เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' };
+    }
+    return { error: trimmed.length > 180 ? `${trimmed.slice(0, 180)}...` : trimmed };
   }
 }
 
@@ -519,6 +523,7 @@ export default function TrainingAdmin() {
   const [materialForm, setMaterialForm] = useState({ title: '' });
   const [materialFile, setMaterialFile] = useState<File | null>(null);
   const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
+  const [isSavingQuestion, setIsSavingQuestion] = useState(false);
   const [questionForm, setQuestionForm] = useState<QuizQuestionFormState>(defaultQuestionForm);
   const [editingQuestionId, setEditingQuestionId] = useState<number | null>(null);
   const [evaluationForm, setEvaluationForm] = useState<EvaluationFormState>(defaultEvaluationForm);
@@ -774,20 +779,45 @@ export default function TrainingAdmin() {
 
   const saveQuestion = async () => {
     if (!selectedCourseId) return toast.warning('กรุณาเลือกหลักสูตรก่อนเพิ่มข้อสอบ');
+    const questionText = questionForm.question_text.trim();
+    const choices = questionForm.choices.flatMap((choice) => {
+      const trimmedChoice = choice.trim();
+      return trimmedChoice ? [trimmedChoice] : [];
+    });
+    const selectedAnswerText = questionForm.choices[questionForm.correct_index]?.trim();
+    if (!questionText) return toast.warning('กรุณาระบุคำถาม');
+    if (choices.length < 2) return toast.warning('กรุณาระบุตัวเลือกอย่างน้อย 2 ตัวเลือก');
+    if (!selectedAnswerText) return toast.warning('กรุณาเลือกคำตอบที่ถูกต้องจากตัวเลือกที่มีข้อความ');
+
     const url = editingQuestionId
       ? `${API_BASE}/api/admin/training/questions/${editingQuestionId}`
       : `${API_BASE}/api/admin/training/courses/${selectedCourseId}/questions`;
-    const res = await fetch(url, {
-      method: editingQuestionId ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...questionForm, course_id: selectedCourseId }),
-    });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || (editingQuestionId ? 'แก้ไขข้อสอบไม่สำเร็จ' : 'เพิ่มข้อสอบไม่สำเร็จ'));
-    toast.success(data.message);
-    setQuestionForm(defaultQuestionForm);
-    setEditingQuestionId(null);
-    await loadQuizPreview(selectedCourseId).catch(() => undefined);
+    try {
+      setIsSavingQuestion(true);
+      const res = await fetch(url, {
+        method: editingQuestionId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...questionForm,
+          question_text: questionText,
+          choices: questionForm.choices,
+          course_id: selectedCourseId,
+        }),
+      });
+      const data = await readJsonResponse(res);
+      if (!res.ok) {
+        const fallbackMessage = editingQuestionId ? 'แก้ไขข้อสอบไม่สำเร็จ' : 'เพิ่มข้อสอบไม่สำเร็จ';
+        throw new Error(data.error || fallbackMessage);
+      }
+      toast.success(data.message || (editingQuestionId ? 'แก้ไขข้อสอบเรียบร้อยแล้ว' : 'เพิ่มข้อสอบเรียบร้อยแล้ว'));
+      setQuestionForm(defaultQuestionForm);
+      setEditingQuestionId(null);
+      await loadQuizPreview(selectedCourseId).catch(() => undefined);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : (editingQuestionId ? 'แก้ไขข้อสอบไม่สำเร็จ' : 'เพิ่มข้อสอบไม่สำเร็จ'));
+    } finally {
+      setIsSavingQuestion(false);
+    }
   };
 
   const editQuestion = (quizType: QuizType, question: AdminQuiz['questions'][number]) => {
@@ -1082,7 +1112,8 @@ export default function TrainingAdmin() {
                     title={editingQuestionId ? 'แก้ไขข้อสอบ' : 'เพิ่มข้อสอบ'}
                     icon={<FilePlus2 />}
                     onSubmit={saveQuestion}
-                    submitLabel={editingQuestionId ? 'บันทึกการแก้ไข' : 'เพิ่มข้อมูล'}
+                    submitLabel={isSavingQuestion ? 'กำลังบันทึก...' : editingQuestionId ? 'บันทึกการแก้ไข' : 'เพิ่มข้อมูล'}
+                    disabled={isSavingQuestion}
                   >
                     <select value={questionForm.quiz_type} onChange={(e) => setQuestionForm({ ...questionForm, quiz_type: e.target.value as QuizType })} className="min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none">
                       <option value="pre">ก่อนเรียน</option>
@@ -1340,7 +1371,7 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
             <h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="text-blue-600" /> รายงานผู้ลงทะเบียน</h2>
             <p className="text-sm font-semibold text-slate-500">รายชื่อผู้ลงทะเบียน เวลาเข้าอบรม คะแนนก่อน/หลัง และสถานะยืนยัน</p>
           </div>
-          <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)_minmax(280px,1.35fr)_auto]">
+          <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto]">
             <div className="grid min-w-0 gap-1">
               <label className="text-xs font-black text-slate-500" htmlFor="training-report-course">หลักสูตร</label>
               <select
@@ -1374,7 +1405,8 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
                 ))}
               </select>
             </div>
-            <div className="grid min-w-0 gap-1 md:col-span-2 2xl:col-span-1">
+            <button type="button" onClick={onRefresh} className="mt-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-600"><RefreshCw size={16} /></button>
+            <div className="grid min-w-0 gap-1 md:col-span-3">
               <label className="text-xs font-black text-slate-500" htmlFor="training-report-search">ค้นหา</label>
               <div className="relative min-w-0">
                 <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
@@ -1390,7 +1422,6 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
                 />
               </div>
             </div>
-            <button type="button" onClick={onRefresh} className="mt-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-600"><RefreshCw size={16} /></button>
           </div>
         </div>
 
