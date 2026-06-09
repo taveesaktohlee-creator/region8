@@ -70,7 +70,7 @@ export default function Index() {
       .catch(() => { setMenuItems(cached ?? []); setPermLoaded(true); });
   }, [userData]);
 
-  const visibleCards = (menuItems ?? []).filter(menu => menu.menu_type === 'content');
+  const visibleCards = (menuItems ?? []).filter(menu => menu.menu_type === 'content' && menu.menu_key !== 'vba_reports');
 
   const handleLogout = async () => {
     stopHeartbeat();

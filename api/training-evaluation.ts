@@ -324,6 +324,39 @@ export default async function handler(req: any, res: any) {
       return sendJson(res, 200, { message: 'ลบหัวข้อการประเมินเรียบร้อยแล้ว' });
     }
 
+    if (req.method === 'PUT') {
+      if (!questionId) return sendJson(res, 400, { error: 'ไม่พบรหัสหัวข้อประเมิน' });
+      const body = await readBody(req);
+      const questionText = String(body.question_text || '').trim();
+      const questionType = normalizeQuestionType(body.question_type);
+      const options = Array.isArray(body.options)
+        ? body.options.map((option: unknown) => String(option || '').trim()).filter(Boolean)
+        : [];
+
+      if (!questionText) return sendJson(res, 400, { error: 'กรุณาระบุหัวข้อการประเมิน' });
+      if ((questionType === 'single_choice' || questionType === 'multiple_choice') && options.length < 2) {
+        return sendJson(res, 400, { error: 'คำถามแบบตัวเลือกต้องมีตัวเลือกอย่างน้อย 2 รายการ' });
+      }
+
+      const [result]: any = await pool.query(
+        `UPDATE training_evaluation_questions
+         SET question_text = ?, question_type = ?, is_required = ?, sort_order = ?
+         WHERE question_id = ?`,
+        [questionText, questionType, body.is_required === false ? 0 : 1, toInt(body.sort_order), questionId],
+      );
+      if (result.affectedRows === 0) return sendJson(res, 404, { error: 'ไม่พบหัวข้อประเมินที่ต้องการแก้ไข' });
+
+      await pool.query('DELETE FROM training_evaluation_options WHERE question_id = ?', [questionId]);
+      if (options.length > 0) {
+        await pool.query(
+          'INSERT INTO training_evaluation_options (question_id, option_text, sort_order) VALUES ?',
+          [options.map((option: string, index: number) => [questionId, option, index + 1])],
+        );
+      }
+
+      return sendJson(res, 200, { message: 'แก้ไขหัวข้อการประเมินเรียบร้อยแล้ว' });
+    }
+
     return sendJson(res, 405, { error: 'Method not allowed' });
   } catch (error) {
     console.error(error);

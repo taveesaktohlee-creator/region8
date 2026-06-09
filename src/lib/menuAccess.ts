@@ -15,8 +15,8 @@ export interface UserMenuItem {
   is_active: number;
 }
 
-const MENU_CACHE_KEY = 'menu_allowed_items_v2';
-const PERM_CACHE_KEY = 'menu_allowed_keys_v2';
+const MENU_CACHE_KEY = 'menu_allowed_items_v3';
+const PERM_CACHE_KEY = 'menu_allowed_keys_v3';
 
 const LEGACY_MENU_ITEMS: UserMenuItem[] = [
   { menu_id: 1, menu_key: 'home', menu_name: 'หน้าหลัก', menu_type: 'sidebar', menu_icon: 'Home', menu_href: '/index', sort_order: 1, is_active: 1 },

@@ -400,6 +400,13 @@ async function ensureDefaultMenuItems() {
   }
 
   await pool.query(`
+    DELETE gp FROM group_permissions gp
+    INNER JOIN menu_items m ON m.menu_id = gp.menu_id
+    WHERE m.menu_key = 'vba_reports'
+  `);
+  await pool.query("DELETE FROM menu_items WHERE menu_key = 'vba_reports'");
+
+  await pool.query(`
     INSERT INTO group_permissions (group_id, menu_id, can_view)
     SELECT g.group_id, m.menu_id, 1
     FROM user_groups g
@@ -1774,7 +1781,7 @@ async function exchangeLineCodeForToken(code: string, config: ReturnType<typeof 
     body: params,
   });
   const text = await response.text();
-  let parsed: any = {};
+  let parsed: any;
   try {
     parsed = text ? JSON.parse(text) : {};
   } catch {
@@ -1793,7 +1800,7 @@ async function fetchLineProfile(accessToken: string) {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const text = await response.text();
-  let parsed: any = {};
+  let parsed: any;
   try {
     parsed = text ? JSON.parse(text) : {};
   } catch {
@@ -2159,7 +2166,7 @@ app.get('/api/admin/line-notification-settings', async (_req, res) => {
         DATE_FORMAT(t.updated_at, '%Y-%m-%dT%H:%i:%s') AS updated_at
       FROM menu_items m
       LEFT JOIN line_notification_topics t ON t.menu_key = m.menu_key
-      WHERE m.menu_type = 'content'
+      WHERE m.menu_type = 'content' AND m.menu_key <> 'vba_reports'
       ORDER BY m.sort_order ASC, m.menu_name ASC
     `);
     const [groups]: any = await pool.query(`
@@ -2210,7 +2217,7 @@ app.put('/api/admin/line-notification-settings', async (req, res) => {
     const userId = Number(req.body?.user_id) || null;
 
     const [menus]: any = await pool.query(
-      "SELECT menu_key FROM menu_items WHERE menu_type = 'content' AND is_active = 1",
+      "SELECT menu_key FROM menu_items WHERE menu_type = 'content' AND is_active = 1 AND menu_key <> 'vba_reports'",
     );
     const allowedKeys = new Set(menus.map((menu: any) => String(menu.menu_key)));
 
@@ -5511,7 +5518,9 @@ app.post('/api/admin/training/courses/:id/questions', async (req, res) => {
     const courseId = toInt(req.params.id);
     const quizType = req.body.quiz_type === 'pre' ? 'pre' : 'post';
     const questionText = String(req.body.question_text || '').trim();
-    const choices = Array.isArray(req.body.choices) ? req.body.choices : [];
+    const choices = Array.isArray(req.body.choices)
+      ? req.body.choices.map((choice: unknown) => String(choice || '').trim()).filter(Boolean)
+      : [];
     const correctIndex = toInt(req.body.correct_index);
     if (!questionText || choices.length < 2) return res.status(400).json({ error: 'กรุณาระบุคำถามและตัวเลือกอย่างน้อย 2 ตัวเลือก' });
 
@@ -5529,12 +5538,67 @@ app.post('/api/admin/training/courses/:id/questions', async (req, res) => {
     );
     await pool.query(
       'INSERT INTO training_choices (question_id, choice_text, is_correct, sort_order) VALUES ?',
-      [choices.map((choice: string, index: number) => [questionResult.insertId, String(choice || '').trim(), index === correctIndex ? 1 : 0, index + 1])],
+      [choices.map((choice: string, index: number) => [questionResult.insertId, choice, index === correctIndex ? 1 : 0, index + 1])],
     );
     res.json({ message: 'เพิ่มข้อสอบเรียบร้อยแล้ว', question_id: questionResult.insertId });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'เพิ่มข้อสอบไม่สำเร็จ' });
+  }
+});
+
+app.put('/api/admin/training/questions/:questionId', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const questionId = toInt(req.params.questionId);
+    const courseId = toInt(req.body.course_id);
+    const quizType = req.body.quiz_type === 'pre' ? 'pre' : 'post';
+    const questionText = String(req.body.question_text || '').trim();
+    const choices = Array.isArray(req.body.choices)
+      ? req.body.choices.map((choice: unknown) => String(choice || '').trim()).filter(Boolean)
+      : [];
+    const correctIndex = Math.max(0, Math.min(toInt(req.body.correct_index), choices.length - 1));
+    if (!questionId) return res.status(400).json({ error: 'ไม่พบรหัสข้อสอบ' });
+    if (!courseId) return res.status(400).json({ error: 'ไม่พบรหัสหลักสูตร' });
+    if (!questionText || choices.length < 2) return res.status(400).json({ error: 'กรุณาระบุคำถามและตัวเลือกอย่างน้อย 2 ตัวเลือก' });
+
+    await pool.query(
+      `INSERT INTO training_quizzes (course_id, quiz_type, title, pass_score)
+       VALUES (?, ?, ?, 70)
+       ON DUPLICATE KEY UPDATE quiz_id = LAST_INSERT_ID(quiz_id)`,
+      [courseId, quizType, quizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน'],
+    );
+    const [quizRows]: any = await pool.query('SELECT quiz_id FROM training_quizzes WHERE quiz_id = LAST_INSERT_ID()');
+    const quizId = quizRows[0]?.quiz_id;
+    const [result]: any = await pool.query(
+      'UPDATE training_questions SET quiz_id = ?, question_text = ?, sort_order = ? WHERE question_id = ?',
+      [quizId, questionText, toInt(req.body.sort_order), questionId],
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'ไม่พบข้อสอบที่ต้องการแก้ไข' });
+
+    await pool.query('DELETE FROM training_choices WHERE question_id = ?', [questionId]);
+    await pool.query(
+      'INSERT INTO training_choices (question_id, choice_text, is_correct, sort_order) VALUES ?',
+      [choices.map((choice: string, index: number) => [questionId, choice, index === correctIndex ? 1 : 0, index + 1])],
+    );
+    res.json({ message: 'แก้ไขข้อสอบเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'แก้ไขข้อสอบไม่สำเร็จ' });
+  }
+});
+
+app.delete('/api/admin/training/questions/:questionId', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const questionId = toInt(req.params.questionId);
+    if (!questionId) return res.status(400).json({ error: 'ไม่พบรหัสข้อสอบ' });
+    const [result]: any = await pool.query('DELETE FROM training_questions WHERE question_id = ?', [questionId]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'ไม่พบข้อสอบที่ต้องการลบ' });
+    res.json({ message: 'ลบข้อสอบเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'ลบข้อสอบไม่สำเร็จ' });
   }
 });
 
@@ -5598,6 +5662,41 @@ app.post('/api/admin/training/courses/:id/evaluation-questions', async (req, res
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'เพิ่มหัวข้อการประเมินไม่สำเร็จ' });
+  }
+});
+
+app.put('/api/admin/training/evaluation-questions/:questionId', async (req, res) => {
+  try {
+    await ensureTrainingTables();
+    const questionId = toInt(req.params.questionId);
+    const questionText = String(req.body.question_text || '').trim();
+    const questionType = normalizeEvaluationQuestionType(req.body.question_type);
+    const options = Array.isArray(req.body.options) ? req.body.options.map((option: unknown) => String(option || '').trim()).filter(Boolean) : [];
+    if (!questionId) return res.status(400).json({ error: 'ไม่พบรหัสหัวข้อประเมิน' });
+    if (!questionText) return res.status(400).json({ error: 'กรุณาระบุหัวข้อการประเมิน' });
+    if (['single_choice', 'multiple_choice'].includes(questionType) && options.length < 2) {
+      return res.status(400).json({ error: 'คำถามแบบตัวเลือกต้องมีตัวเลือกอย่างน้อย 2 รายการ' });
+    }
+
+    const [result]: any = await pool.query(
+      `UPDATE training_evaluation_questions
+       SET question_text = ?, question_type = ?, is_required = ?, sort_order = ?
+       WHERE question_id = ?`,
+      [questionText, questionType, req.body.is_required === false ? 0 : 1, toInt(req.body.sort_order), questionId],
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'ไม่พบหัวข้อประเมินที่ต้องการแก้ไข' });
+
+    await pool.query('DELETE FROM training_evaluation_options WHERE question_id = ?', [questionId]);
+    if (options.length > 0) {
+      await pool.query(
+        'INSERT INTO training_evaluation_options (question_id, option_text, sort_order) VALUES ?',
+        [options.map((option: string, index: number) => [questionId, option, index + 1])],
+      );
+    }
+    res.json({ message: 'แก้ไขหัวข้อการประเมินเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'แก้ไขหัวข้อการประเมินไม่สำเร็จ' });
   }
 });
 
@@ -5837,7 +5936,7 @@ app.get('/api/users/:id/menu-permissions', async (req, res) => {
       `SELECT m.menu_key
        FROM menu_items m
        INNER JOIN group_permissions gp ON m.menu_id = gp.menu_id
-       WHERE gp.group_id = ? AND gp.can_view = 1 AND m.is_active = 1`,
+       WHERE gp.group_id = ? AND gp.can_view = 1 AND m.is_active = 1 AND m.menu_key <> 'vba_reports'`,
       [groupId]
     );
 
@@ -5867,7 +5966,7 @@ app.get('/api/users/:id/menus', async (req, res) => {
       const [rows]: any = await pool.query(
         `SELECT menu_id, menu_key, menu_name, menu_type, menu_icon, menu_href, sort_order, is_active
          FROM menu_items
-         WHERE is_active = 1
+         WHERE is_active = 1 AND menu_key <> 'vba_reports'
          ORDER BY menu_type, sort_order, menu_name`
       );
       return res.json(rows);
@@ -5877,7 +5976,7 @@ app.get('/api/users/:id/menus', async (req, res) => {
       `SELECT m.menu_id, m.menu_key, m.menu_name, m.menu_type, m.menu_icon, m.menu_href, m.sort_order, m.is_active
        FROM menu_items m
        INNER JOIN group_permissions gp ON m.menu_id = gp.menu_id
-       WHERE gp.group_id = ? AND gp.can_view = 1 AND m.is_active = 1
+       WHERE gp.group_id = ? AND gp.can_view = 1 AND m.is_active = 1 AND m.menu_key <> 'vba_reports'
        ORDER BY m.menu_type, m.sort_order, m.menu_name`,
       [groupId]
     );
@@ -6098,7 +6197,7 @@ app.get('/api/admin/menus', async (_req, res) => {
   try {
     await ensureDefaultMenuItems();
     const [rows]: any = await pool.query(
-      'SELECT * FROM menu_items ORDER BY menu_type, sort_order'
+      "SELECT * FROM menu_items WHERE menu_key <> 'vba_reports' ORDER BY menu_type, sort_order"
     );
     res.json(rows);
   } catch (error) {
@@ -6142,6 +6241,7 @@ app.get('/api/admin/groups/:id/permissions', async (req, res) => {
       `SELECT m.*, COALESCE(gp.can_view, 0) as can_view
        FROM menu_items m
        LEFT JOIN group_permissions gp ON m.menu_id = gp.menu_id AND gp.group_id = ?
+       WHERE m.menu_key <> 'vba_reports'
        ORDER BY m.menu_type, m.sort_order`,
       [id]
     );

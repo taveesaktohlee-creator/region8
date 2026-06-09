@@ -228,7 +228,7 @@ async function exchangeLineCodeForToken(code: string, config: ReturnType<typeof 
     body: params,
   });
   const text = await response.text();
-  let parsed: any = {};
+  let parsed: any;
   try {
     parsed = text ? JSON.parse(text) : {};
   } catch {
@@ -247,7 +247,7 @@ async function fetchLineProfile(accessToken: string) {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const text = await response.text();
-  let parsed: any = {};
+  let parsed: any;
   try {
     parsed = text ? JSON.parse(text) : {};
   } catch {

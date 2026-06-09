@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, BookOpen, CheckCircle2, Clock, Eye, FilePlus2, ImagePlus, Loader2, Plus, RefreshCw, Save, Search, Star, Trash2, UploadCloud, X } from 'lucide-react';
+import { BarChart3, BookOpen, CheckCircle2, Clock, Edit3, Eye, FilePlus2, ImagePlus, Loader2, Plus, RefreshCw, Save, Search, Star, Trash2, UploadCloud, X } from 'lucide-react';
 import Header from '../Header';
 import LeftSide from '../LeftSide';
 import Footer from '../Footer';
@@ -51,6 +51,7 @@ type AdminQuiz = {
   questions: {
     question_id: number;
     question_text: string;
+    sort_order: number;
     choices: { choice_id: number; choice_text: string; is_correct: number }[];
   }[];
 };
@@ -110,6 +111,14 @@ type EvaluationFormState = {
   sort_order: number;
 };
 
+type QuizQuestionFormState = {
+  quiz_type: QuizType;
+  question_text: string;
+  choices: string[];
+  correct_index: number;
+  sort_order: number;
+};
+
 const courseTypeLabels: Record<Course['course_type'], string> = {
   onsite: 'อบรม ณ สถานที่จัดอบรม (On-site Training)',
   zoom: 'อบรมผ่านระบบ Zoom Meeting',
@@ -139,6 +148,22 @@ const TRAINING_MATERIAL_MAX_BYTES = 18 * 1024 * 1024;
 const defaultQuizSettings = {
   pre: { hours: 0, minutes: 30, pass_score: 70 },
   post: { hours: 0, minutes: 30, pass_score: 70 },
+};
+
+const defaultQuestionForm: QuizQuestionFormState = {
+  quiz_type: 'post',
+  question_text: '',
+  choices: ['', '', '', ''],
+  correct_index: 0,
+  sort_order: 0,
+};
+
+const defaultEvaluationForm: EvaluationFormState = {
+  question_text: '',
+  question_type: 'rating',
+  options: ['', ''],
+  is_required: true,
+  sort_order: 0,
 };
 
 const REPORT_PAGE_SIZE = 10;
@@ -494,14 +519,10 @@ export default function TrainingAdmin() {
   const [materialForm, setMaterialForm] = useState({ title: '' });
   const [materialFile, setMaterialFile] = useState<File | null>(null);
   const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
-  const [questionForm, setQuestionForm] = useState({ quiz_type: 'post', question_text: '', choices: ['', '', '', ''], correct_index: 0 });
-  const [evaluationForm, setEvaluationForm] = useState<EvaluationFormState>({
-    question_text: '',
-    question_type: 'rating' as EvaluationQuestionType,
-    options: ['', ''],
-    is_required: true,
-    sort_order: 0,
-  });
+  const [questionForm, setQuestionForm] = useState<QuizQuestionFormState>(defaultQuestionForm);
+  const [editingQuestionId, setEditingQuestionId] = useState<number | null>(null);
+  const [evaluationForm, setEvaluationForm] = useState<EvaluationFormState>(defaultEvaluationForm);
+  const [editingEvaluationQuestionId, setEditingEvaluationQuestionId] = useState<number | null>(null);
   const [evaluationQuestions, setEvaluationQuestions] = useState<AdminEvaluationQuestion[]>([]);
   const [evaluationReport, setEvaluationReport] = useState<EvaluationReport | null>(null);
   const [allEvaluationReport, setAllEvaluationReport] = useState<EvaluationReport | null>(null);
@@ -637,6 +658,10 @@ export default function TrainingAdmin() {
   const selectCourse = (course: Course) => {
     setSelectedCourseId(course.course_id || null);
     setForm({ ...emptyCourse, ...course, certificate_enabled: Boolean(course.certificate_enabled) });
+    setQuestionForm(defaultQuestionForm);
+    setEditingQuestionId(null);
+    setEvaluationForm(defaultEvaluationForm);
+    setEditingEvaluationQuestionId(null);
     if (course.course_id) {
       loadQuizPreview(course.course_id).catch(() => toast.error('โหลดการตั้งค่าแบบทดสอบไม่สำเร็จ'));
       loadCourseMaterials(course.course_id).catch(() => setCourseMaterials([]));
@@ -653,7 +678,10 @@ export default function TrainingAdmin() {
     setEvaluationQuestions([]);
     setEvaluationReport(null);
     setCourseMaterials([]);
-    setEvaluationForm({ question_text: '', question_type: 'rating', options: ['', ''], is_required: true, sort_order: 0 });
+    setQuestionForm(defaultQuestionForm);
+    setEditingQuestionId(null);
+    setEvaluationForm(defaultEvaluationForm);
+    setEditingEvaluationQuestionId(null);
   };
 
   const saveCourse = async () => {
@@ -744,39 +772,83 @@ export default function TrainingAdmin() {
     }
   };
 
-  const addQuestion = async () => {
+  const saveQuestion = async () => {
     if (!selectedCourseId) return toast.warning('กรุณาเลือกหลักสูตรก่อนเพิ่มข้อสอบ');
-    const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/questions`, {
-      method: 'POST',
+    const url = editingQuestionId
+      ? `${API_BASE}/api/admin/training/questions/${editingQuestionId}`
+      : `${API_BASE}/api/admin/training/courses/${selectedCourseId}/questions`;
+    const res = await fetch(url, {
+      method: editingQuestionId ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(questionForm),
+      body: JSON.stringify({ ...questionForm, course_id: selectedCourseId }),
     });
     const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'เพิ่มข้อสอบไม่สำเร็จ');
+    if (!res.ok) return toast.error(data.error || (editingQuestionId ? 'แก้ไขข้อสอบไม่สำเร็จ' : 'เพิ่มข้อสอบไม่สำเร็จ'));
     toast.success(data.message);
-    setQuestionForm({ quiz_type: 'post', question_text: '', choices: ['', '', '', ''], correct_index: 0 });
+    setQuestionForm(defaultQuestionForm);
+    setEditingQuestionId(null);
     await loadQuizPreview(selectedCourseId).catch(() => undefined);
   };
 
-  const addEvaluationQuestion = async () => {
+  const editQuestion = (quizType: QuizType, question: AdminQuiz['questions'][number]) => {
+    const correctIndex = Math.max(0, question.choices.findIndex((choice) => Number(choice.is_correct) === 1));
+    setQuestionForm({
+      quiz_type: quizType,
+      question_text: question.question_text,
+      choices: [...question.choices.map((choice) => choice.choice_text), '', '', '', ''].slice(0, Math.max(4, question.choices.length)),
+      correct_index: correctIndex < 0 ? 0 : correctIndex,
+      sort_order: Number(question.sort_order || 0),
+    });
+    setEditingQuestionId(question.question_id);
+  };
+
+  const cancelQuestionEdit = () => {
+    setQuestionForm(defaultQuestionForm);
+    setEditingQuestionId(null);
+  };
+
+  const deleteQuestion = async (questionId: number) => {
+    if (!selectedCourseId) return;
+    const confirmed = await confirmDialog({ text: 'ต้องการลบข้อสอบนี้หรือไม่' });
+    if (!confirmed) return;
+    const res = await fetch(`${API_BASE}/api/admin/training/questions/${questionId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) return toast.error(data.error || 'ลบข้อสอบไม่สำเร็จ');
+    toast.success(data.message);
+    if (editingQuestionId === questionId) cancelQuestionEdit();
+    await loadQuizPreview(selectedCourseId).catch(() => undefined);
+  };
+
+  const saveEvaluationQuestion = async () => {
     if (!selectedCourseId) return toast.warning('กรุณาเลือกหลักสูตรก่อนเพิ่มหัวข้อประเมิน');
-    const options = evaluationForm.options.map((option) => option.trim()).filter(Boolean);
+    const options = evaluationForm.options.flatMap((option) => {
+      const trimmedOption = option.trim();
+      return trimmedOption ? [trimmedOption] : [];
+    });
     const needsOptions = evaluationForm.question_type === 'single_choice' || evaluationForm.question_type === 'multiple_choice';
     if (!evaluationForm.question_text.trim()) return toast.warning('กรุณาระบุหัวข้อการประเมิน');
     if (needsOptions && options.length < 2) return toast.warning('คำถามแบบตัวเลือกต้องมีตัวเลือกอย่างน้อย 2 รายการ');
 
     const payload = { ...evaluationForm, options };
     try {
-      const { response, data } = await fetchJsonWithFallback(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/evaluation-questions`, getEvaluationProxyUrl({ courseId: selectedCourseId }), {
-        method: 'POST',
+      const { response, data } = await fetchJsonWithFallback(
+        editingEvaluationQuestionId
+          ? `${API_BASE}/api/admin/training/evaluation-questions/${editingEvaluationQuestionId}`
+          : `${API_BASE}/api/admin/training/courses/${selectedCourseId}/evaluation-questions`,
+        editingEvaluationQuestionId
+          ? getEvaluationProxyUrl({ questionId: editingEvaluationQuestionId })
+          : getEvaluationProxyUrl({ courseId: selectedCourseId }),
+        {
+        method: editingEvaluationQuestionId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
-      if (!response.ok) throw new Error(data.error || 'เพิ่มหัวข้อการประเมินไม่สำเร็จ');
+        },
+      );
+      if (!response.ok) throw new Error(data.error || (editingEvaluationQuestionId ? 'แก้ไขหัวข้อการประเมินไม่สำเร็จ' : 'เพิ่มหัวข้อการประเมินไม่สำเร็จ'));
       toast.success(data.message);
     } catch {
       const current = loadLocalEvaluationQuestions(selectedCourseId);
-      const questionId = Date.now();
+      const questionId = editingEvaluationQuestionId || Date.now();
       const localQuestion: AdminEvaluationQuestion = {
         question_id: questionId,
         question_text: payload.question_text,
@@ -788,15 +860,36 @@ export default function TrainingAdmin() {
           option_text: option,
         })),
       };
-      const next = [...current, localQuestion].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.question_id - b.question_id);
+      const next = [
+        ...current.filter((question) => Number(question.question_id) !== Number(questionId)),
+        localQuestion,
+      ].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.question_id - b.question_id);
       saveLocalEvaluationQuestions(selectedCourseId, next);
       setEvaluationQuestions(next);
       setEvaluationReport(getLocalEvaluationReport(selectedCourseId));
-      toast.success('เพิ่มหัวข้อการประเมินเรียบร้อยแล้ว');
+      toast.success(editingEvaluationQuestionId ? 'แก้ไขหัวข้อการประเมินเรียบร้อยแล้ว' : 'เพิ่มหัวข้อการประเมินเรียบร้อยแล้ว');
     }
-    setEvaluationForm({ question_text: '', question_type: 'rating', options: ['', ''], is_required: true, sort_order: 0 });
+    setEvaluationForm(defaultEvaluationForm);
+    setEditingEvaluationQuestionId(null);
     await loadEvaluationQuestions(selectedCourseId).catch(() => undefined);
     await loadEvaluationReport(selectedCourseId).catch(() => undefined);
+  };
+
+  const editEvaluationQuestion = (question: AdminEvaluationQuestion) => {
+    const optionTexts = question.options.length > 0 ? question.options.map((option) => option.option_text) : ['', ''];
+    setEvaluationForm({
+      question_text: question.question_text,
+      question_type: question.question_type,
+      options: optionTexts.length >= 2 ? optionTexts : [...optionTexts, ''].slice(0, 2),
+      is_required: Number(question.is_required) === 1,
+      sort_order: Number(question.sort_order || 0),
+    });
+    setEditingEvaluationQuestionId(question.question_id);
+  };
+
+  const cancelEvaluationEdit = () => {
+    setEvaluationForm(defaultEvaluationForm);
+    setEditingEvaluationQuestionId(null);
   };
 
   const deleteEvaluationQuestion = async (questionId: number) => {
@@ -819,6 +912,7 @@ export default function TrainingAdmin() {
       setEvaluationReport(getLocalEvaluationReport(selectedCourseId));
     }
     toast.success(successMessage);
+    if (editingEvaluationQuestionId === questionId) cancelEvaluationEdit();
     setEvaluationQuestions((current) => current.filter((question) => Number(question.question_id) !== Number(questionId)));
     loadEvaluationReport(selectedCourseId).catch(() => undefined);
   };
@@ -911,7 +1005,14 @@ export default function TrainingAdmin() {
                   </div>
                   <button type="button" onClick={resetForm} className="rounded-2xl bg-blue-600 p-3 text-white"><Plus size={18} /></button>
                 </div>
-                <CourseForm form={form} setForm={setForm} onSave={saveCourse} selectedCourseId={selectedCourseId} isSaving={isSavingCourse} />
+                <CourseForm
+                  key={selectedCourseId ?? 'new-course'}
+                  form={form}
+                  setForm={setForm}
+                  onSave={saveCourse}
+                  selectedCourseId={selectedCourseId}
+                  isSaving={isSavingCourse}
+                />
               </section>
 
               <div className="relative z-10 flex min-w-0 flex-col gap-6">
@@ -920,7 +1021,7 @@ export default function TrainingAdmin() {
                     <h2 className="flex items-center gap-2 text-lg font-black"><BookOpen className="text-blue-600" /> รายการหลักสูตร</h2>
                     <div className="flex min-w-0 items-center gap-2 rounded-2xl border border-slate-200 px-3 py-2 sm:min-w-72">
                       <Search size={16} className="text-slate-400" />
-                      <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ค้นหาหลักสูตร..." className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none" />
+                      <input aria-label="ค้นหาหลักสูตร" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ค้นหาหลักสูตร..." className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none" />
                     </div>
                   </div>
                   <div className="grid gap-3">
@@ -977,15 +1078,20 @@ export default function TrainingAdmin() {
                       </div>
                     )}
                   </QuickPanel>
-                  <QuickPanel title="เพิ่มข้อสอบ" icon={<FilePlus2 />} onSubmit={addQuestion}>
-                    <select value={questionForm.quiz_type} onChange={(e) => setQuestionForm({ ...questionForm, quiz_type: e.target.value })} className="min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none">
+                  <QuickPanel
+                    title={editingQuestionId ? 'แก้ไขข้อสอบ' : 'เพิ่มข้อสอบ'}
+                    icon={<FilePlus2 />}
+                    onSubmit={saveQuestion}
+                    submitLabel={editingQuestionId ? 'บันทึกการแก้ไข' : 'เพิ่มข้อมูล'}
+                  >
+                    <select value={questionForm.quiz_type} onChange={(e) => setQuestionForm({ ...questionForm, quiz_type: e.target.value as QuizType })} className="min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none">
                       <option value="pre">ก่อนเรียน</option>
                       <option value="post">หลังเรียน</option>
                     </select>
                     <Input value={questionForm.question_text} onChange={(v) => setQuestionForm({ ...questionForm, question_text: v })} placeholder="คำถาม" />
                     {questionForm.choices.map((choice, index) => (
-                      <div key={index} className="flex gap-2">
-                        <input type="radio" checked={questionForm.correct_index === index} onChange={() => setQuestionForm({ ...questionForm, correct_index: index })} />
+                      <div key={`quiz-choice-${index + 1}-${questionForm.choices.length}`} className="flex gap-2">
+                        <input aria-label={`กำหนดตัวเลือก ${index + 1} เป็นคำตอบถูก`} type="radio" checked={questionForm.correct_index === index} onChange={() => setQuestionForm({ ...questionForm, correct_index: index })} />
                         <Input value={choice} onChange={(v) => {
                           const next = [...questionForm.choices];
                           next[index] = v;
@@ -993,6 +1099,17 @@ export default function TrainingAdmin() {
                         }} placeholder={`ตัวเลือก ${index + 1}`} />
                       </div>
                     ))}
+                    {editingQuestionId && (
+                      <button type="button" onClick={cancelQuestionEdit} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600">
+                        ยกเลิกการแก้ไข
+                      </button>
+                    )}
+                    <QuizQuestionSummary
+                      quizzes={quizPreview || []}
+                      activeQuizType={questionForm.quiz_type}
+                      onEdit={editQuestion}
+                      onDelete={deleteQuestion}
+                    />
                   </QuickPanel>
                 </section>
 
@@ -1042,11 +1159,14 @@ export default function TrainingAdmin() {
                       setForm={setEvaluationForm}
                       disabled={!selectedCourseId}
                       disabledReason={!selectedCourseId ? 'กรุณาเลือกหลักสูตรจากรายการ หรือบันทึกหลักสูตรใหม่ก่อนเพิ่มหัวข้อประเมิน' : ''}
-                      onSubmit={addEvaluationQuestion}
+                      editingQuestionId={editingEvaluationQuestionId}
+                      onCancelEdit={cancelEvaluationEdit}
+                      onSubmit={saveEvaluationQuestion}
                     />
                     <EvaluationSummary
                       questions={evaluationQuestions}
                       report={evaluationReport}
+                      onEdit={editEvaluationQuestion}
                       onDelete={deleteEvaluationQuestion}
                     />
                   </div>
@@ -1106,7 +1226,10 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
   }, [courses, report]);
   const divisionOptions = useMemo(() => {
     const divisions = Array.from(
-      new Set(report.map((row) => String(row.Division_Province || '').trim()).filter(Boolean)),
+      new Set(report.flatMap((row) => {
+        const division = String(row.Division_Province || '').trim();
+        return division ? [division] : [];
+      })),
     );
     return ['ทั้งหมด', ...divisions.sort((a, b) => a.localeCompare(b, 'th'))];
   }, [report]);
@@ -1209,54 +1332,65 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
     });
   }, [evaluationReport?.questions, filteredEvaluationResponses, reportSearch, selectedDivision, selectedReportCourseId]);
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [selectedDivision, selectedReportCourseId, reportSearch, report]);
-
   return (
     <section className="space-y-5">
       <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-        <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
+        <div className="mb-5 grid min-w-0 gap-4 xl:grid-cols-[minmax(240px,0.8fr)_minmax(0,2fr)] xl:items-start">
+          <div className="min-w-0">
             <h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="text-blue-600" /> รายงานผู้ลงทะเบียน</h2>
             <p className="text-sm font-semibold text-slate-500">รายชื่อผู้ลงทะเบียน เวลาเข้าอบรม คะแนนก่อน/หลัง และสถานะยืนยัน</p>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <label className="text-xs font-black text-slate-500" htmlFor="training-report-course">หลักสูตร</label>
-            <select
-              id="training-report-course"
-              value={selectedReportCourseId}
-              onChange={(event) => setSelectedReportCourseId(event.target.value)}
-              className="min-w-[280px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-            >
-              <option value="ทั้งหมด">ทุกหลักสูตร</option>
-              {courseOptions.map((course) => (
-                <option key={course.courseId} value={course.courseId}>{course.title}</option>
-              ))}
-            </select>
-            <label className="text-xs font-black text-slate-500" htmlFor="training-report-division">หน่วยงาน</label>
-            <select
-              id="training-report-division"
-              value={selectedDivision}
-              onChange={(event) => setSelectedDivision(event.target.value)}
-              className="min-w-[260px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-            >
-              {divisionOptions.map((division) => (
-                <option key={division} value={division}>{division}</option>
-              ))}
-            </select>
-            <label className="sr-only" htmlFor="training-report-search">ค้นหารายงานผู้ลงทะเบียน</label>
-            <div className="relative min-w-[260px]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-              <input
-                id="training-report-search"
-                value={reportSearch}
-                onChange={(event) => setReportSearch(event.target.value)}
-                placeholder="ค้นหาผู้ลงทะเบียน หลักสูตร สถานะ หรือคำตอบประเมิน..."
-                className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-              />
+          <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)_minmax(280px,1.35fr)_auto]">
+            <div className="grid min-w-0 gap-1">
+              <label className="text-xs font-black text-slate-500" htmlFor="training-report-course">หลักสูตร</label>
+              <select
+                id="training-report-course"
+                value={selectedReportCourseId}
+                onChange={(event) => {
+                  setSelectedReportCourseId(event.target.value);
+                  setCurrentPage(1);
+                }}
+                className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+              >
+                <option value="ทั้งหมด">ทุกหลักสูตร</option>
+                {courseOptions.map((course) => (
+                  <option key={course.courseId} value={course.courseId}>{course.title}</option>
+                ))}
+              </select>
             </div>
-            <button type="button" onClick={onRefresh} className="rounded-xl bg-slate-100 p-3 text-slate-600"><RefreshCw size={16} /></button>
+            <div className="grid min-w-0 gap-1">
+              <label className="text-xs font-black text-slate-500" htmlFor="training-report-division">หน่วยงาน</label>
+              <select
+                id="training-report-division"
+                value={selectedDivision}
+                onChange={(event) => {
+                  setSelectedDivision(event.target.value);
+                  setCurrentPage(1);
+                }}
+                className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+              >
+                {divisionOptions.map((division) => (
+                  <option key={division} value={division}>{division}</option>
+                ))}
+              </select>
+            </div>
+            <div className="grid min-w-0 gap-1 md:col-span-2 2xl:col-span-1">
+              <label className="text-xs font-black text-slate-500" htmlFor="training-report-search">ค้นหา</label>
+              <div className="relative min-w-0">
+                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input
+                  id="training-report-search"
+                  value={reportSearch}
+                  onChange={(event) => {
+                    setReportSearch(event.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="ค้นหาผู้ลงทะเบียน หลักสูตร สถานะ หรือคำตอบประเมิน..."
+                  className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm font-black text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                />
+              </div>
+            </div>
+            <button type="button" onClick={onRefresh} className="mt-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-600"><RefreshCw size={16} /></button>
           </div>
         </div>
 
@@ -1490,11 +1624,13 @@ function ReportPagination({
   );
 }
 
-function EvaluationQuestionForm({ form, setForm, disabled, disabledReason, onSubmit }: {
+function EvaluationQuestionForm({ form, setForm, disabled, disabledReason, editingQuestionId, onCancelEdit, onSubmit }: {
   form: EvaluationFormState;
   setForm: React.Dispatch<React.SetStateAction<EvaluationFormState>>;
   disabled: boolean;
   disabledReason: string;
+  editingQuestionId: number | null;
+  onCancelEdit: () => void;
   onSubmit: () => void;
 }) {
   const needsOptions = form.question_type === 'single_choice' || form.question_type === 'multiple_choice';
@@ -1524,7 +1660,7 @@ function EvaluationQuestionForm({ form, setForm, disabled, disabledReason, onSub
           <div className="grid gap-2">
             <p className="text-xs font-black text-slate-500">ตัวเลือก</p>
             {form.options.map((option, index) => (
-              <Input key={index} value={option} onChange={(value) => updateOption(index, value)} placeholder={`ตัวเลือก ${index + 1}`} />
+              <Input key={`evaluation-option-${index + 1}-${form.options.length}`} value={option} onChange={(value) => updateOption(index, value)} placeholder={`ตัวเลือก ${index + 1}`} />
             ))}
             <button type="button" onClick={() => setForm((current) => ({ ...current, options: [...current.options, ''] }))} className="rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs font-black text-blue-700">
               เพิ่มตัวเลือก
@@ -1532,17 +1668,70 @@ function EvaluationQuestionForm({ form, setForm, disabled, disabledReason, onSub
           </div>
         )}
         {disabledReason && <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">{disabledReason}</p>}
+        {editingQuestionId && (
+          <button type="button" onClick={onCancelEdit} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600">
+            ยกเลิกการแก้ไข
+          </button>
+        )}
         <button type="button" onClick={onSubmit} disabled={disabled} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
-          <Save size={16} /> {disabled ? 'เลือก/บันทึกหลักสูตรก่อน' : 'เพิ่มหัวข้อประเมิน'}
+          <Save size={16} /> {disabled ? 'เลือก/บันทึกหลักสูตรก่อน' : editingQuestionId ? 'บันทึกการแก้ไข' : 'เพิ่มหัวข้อประเมิน'}
         </button>
       </div>
     </div>
   );
 }
 
-function EvaluationSummary({ questions, report, onDelete }: {
+function QuizQuestionSummary({ quizzes, activeQuizType, onEdit, onDelete }: {
+  quizzes: AdminQuiz[];
+  activeQuizType: QuizType;
+  onEdit: (quizType: QuizType, question: AdminQuiz['questions'][number]) => void;
+  onDelete: (questionId: number) => void;
+}) {
+  const quiz = quizzes.find((item) => item.quiz_type === activeQuizType);
+  const title = activeQuizType === 'pre' ? 'แบบทดสอบก่อนเรียน' : 'แบบทดสอบหลังเรียน';
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-black text-slate-600">ข้อสอบที่บันทึกไว้ · {title}</p>
+        <span className="rounded-full bg-white px-2 py-1 text-[11px] font-black text-slate-500">{quiz?.questions.length || 0} ข้อ</span>
+      </div>
+      {!quiz || quiz.questions.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-4 text-center text-xs font-bold text-slate-400">ยังไม่มีข้อสอบในส่วนนี้</p>
+      ) : (
+        <div className="grid gap-2">
+          {quiz.questions.map((question, index) => (
+            <div key={question.question_id} className="rounded-xl bg-white p-3 ring-1 ring-slate-100">
+              <div className="flex items-start justify-between gap-2">
+                <p className="min-w-0 flex-1 break-words text-xs font-black text-slate-800">{index + 1}. {question.question_text}</p>
+                <div className="flex shrink-0 gap-1">
+                  <button type="button" onClick={() => onEdit(activeQuizType, question)} className="rounded-lg bg-blue-50 p-2 text-blue-600" title="แก้ไขข้อสอบ">
+                    <Edit3 size={13} />
+                  </button>
+                  <button type="button" onClick={() => onDelete(question.question_id)} className="rounded-lg bg-red-50 p-2 text-red-600" title="ลบข้อสอบ">
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+              <div className="mt-2 grid gap-1">
+                {question.choices.map((choice) => (
+                  <p key={choice.choice_id} className={`rounded-lg px-2 py-1 text-[11px] font-bold ${choice.is_correct ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-50 text-slate-500'}`}>
+                    {choice.choice_text}{choice.is_correct ? ' · คำตอบถูก' : ''}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvaluationSummary({ questions, report, onEdit, onDelete }: {
   questions: AdminEvaluationQuestion[];
   report: EvaluationReport | null;
+  onEdit: (question: AdminEvaluationQuestion) => void;
   onDelete: (questionId: number) => void;
 }) {
   const reportByQuestion = new Map((report?.questions || []).map((question) => [question.question_id, question]));
@@ -1562,7 +1751,10 @@ function EvaluationSummary({ questions, report, onDelete }: {
                 <p className="font-black text-slate-900">{index + 1}. {question.question_text}</p>
                 <p className="mt-1 text-xs font-bold text-blue-600">{evaluationTypeLabels[question.question_type]} · {question.is_required ? 'จำเป็นต้องตอบ' : 'ไม่บังคับ'}</p>
               </div>
-              <button type="button" onClick={() => onDelete(question.question_id)} className="rounded-xl bg-red-50 p-2 text-red-600"><Trash2 size={15} /></button>
+              <div className="flex shrink-0 gap-2">
+                <button type="button" onClick={() => onEdit(question)} className="rounded-xl bg-blue-50 p-2 text-blue-600" title="แก้ไขหัวข้อประเมิน"><Edit3 size={15} /></button>
+                <button type="button" onClick={() => onDelete(question.question_id)} className="rounded-xl bg-red-50 p-2 text-red-600" title="ลบหัวข้อประเมิน"><Trash2 size={15} /></button>
+              </div>
             </div>
             {question.options.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
@@ -1605,7 +1797,7 @@ function EvaluationQuestionResult({ summary }: { summary?: EvaluationReport['que
   return (
     <div className="mt-3 grid gap-2">
       {(summary.text_answers || []).length === 0 ? <p className="text-xs font-bold text-slate-400">ยังไม่มีคำตอบข้อความ</p> : summary.text_answers?.map((answer, index) => (
-        <p key={index} className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">{answer}</p>
+        <p key={`${answer}-${index + 1}`} className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">{answer}</p>
       ))}
     </div>
   );
@@ -1748,9 +1940,10 @@ function CourseForm({
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [coverUploadNote, setCoverUploadNote] = useState('');
   const [coverPreviewUrl, setCoverPreviewUrl] = useState('');
-  const [coverImageError, setCoverImageError] = useState(false);
+  const [failedCoverImageSrc, setFailedCoverImageSrc] = useState('');
   const update = (key: keyof Course, value: any) => setForm((current) => ({ ...current, [key]: value }));
   const coverImageSrc = coverPreviewUrl || getTrainingImageUrl(form.thumbnail_url);
+  const shouldShowCoverImage = Boolean(coverImageSrc) && failedCoverImageSrc !== coverImageSrc;
   const duration = splitMinutes(form.duration_minutes);
   const updateDuration = (key: 'hours' | 'minutes', value: string) => {
     const next = Math.max(0, Number(value) || 0);
@@ -1758,16 +1951,6 @@ function CourseForm({
     const minutes = key === 'minutes' ? next : duration.minutes;
     update('duration_minutes', (hours * 60) + minutes);
   };
-
-  useEffect(() => {
-    setCoverUploadNote('');
-    setCoverPreviewUrl('');
-    setCoverImageError(false);
-  }, [selectedCourseId]);
-
-  useEffect(() => {
-    setCoverImageError(false);
-  }, [coverPreviewUrl, form.thumbnail_url]);
 
   const handleCoverUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1779,7 +1962,7 @@ function CourseForm({
       setCoverUploadNote('กำลังย่อและอัปโหลดรูปปก...');
       const optimized = await optimizeCourseCover(file);
       setCoverPreviewUrl(optimized.previewUrl);
-      setCoverImageError(false);
+      setFailedCoverImageSrc('');
       const upload = await uploadTrainingDriveFile({
         kind: 'cover',
         courseTitle: form.title || 'training-course',
@@ -1826,12 +2009,12 @@ function CourseForm({
       <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
           <div className="h-24 w-full shrink-0 overflow-hidden rounded-xl bg-white ring-1 ring-slate-200 sm:w-36">
-            {coverImageSrc && !coverImageError ? (
+            {shouldShowCoverImage ? (
               <img
                 src={coverImageSrc}
                 alt="รูปปกหลักสูตร"
                 className="h-full w-full object-cover"
-                onError={() => setCoverImageError(true)}
+                onError={() => setFailedCoverImageSrc(coverImageSrc)}
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center text-slate-300">
@@ -1906,9 +2089,9 @@ function QuickPanel({ title, icon, children, onSubmit, submitLabel = 'เพิ�
 }
 
 function Input({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
-  return <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200" />;
+  return <input aria-label={placeholder} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200" />;
 }
 
 function Textarea({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
-  return <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="min-h-24 w-full min-w-0 max-w-full resize-y rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200" />;
+  return <textarea aria-label={placeholder} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="min-h-24 w-full min-w-0 max-w-full resize-y rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200" />;
 }

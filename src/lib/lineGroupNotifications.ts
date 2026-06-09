@@ -180,7 +180,7 @@ export async function verifyLineGroup(groupId: string) {
     headers: { Authorization: `Bearer ${token}` },
   });
   const text = await response.text();
-  let payload: any = {};
+  let payload: any;
   try {
     payload = text ? JSON.parse(text) : {};
   } catch {
@@ -294,7 +294,7 @@ async function lineMessagingRequest(url: string, init: RequestInit = {}) {
     },
   });
   const text = await response.text();
-  let payload: any = {};
+  let payload: any;
   try {
     payload = text ? JSON.parse(text) : {};
   } catch {
@@ -342,7 +342,7 @@ export async function testLineWebhookEndpoint(endpoint = getLineWebhookUrl()) {
 export async function getLineWebhookStatus(db: DbLike) {
   const recent_events = await getRecentLineWebhookEvents(db);
   const capture_setting = await getLineWebhookCaptureSetting(db);
-  let endpoint_status: any = null;
+  let endpoint_status: any;
   let endpoint_error = '';
   try {
     endpoint_status = await getLineWebhookEndpointStatus();
@@ -381,7 +381,7 @@ async function pushLineText(groupId: string, text: string) {
 
   const bodyText = await response.text();
   if (!response.ok) {
-    let payload: any = {};
+    let payload: any;
     try {
       payload = bodyText ? JSON.parse(bodyText) : {};
     } catch {
