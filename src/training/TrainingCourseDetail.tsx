@@ -127,6 +127,115 @@ function loadYouTubeIframeApi() {
   });
 }
 
+function FileTypeIcon({ type, size = 18 }: { type: string; size?: number }) {
+  let label: string;
+  switch (type) {
+    case 'pdf':
+      label = 'PDF';
+      break;
+    case 'excel':
+      label = 'XLS';
+      break;
+    case 'word':
+      label = 'DOC';
+      break;
+    case 'powerpoint':
+      label = 'PPT';
+      break;
+    case 'zip':
+      label = 'ZIP';
+      break;
+    case 'image':
+      label = 'IMG';
+      break;
+    case 'video':
+      label = 'VID';
+      break;
+    default:
+      label = 'FILE';
+  }
+
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0"
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <text
+        x="12"
+        y="17"
+        textAnchor="middle"
+        fill="currentColor"
+        fontSize="5"
+        fontWeight="900"
+        fontFamily="sans-serif"
+        letterSpacing="0.1"
+        stroke="none"
+      >
+        {label}
+      </text>
+    </svg>
+  );
+}
+
+function getFileDetails(fileName: string) {
+  const name = fileName.toLowerCase();
+  if (name.endsWith('.pdf')) {
+    return {
+      type: 'pdf',
+      colorClass: 'text-rose-600 bg-rose-50 border-rose-200/50',
+    };
+  }
+  if (name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv')) {
+    return {
+      type: 'excel',
+      colorClass: 'text-emerald-600 bg-emerald-50 border-emerald-200/50',
+    };
+  }
+  if (name.endsWith('.docx') || name.endsWith('.doc')) {
+    return {
+      type: 'word',
+      colorClass: 'text-blue-600 bg-blue-50 border-blue-200/50',
+    };
+  }
+  if (name.endsWith('.pptx') || name.endsWith('.ppt')) {
+    return {
+      type: 'powerpoint',
+      colorClass: 'text-amber-600 bg-amber-50 border-amber-200/50',
+    };
+  }
+  if (name.endsWith('.zip') || name.endsWith('.rar') || name.endsWith('.7z') || name.endsWith('.tar') || name.endsWith('.gz')) {
+    return {
+      type: 'zip',
+      colorClass: 'text-purple-600 bg-purple-50 border-purple-200/50',
+    };
+  }
+  if (name.endsWith('.mp4') || name.endsWith('.mov') || name.endsWith('.mkv') || name.endsWith('.avi')) {
+    return {
+      type: 'video',
+      colorClass: 'text-indigo-600 bg-indigo-50 border-indigo-200/50',
+    };
+  }
+  if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.gif') || name.endsWith('.svg') || name.endsWith('.webp')) {
+    return {
+      type: 'image',
+      colorClass: 'text-cyan-600 bg-cyan-50 border-cyan-200/50',
+    };
+  }
+  return {
+    type: 'generic',
+    colorClass: 'text-slate-600 bg-slate-50 border-slate-200/50',
+  };
+}
+
 function hasScore(score: unknown) {
   return score !== null && score !== undefined && String(score).trim() !== '';
 }
@@ -330,15 +439,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
     : isOnlineCourse && !hasCompletedOnlineVideo
       ? 'กรุณาดูวิดีโออบรมให้จบก่อน ระบบจึงจะแสดงแบบทดสอบหลังเรียน'
       : '';
-  const hasEnteredTraining = Boolean(
-    enrollment
-    && (
-      activeLogId
-      || enrollment.status === 'in_progress'
-      || enrollment.status === 'completed'
-      || Number(enrollment.attended_seconds || 0) > 0
-    ),
-  );
+  const hasEnteredTraining = Boolean(enrollment && (activeLogId || enrollment.status === 'completed' || Number(enrollment.evaluated || 0) === 1));
 
   const handleLogout = () => {
     localStorage.removeItem('user');
@@ -516,7 +617,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
               <InfoBlock title="เนื้อหาการอบรม">{course.content_summary || course.description}</InfoBlock>
               <InfoBlock title="วิธีการประเมินผล">{course.evaluation_method || `ทำแบบทดสอบหลังเรียนให้ได้ตั้งแต่ ${course.pass_score || 70}% ขึ้นไป`}</InfoBlock>
 
-              {hasEnteredTraining && (
+              {hasEnteredTraining ? (
                 <TrainingAssessmentTabs
                   preQuiz={preQuiz}
                   postQuiz={postQuiz}
@@ -531,7 +632,12 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
                   onQuizSubmitted={handleQuizSubmitted}
                   onEvaluationSubmitted={handleEvaluationSubmitted}
                 />
-              )}
+              ) : enrollment ? (
+                <LockedTrainingStepNotice
+                  title="เริ่มเข้าอบรมก่อนทำแบบทดสอบ"
+                  reason="คลิกปุ่มเริ่มเข้าอบรมเพื่อเปิดแบบทดสอบก่อนเรียน แบบทดสอบหลังเรียน และแบบประเมินหลังอบรม"
+                />
+              ) : null}
             </div>
 
             <aside className="flex flex-col gap-5">
@@ -543,18 +649,26 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
                   <div className="space-y-3">
                     {materials.length === 0 ? (
                       <p className="text-sm font-semibold text-slate-400">ยังไม่มีเอกสารประกอบ</p>
-                    ) : materials.map((material) => (
-                      <a
-                        key={material.material_id}
-                        href={getTrainingFileUrl(material.drive_url)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center justify-between rounded-[11px] border border-[#e0e0e0] bg-[#fafafc] px-4 py-3 text-sm font-bold text-slate-700 transition-all duration-300 hover:border-blue-300 hover:bg-blue-50/20 hover:text-blue-600"
-                      >
-                        <span className="truncate pr-2">{material.title}</span>
-                        <ExternalLink size={15} className="shrink-0 text-blue-600" />
-                      </a>
-                    ))}
+                    ) : materials.map((material) => {
+                      const { type, colorClass } = getFileDetails(material.title);
+                      return (
+                        <a
+                          key={material.material_id}
+                          href={getTrainingFileUrl(material.drive_url)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-3 rounded-[11px] border border-[#e0e0e0] bg-[#fafafc] p-3 text-sm font-bold text-slate-700 transition-all duration-300 hover:border-blue-300 hover:bg-blue-50/20 hover:text-blue-600"
+                        >
+                          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${colorClass}`}>
+                            <FileTypeIcon type={type} size={18} />
+                          </div>
+                          <span className="flex-1 min-w-0 break-words text-slate-700 leading-snug">
+                            {material.title}
+                          </span>
+                          <ExternalLink size={15} className="shrink-0 text-blue-600 ml-1" />
+                        </a>
+                      );
+                    })}
                   </div>
                 </section>
               )}

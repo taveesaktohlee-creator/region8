@@ -2004,17 +2004,14 @@ function QuizSettingCard({
             aria-label={`${enabled ? 'ปิด' : 'เปิด'}${title}`}
             aria-pressed={enabled}
             disabled={disabled || toggling}
-            className={`group relative inline-flex h-12 w-24 shrink-0 items-center rounded-full p-1.5 transition duration-200 focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60 ${
-              enabled ? 'bg-blue-200 hover:bg-blue-300' : 'bg-slate-200 hover:bg-slate-300'
+            className={`relative inline-flex h-10 w-20 shrink-0 items-center rounded-full border-[3px] p-1 transition duration-200 focus:outline-none focus:ring-4 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-60 ${
+              enabled ? 'border-sky-400 bg-sky-400 hover:border-sky-500 hover:bg-sky-500' : 'border-slate-950 bg-white hover:bg-slate-50'
             }`}
           >
-            <span className={`absolute inset-1.5 rounded-full bg-white shadow-inner ring-2 transition ${
-              enabled ? 'ring-blue-300' : 'ring-slate-300'
-            }`} />
-            <span className={`relative flex h-9 w-9 items-center justify-center rounded-full shadow-sm transition duration-200 ${
-              enabled ? 'translate-x-11 bg-blue-500 text-white' : 'translate-x-0 bg-blue-300 text-white'
+            <span className={`flex h-7 w-7 items-center justify-center rounded-full bg-white transition duration-200 ${
+              enabled ? 'translate-x-10 text-sky-500' : 'translate-x-0 border-[3px] border-slate-950 text-slate-950'
             }`}>
-              {toggling ? <Loader2 size={16} className="animate-spin" /> : enabled ? <CheckCircle2 size={16} /> : <X size={16} />}
+              {toggling ? <Loader2 size={14} className="animate-spin" /> : null}
             </span>
           </button>
         </div>
