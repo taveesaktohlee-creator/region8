@@ -27,6 +27,7 @@ type Course = {
   zoom_url: string;
   location: string;
   pass_score: number;
+  pre_quiz_enabled: boolean | number;
   post_quiz_enabled: boolean | number;
   certificate_enabled: boolean;
   enrolled_count?: number;
@@ -185,6 +186,7 @@ const emptyCourse: Course = {
   zoom_url: '',
   location: '',
   pass_score: 70,
+  pre_quiz_enabled: true,
   post_quiz_enabled: true,
   certificate_enabled: true,
 };
@@ -550,6 +552,7 @@ export default function TrainingAdmin() {
   const [activeTab, setActiveTab] = useState<AdminTab>('report');
   const [isSavingCourse, setIsSavingCourse] = useState(false);
   const [savingQuizType, setSavingQuizType] = useState<QuizType | null>(null);
+  const [savingQuizAccessType, setSavingQuizAccessType] = useState<QuizType | null>(null);
 
   const loadCourses = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/admin/training/courses`);
@@ -675,6 +678,7 @@ export default function TrainingAdmin() {
     setForm({
       ...emptyCourse,
       ...course,
+      pre_quiz_enabled: toEnabledBoolean(course.pre_quiz_enabled, true),
       post_quiz_enabled: toEnabledBoolean(course.post_quiz_enabled, true),
       certificate_enabled: toEnabledBoolean(course.certificate_enabled, true),
     });
@@ -713,6 +717,7 @@ export default function TrainingAdmin() {
     try {
       const payload = {
         ...form,
+        pre_quiz_enabled: toEnabledBoolean(form.pre_quiz_enabled, true),
         post_quiz_enabled: toEnabledBoolean(form.post_quiz_enabled, true),
         certificate_enabled: toEnabledBoolean(form.certificate_enabled, true),
       };
@@ -794,6 +799,37 @@ export default function TrainingAdmin() {
       toast.error(error instanceof Error ? error.message : 'เพิ่มเอกสารไม่สำเร็จ');
     } finally {
       setIsUploadingMaterial(false);
+    }
+  };
+
+  const updateCourseQuizAccess = async (quizType: QuizType, enabled: boolean) => {
+    if (!selectedCourseId) return toast.warning('กรุณาเลือกหลักสูตรก่อนเปิด/ปิดแบบทดสอบ');
+    const key = quizType === 'pre' ? 'pre_quiz_enabled' : 'post_quiz_enabled';
+    const nextForm = { ...form, [key]: enabled };
+    setSavingQuizAccessType(quizType);
+    try {
+      const payload = {
+        ...nextForm,
+        pre_quiz_enabled: toEnabledBoolean(nextForm.pre_quiz_enabled, true),
+        post_quiz_enabled: toEnabledBoolean(nextForm.post_quiz_enabled, true),
+        certificate_enabled: toEnabledBoolean(nextForm.certificate_enabled, true),
+      };
+      const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await readJsonResponse(res);
+      if (!res.ok) throw new Error(data?.error || 'บันทึกสถานะแบบทดสอบไม่สำเร็จ');
+      setForm(nextForm);
+      setCourses((current) => current.map((course) => (
+        Number(course.course_id) === Number(selectedCourseId) ? { ...course, [key]: enabled } : course
+      )));
+      toast.success(enabled ? 'เปิดแบบทดสอบเรียบร้อยแล้ว' : 'ปิดแบบทดสอบเรียบร้อยแล้ว');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'บันทึกสถานะแบบทดสอบไม่สำเร็จ');
+    } finally {
+      setSavingQuizAccessType(null);
     }
   };
 
@@ -1200,18 +1236,24 @@ export default function TrainingAdmin() {
                     <QuizSettingCard
                       title="แบบทดสอบก่อนเรียน"
                       settings={quizSettings.pre}
+                      enabled={toEnabledBoolean(form.pre_quiz_enabled, true)}
                       onChange={(key, value) => updateQuizSetting('pre', key, value)}
                       onSave={() => saveQuizSettings('pre')}
-                      disabled={!selectedCourseId || Boolean(savingQuizType)}
+                      onToggleEnabled={(enabled) => updateCourseQuizAccess('pre', enabled)}
+                      disabled={!selectedCourseId || Boolean(savingQuizType) || Boolean(savingQuizAccessType)}
                       saving={savingQuizType === 'pre'}
+                      toggling={savingQuizAccessType === 'pre'}
                     />
                     <QuizSettingCard
                       title="แบบทดสอบหลังเรียน"
                       settings={quizSettings.post}
+                      enabled={toEnabledBoolean(form.post_quiz_enabled, true)}
                       onChange={(key, value) => updateQuizSetting('post', key, value)}
                       onSave={() => saveQuizSettings('post')}
-                      disabled={!selectedCourseId || Boolean(savingQuizType)}
+                      onToggleEnabled={(enabled) => updateCourseQuizAccess('post', enabled)}
+                      disabled={!selectedCourseId || Boolean(savingQuizType) || Boolean(savingQuizAccessType)}
                       saving={savingQuizType === 'post'}
+                      toggling={savingQuizAccessType === 'post'}
                     />
                   </div>
                 </section>
@@ -1914,21 +1956,52 @@ function EvaluationQuestionResult({ summary }: { summary?: EvaluationReport['que
   );
 }
 
-function QuizSettingCard({ title, settings, onChange, onSave, disabled, saving = false }: {
+function QuizSettingCard({
+  title,
+  settings,
+  enabled,
+  onChange,
+  onSave,
+  onToggleEnabled,
+  disabled,
+  saving = false,
+  toggling = false,
+}: {
   title: string;
   settings: { hours: number; minutes: number; pass_score: number };
+  enabled: boolean;
   onChange: (key: 'hours' | 'minutes' | 'pass_score', value: number) => void;
   onSave: () => void;
+  onToggleEnabled: (enabled: boolean) => void;
   disabled?: boolean;
   saving?: boolean;
+  toggling?: boolean;
 }) {
   return (
     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="font-black text-slate-900">{title}</h3>
-        <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">
-          {formatQuizLimit((settings.hours * 60) + settings.minutes)}
-        </span>
+      <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 className="font-black text-slate-900">{title}</h3>
+          <span className={`mt-1 inline-flex rounded-full px-3 py-1 text-xs font-black ${enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-200 text-slate-500'}`}>
+            {enabled ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">
+            {formatQuizLimit((settings.hours * 60) + settings.minutes)}
+          </span>
+          <button
+            type="button"
+            onClick={() => onToggleEnabled(!enabled)}
+            disabled={disabled || toggling}
+            className={`inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black transition disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 ${
+              enabled ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+            }`}
+          >
+            {toggling ? <Loader2 size={14} className="animate-spin" /> : enabled ? <X size={14} /> : <CheckCircle2 size={14} />}
+            {enabled ? 'ปิด' : 'เปิด'}
+          </button>
+        </div>
       </div>
       <div className="grid grid-cols-3 gap-3">
         <label className="text-xs font-black text-slate-500">
@@ -2148,20 +2221,6 @@ function CourseForm({
       <Input value={form.instructor} onChange={(v) => update('instructor', v)} placeholder="วิทยากร" />
       <Input value={form.zoom_url} onChange={(v) => update('zoom_url', v)} placeholder="Zoom URL (ถ้ามี)" />
       <Input value={form.location} onChange={(v) => update('location', v)} placeholder="สถานที่อบรม (ถ้ามี)" />
-      {form.course_type !== 'online' && (
-        <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
-          <span>
-            <span className="block text-sm font-black text-blue-900">เปิดแบบทดสอบหลังเรียน</span>
-            <span className="block text-xs font-semibold text-blue-600">ใช้สำหรับอบรมผ่าน Zoom และอบรม ณ สถานที่ แอดมินเปิด/ปิดได้เอง</span>
-          </span>
-          <input
-            type="checkbox"
-            checked={toEnabledBoolean(form.post_quiz_enabled, true)}
-            onChange={(event) => update('post_quiz_enabled', event.target.checked)}
-            className="h-5 w-5 accent-blue-600"
-          />
-        </label>
-      )}
       <Textarea value={form.learning_objectives} onChange={(v) => update('learning_objectives', v)} placeholder="เป้าหมายการเรียนรู้" />
       <Textarea value={form.learning_topics} onChange={(v) => update('learning_topics', v)} placeholder="ประเด็นการเรียนรู้" />
       <Textarea value={form.target_group} onChange={(v) => update('target_group', v)} placeholder="กลุ่มเป้าหมาย" />

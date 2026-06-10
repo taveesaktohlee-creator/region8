@@ -322,6 +322,7 @@ async function ensureColumn(tableName: string, columnName: string, definition: s
 }
 
 async function ensureTrainingSchemaColumns() {
+  await ensureColumn('training_courses', 'pre_quiz_enabled', 'TINYINT(1) DEFAULT 1');
   await ensureColumn('training_courses', 'post_quiz_enabled', 'TINYINT(1) DEFAULT 1');
   await ensureColumn('training_quizzes', 'time_limit_minutes', 'INT DEFAULT 0');
 }
@@ -1096,6 +1097,7 @@ async function ensureTrainingTables() {
           zoom_url TEXT NULL,
           location VARCHAR(255) DEFAULT '',
           pass_score INT DEFAULT 70,
+          pre_quiz_enabled TINYINT(1) DEFAULT 1,
           post_quiz_enabled TINYINT(1) DEFAULT 1,
           certificate_enabled TINYINT(1) DEFAULT 1,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -5007,7 +5009,7 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
     if (quizzes.length === 0) return res.status(404).json({ error: 'ไม่พบแบบทดสอบ' });
     const quiz = quizzes[0];
     const [courseRows]: any = await pool.query(
-      'SELECT course_type, pass_score, post_quiz_enabled FROM training_courses WHERE course_id = ?',
+      'SELECT course_type, pass_score, pre_quiz_enabled, post_quiz_enabled FROM training_courses WHERE course_id = ?',
       [quiz.course_id],
     );
     const course = courseRows[0];
@@ -5023,8 +5025,11 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
     );
     if (enrollments.length === 0) return res.status(400).json({ error: 'กรุณาลงทะเบียนหลักสูตรก่อนทำแบบทดสอบ' });
     const enrollment = enrollments[0];
+    if (quiz.quiz_type === 'pre' && Number(course?.pre_quiz_enabled ?? 1) !== 1) {
+      return res.status(403).json({ error: 'ผู้ดูแลระบบยังไม่เปิดแบบทดสอบก่อนเรียนสำหรับหลักสูตรนี้' });
+    }
     if (quiz.quiz_type === 'post') {
-      if (course?.course_type !== 'online' && Number(course?.post_quiz_enabled ?? 1) !== 1) {
+      if (Number(course?.post_quiz_enabled ?? 1) !== 1) {
         return res.status(403).json({ error: 'ผู้ดูแลระบบยังไม่เปิดแบบทดสอบหลังเรียนสำหรับหลักสูตรนี้' });
       }
       if (course?.course_type === 'online') {
@@ -5296,8 +5301,8 @@ app.post('/api/admin/training/courses', async (req, res) => {
       `INSERT INTO training_courses
        (title, category, course_type, status, thumbnail_url, instructor, target_group,
         learning_objectives, learning_topics, content_summary, evaluation_method, description,
-        duration_minutes, zoom_url, location, pass_score, post_quiz_enabled, certificate_enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        duration_minutes, zoom_url, location, pass_score, pre_quiz_enabled, post_quiz_enabled, certificate_enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
         String(body.category || '').trim(),
@@ -5315,6 +5320,7 @@ app.post('/api/admin/training/courses', async (req, res) => {
         String(body.zoom_url || '').trim(),
         String(body.location || '').trim(),
         toInt(body.pass_score, 70),
+        toBooleanFlagWithDefault(body.pre_quiz_enabled, 1),
         toBooleanFlagWithDefault(body.post_quiz_enabled, 1),
         toBooleanFlagWithDefault(body.certificate_enabled, 1),
       ],
@@ -5352,7 +5358,7 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
       `UPDATE training_courses SET
        title=?, category=?, course_type=?, status=?, thumbnail_url=?, instructor=?, target_group=?,
        learning_objectives=?, learning_topics=?, content_summary=?, evaluation_method=?, description=?,
-       duration_minutes=?, zoom_url=?, location=?, pass_score=?, post_quiz_enabled=?, certificate_enabled=?
+       duration_minutes=?, zoom_url=?, location=?, pass_score=?, pre_quiz_enabled=?, post_quiz_enabled=?, certificate_enabled=?
        WHERE course_id=?`,
       [
         title,
@@ -5371,6 +5377,7 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
         String(body.zoom_url || '').trim(),
         String(body.location || '').trim(),
         toInt(body.pass_score, 70),
+        toBooleanFlagWithDefault(body.pre_quiz_enabled, 1),
         toBooleanFlagWithDefault(body.post_quiz_enabled, 1),
         toBooleanFlagWithDefault(body.certificate_enabled, 1),
         courseId,

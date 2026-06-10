@@ -26,6 +26,7 @@ type Course = {
   zoom_url?: string;
   location?: string;
   pass_score?: number;
+  pre_quiz_enabled?: number;
   post_quiz_enabled?: number;
 };
 
@@ -308,6 +309,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
   const firstVideo = lessons.find((lesson) => lesson.youtube_url || lesson.embed_url);
   const hasPostQuizResult = hasScore(enrollment?.post_score);
   const isOnlineCourse = course?.course_type === 'online';
+  const isPreQuizEnabledByAdmin = Number(course?.pre_quiz_enabled ?? 1) === 1;
   const isPostQuizEnabledByAdmin = Number(course?.post_quiz_enabled ?? 1) === 1;
   const requiredVideoSeconds = Math.max(
     Number(firstVideo?.duration_seconds || 0),
@@ -322,10 +324,12 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
     || !firstVideo
     || Number(enrollment?.online_video_completed || 0) === 1
     || onlineVideoProgress.completed;
-  const postQuizDisabledReason = isOnlineCourse
-    ? (!hasCompletedOnlineVideo ? 'กรุณาดูวิดีโออบรมให้จบก่อน ระบบจึงจะแสดงแบบทดสอบหลังเรียน' : '')
-    : (!isPostQuizEnabledByAdmin ? 'ผู้ดูแลระบบยังไม่เปิดแบบทดสอบหลังเรียนสำหรับหลักสูตรนี้' : '');
-  const canShowPostQuiz = !postQuizDisabledReason;
+  const preQuizDisabledReason = isPreQuizEnabledByAdmin ? '' : 'ผู้ดูแลระบบยังไม่เปิดแบบทดสอบก่อนเรียนสำหรับหลักสูตรนี้';
+  const postQuizDisabledReason = !isPostQuizEnabledByAdmin
+    ? 'ผู้ดูแลระบบยังไม่เปิดแบบทดสอบหลังเรียนสำหรับหลักสูตรนี้'
+    : isOnlineCourse && !hasCompletedOnlineVideo
+      ? 'กรุณาดูวิดีโออบรมให้จบก่อน ระบบจึงจะแสดงแบบทดสอบหลังเรียน'
+      : '';
   const hasEnteredTraining = Boolean(
     enrollment
     && (
@@ -519,7 +523,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
                   userId={userData?.user_id}
                   enrollment={enrollment}
                   evaluationQuestions={evaluationQuestions}
-                  canShowPostQuiz={canShowPostQuiz}
+                  preQuizDisabledReason={preQuizDisabledReason}
                   postQuizDisabledReason={postQuizDisabledReason}
                   watchedVideoSeconds={watchedVideoSeconds}
                   requiredVideoSeconds={requiredVideoSeconds}
@@ -620,7 +624,7 @@ function TrainingAssessmentTabs({
   userId,
   enrollment,
   evaluationQuestions,
-  canShowPostQuiz,
+  preQuizDisabledReason,
   postQuizDisabledReason,
   watchedVideoSeconds,
   requiredVideoSeconds,
@@ -633,7 +637,7 @@ function TrainingAssessmentTabs({
   userId?: number;
   enrollment: Enrollment | null;
   evaluationQuestions: EvaluationQuestion[];
-  canShowPostQuiz: boolean;
+  preQuizDisabledReason: string;
   postQuizDisabledReason: string;
   watchedVideoSeconds: number;
   requiredVideoSeconds: number;
@@ -643,6 +647,8 @@ function TrainingAssessmentTabs({
 }) {
   const [activeTab, setActiveTab] = useState<AssessmentTabKey>('pre');
   const canUseEvaluation = Boolean(hasPostQuizResult && enrollment?.status === 'completed');
+  const canShowPreQuiz = !preQuizDisabledReason;
+  const canShowPostQuiz = !postQuizDisabledReason;
   const tabs: Array<{
     key: AssessmentTabKey;
     label: string;
@@ -654,7 +660,7 @@ function TrainingAssessmentTabs({
       key: 'pre',
       label: 'แบบทดสอบก่อนเรียน',
       icon: <Award size={18} />,
-      status: hasScore(enrollment?.pre_score) ? 'ทำแล้ว' : 'พร้อมทำ',
+      status: canShowPreQuiz ? (hasScore(enrollment?.pre_score) ? 'ทำแล้ว' : 'พร้อมทำ') : 'ยังไม่เปิด',
     },
     {
       key: 'post',
@@ -714,15 +720,19 @@ function TrainingAssessmentTabs({
 
       <div className="p-4 sm:p-5">
         {activeTab === 'pre' && (
-          <QuizPanel
-            embedded
-            quiz={preQuiz}
-            title="แบบทดสอบก่อนเรียน"
-            userId={userId}
-            attemptedScore={enrollment?.pre_score}
-            onSubmitted={onQuizSubmitted}
-            disabled={!enrollment}
-          />
+          canShowPreQuiz ? (
+            <QuizPanel
+              embedded
+              quiz={preQuiz}
+              title="แบบทดสอบก่อนเรียน"
+              userId={userId}
+              attemptedScore={enrollment?.pre_score}
+              onSubmitted={onQuizSubmitted}
+              disabled={!enrollment}
+            />
+          ) : (
+            <LockedTrainingStepNotice title="แบบทดสอบก่อนเรียนยังไม่เปิด" reason={preQuizDisabledReason} />
+          )
         )}
         {activeTab === 'post' && (
           canShowPostQuiz ? (
