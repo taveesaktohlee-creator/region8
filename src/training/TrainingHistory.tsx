@@ -16,7 +16,9 @@ type HistoryItem = {
   instructor?: string;
   status: 'registered' | 'in_progress' | 'completed';
   pre_score?: number | null;
+  pre_total?: number | null;
   post_score?: number | null;
+  post_total?: number | null;
   pass_score?: number | null;
   attended_seconds: number;
   evaluated: number;
@@ -42,6 +44,20 @@ function statusMeta(status: HistoryItem['status']) {
 function passResult(postScore?: number | null, passScore?: number | null) {
   if (postScore === null || postScore === undefined) return '-';
   return Number(postScore) >= Number(passScore || 70) ? 'ผ่าน' : 'ไม่ผ่าน';
+}
+
+function scoreToPoints(score?: number | null, total?: number | null) {
+  if (score === null || score === undefined || !Number.isFinite(Number(score))) return null;
+  const totalValue = Number(total);
+  if (Number.isFinite(totalValue) && totalValue > 0) {
+    return Math.round((Number(score) / 100) * totalValue);
+  }
+  return Math.round(Number(score));
+}
+
+function formatQuizScore(score?: number | null, total?: number | null) {
+  const points = scoreToPoints(score, total);
+  return points === null ? '-' : `${points.toLocaleString('th-TH')} คะแนน`;
 }
 
 export default function TrainingHistory() {
@@ -171,8 +187,8 @@ export default function TrainingHistory() {
 
                     <div className="grid gap-3 sm:grid-cols-4">
                       <Metric icon={<Clock size={16} />} label="เวลาเข้าอบรม" value={formatSeconds(item.attended_seconds)} />
-                      <Metric icon={<Star size={16} />} label="ก่อนเรียน" value={item.pre_score != null ? `${item.pre_score}%` : '-'} />
-                      <Metric icon={<CheckCircle2 size={16} />} label="หลังเรียน" value={item.post_score != null ? `${item.post_score}%` : '-'} />
+                      <Metric icon={<Star size={16} />} label="ก่อนเรียน" value={formatQuizScore(item.pre_score, item.pre_total)} />
+                      <Metric icon={<CheckCircle2 size={16} />} label="หลังเรียน" value={formatQuizScore(item.post_score, item.post_total)} />
                       <Metric icon={item.post_score != null && passResult(item.post_score, item.pass_score) === 'ผ่าน' ? <CheckCircle2 size={16} /> : <XCircle size={16} />} label="ผลการอบรม" value={passResult(item.post_score, item.pass_score)} />
                     </div>
                   </div>

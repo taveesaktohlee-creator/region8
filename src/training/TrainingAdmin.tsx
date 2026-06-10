@@ -417,6 +417,27 @@ function formatPercent(value?: number | null) {
   return `${Number(value).toFixed(2)}%`;
 }
 
+function scoreToPoints(score?: number | string | null, total?: number | string | null) {
+  if (score === null || score === undefined || String(score).trim() === '') return null;
+  const value = Number(score);
+  if (!Number.isFinite(value)) return null;
+  const totalValue = Number(total);
+  if (Number.isFinite(totalValue) && totalValue > 0) {
+    return Math.round((value / 100) * totalValue);
+  }
+  return Math.round(value);
+}
+
+function formatQuizScore(score?: number | string | null, total?: number | string | null) {
+  const points = scoreToPoints(score, total);
+  return points === null ? '-' : `${points.toLocaleString('th-TH')} คะแนน`;
+}
+
+function formatAverageQuizScore(value?: number | null) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-';
+  return `${Number(value).toFixed(2)} คะแนน`;
+}
+
 function toEnabledBoolean(value: unknown, fallback = true) {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
@@ -1386,9 +1407,11 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
     const summary = filteredReport.reduce((acc, row) => {
       const pre = Number(row.pre_score);
       const post = Number(row.post_score);
-      if (Number.isFinite(pre)) acc.preScores.push(pre);
+      const prePoints = scoreToPoints(row.pre_score, row.pre_total);
+      const postPoints = scoreToPoints(row.post_score, row.post_total);
+      if (prePoints !== null) acc.preScores.push(prePoints);
       if (Number.isFinite(post)) {
-        acc.postScores.push(post);
+        if (postPoints !== null) acc.postScores.push(postPoints);
         if (post >= Number(row.pass_score || 70)) acc.passedCount += 1;
       }
       if (Number.isFinite(pre) && Number.isFinite(post)) {
@@ -1525,8 +1548,8 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
 
         <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <ReportStatCard title="ผู้ลงทะเบียน" value={quizSummary.total.toLocaleString('th-TH')} detail={`สำเร็จ ${quizSummary.completedCount.toLocaleString('th-TH')} คน`} tone="blue" />
-          <ReportStatCard title="เฉลี่ยก่อนเรียน" value={formatPercent(quizSummary.avgPre)} detail={`เข้าสอบ ${quizSummary.preTaken.toLocaleString('th-TH')} คน`} tone="amber" />
-          <ReportStatCard title="เฉลี่ยหลังเรียน" value={formatPercent(quizSummary.avgPost)} detail={`เข้าสอบ ${quizSummary.postTaken.toLocaleString('th-TH')} คน`} tone="orange" />
+          <ReportStatCard title="เฉลี่ยก่อนเรียน" value={formatAverageQuizScore(quizSummary.avgPre)} detail={`เข้าสอบ ${quizSummary.preTaken.toLocaleString('th-TH')} คน`} tone="amber" />
+          <ReportStatCard title="เฉลี่ยหลังเรียน" value={formatAverageQuizScore(quizSummary.avgPost)} detail={`เข้าสอบ ${quizSummary.postTaken.toLocaleString('th-TH')} คน`} tone="orange" />
           <ReportStatCard title="อัตราความสำเร็จ" value={formatPercent(quizSummary.passRate)} detail="ผ่านเกณฑ์แบบทดสอบหลังเรียน" tone="emerald" />
           <ReportStatCard title="คะแนนพัฒนาขึ้น" value={formatPercent(quizSummary.improvementRate)} detail={`จบอบรม ${formatPercent(quizSummary.completionRate)}`} tone="purple" />
         </div>
@@ -1558,7 +1581,7 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
                     <td className="max-w-[360px] px-4 py-3 font-semibold text-slate-600">{row.title}</td>
                     <td className="px-4 py-3 text-xs font-black text-blue-600">{courseTypeLabels[row.course_type as Course['course_type']] || row.course_type}</td>
                     <td className="px-4 py-3 font-bold">{formatSecondsAsHoursMinutes(row.attended_seconds)}</td>
-                    <td className="px-4 py-3 font-bold">{formatPercent(row.pre_score)} / {formatPercent(row.post_score)}</td>
+                    <td className="px-4 py-3 font-bold">{formatQuizScore(row.pre_score, row.pre_total)} / {formatQuizScore(row.post_score, row.post_total)}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col items-start gap-1">
                         <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${status.className}`}>{status.label}</span>

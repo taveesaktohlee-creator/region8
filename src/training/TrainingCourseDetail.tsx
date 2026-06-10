@@ -34,7 +34,9 @@ type Enrollment = {
   enrollment_id: number;
   status: string;
   pre_score?: number | string | null;
+  pre_total?: number | string | null;
   post_score?: number | string | null;
+  post_total?: number | string | null;
   attended_seconds?: number;
   online_video_seconds?: number;
   online_video_required_seconds?: number;
@@ -45,7 +47,7 @@ type Enrollment = {
 };
 
 type Quiz = { quiz_id: number; quiz_type: 'pre' | 'post'; title: string; pass_score: number; time_limit_minutes?: number };
-type QuizSubmitResult = { quizType: Quiz['quiz_type']; score: number; passed?: boolean };
+type QuizSubmitResult = { quizType: Quiz['quiz_type']; score: number; total?: number; correct?: number; passed?: boolean };
 type Question = { question_id: number; question_text: string; choices: { choice_id: number; choice_text: string }[] };
 type TrainingLesson = {
   lesson_id: number;
@@ -240,11 +242,20 @@ function hasScore(score: unknown) {
   return score !== null && score !== undefined && String(score).trim() !== '';
 }
 
-function formatScore(score?: number | string | null) {
+function scoreToPoints(score?: number | string | null, total?: number | string | null) {
   if (!hasScore(score)) return '-';
   const value = Number(score);
   if (!Number.isFinite(value)) return '-';
-  return `${value.toFixed(2)}%`;
+  const totalValue = Number(total);
+  if (Number.isFinite(totalValue) && totalValue > 0) {
+    return String(Math.round((value / 100) * totalValue));
+  }
+  return String(Math.round(value));
+}
+
+function formatScore(score?: number | string | null, total?: number | string | null) {
+  const points = scoreToPoints(score, total);
+  return points === '-' ? '-' : `${points} คะแนน`;
 }
 
 function getPassResult(postScore?: number | string | null, passScore?: number) {
@@ -491,7 +502,9 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
           ...current,
           status: result.quizType === 'post' ? 'completed' : current.status,
           pre_score: result.quizType === 'pre' ? result.score : current.pre_score,
+          pre_total: result.quizType === 'pre' ? result.total : current.pre_total,
           post_score: result.quizType === 'post' ? result.score : current.post_score,
+          post_total: result.quizType === 'post' ? result.total : current.post_total,
         };
       });
     }
@@ -576,8 +589,8 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
               <div className="grid gap-3 sm:grid-cols-4">
                 <Stat icon={<Clock size={20} className="text-amber-500" />} label="เวลาเรียน" value={formatMinutes(course.duration_minutes)} />
                 <Stat icon={<CalendarCheck size={20} className="text-blue-500" />} label="เวลาที่เข้าอบรม" value={formatSeconds(displayedAttendedSeconds)} />
-                <Stat icon={<Award size={20} className="text-purple-500" />} label="คะแนนก่อนเรียน" value={formatScore(enrollment?.pre_score)} />
-                <Stat icon={<CheckCircle2 size={20} className="text-emerald-500" />} label="คะแนนหลังเรียน" value={hasPostQuizResult ? `${formatScore(enrollment?.post_score)} ${getPassResult(enrollment?.post_score, course.pass_score)}` : '-'} />
+                <Stat icon={<Award size={20} className="text-purple-500" />} label="คะแนนก่อนเรียน" value={formatScore(enrollment?.pre_score, enrollment?.pre_total)} />
+                <Stat icon={<CheckCircle2 size={20} className="text-emerald-500" />} label="คะแนนหลังเรียน" value={hasPostQuizResult ? `${formatScore(enrollment?.post_score, enrollment?.post_total)} ${getPassResult(enrollment?.post_score, course.pass_score)}` : '-'} />
               </div>
 
               {firstVideo && (
@@ -841,6 +854,7 @@ function TrainingAssessmentTabs({
               title="แบบทดสอบก่อนเรียน"
               userId={userId}
               attemptedScore={enrollment?.pre_score}
+              attemptedTotal={enrollment?.pre_total}
               onSubmitted={onQuizSubmitted}
               disabled={!enrollment}
             />
@@ -856,6 +870,7 @@ function TrainingAssessmentTabs({
               title="แบบทดสอบหลังเรียน"
               userId={userId}
               attemptedScore={enrollment?.post_score}
+              attemptedTotal={enrollment?.post_total}
               onSubmitted={onQuizSubmitted}
               disabled={!enrollment}
             />
@@ -1106,6 +1121,7 @@ function QuizPanel({
   title,
   userId,
   attemptedScore,
+  attemptedTotal,
   onSubmitted,
   disabled,
   embedded,
@@ -1114,6 +1130,7 @@ function QuizPanel({
   title: string;
   userId?: number;
   attemptedScore?: number | string | null;
+  attemptedTotal?: number | string | null;
   onSubmitted: (result?: QuizSubmitResult) => void | Promise<void>;
   disabled?: boolean;
   embedded?: boolean;
@@ -1153,7 +1170,7 @@ function QuizPanel({
   const loadQuiz = async () => {
     if (!quiz) return;
     if (hasAttempted) {
-      toast.info(`${title} ทำแล้ว คะแนน ${formatScore(attemptedScore)}`);
+      toast.info(`${title} ทำแล้ว คะแนน ${formatScore(attemptedScore, attemptedTotal)}`);
       return;
     }
     setIsOpen(true);
@@ -1190,10 +1207,12 @@ function QuizPanel({
     const data = await res.json();
     if (!res.ok) return toast.error(data.error || 'ส่งแบบทดสอบไม่สำเร็จ');
     const score = Number(data.score);
-    toast.success(`${data.message} คะแนน ${formatScore(score)}`);
+    const total = Number(data.total || data.total_questions || questions.length || 0);
+    const correct = Number(data.correct || data.correct_count || 0);
+    toast.success(`${data.message} คะแนน ${formatScore(score, total)}`);
     setIsOpen(false);
     setStartedAt(null);
-    await Promise.resolve(onSubmitted({ quizType: quiz.quiz_type, score, passed: Boolean(data.passed) }));
+    await Promise.resolve(onSubmitted({ quizType: quiz.quiz_type, score, total, correct, passed: Boolean(data.passed) }));
   };
 
   return (
@@ -1204,7 +1223,7 @@ function QuizPanel({
           <p className="text-sm font-semibold text-slate-500">
             {quiz
               ? hasAttempted
-                ? `ทำแล้ว · คะแนนที่ได้ ${formatScore(attemptedScore)}`
+                ? `ทำแล้ว · คะแนนที่ได้ ${formatScore(attemptedScore, attemptedTotal)}`
                 : `เกณฑ์ผ่าน ${quiz.pass_score}% · เวลา ${formatQuizLimit(quiz.time_limit_minutes)} · ทำได้ 1 ครั้ง`
               : 'ยังไม่มีแบบทดสอบ'}
           </p>
@@ -1215,7 +1234,7 @@ function QuizPanel({
       </div>
       {hasAttempted && (
         <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
-          คะแนนที่สอบได้ {formatScore(attemptedScore)}
+          คะแนนที่สอบได้ {formatScore(attemptedScore, attemptedTotal)}
         </div>
       )}
       {isOpen && (
