@@ -809,23 +809,31 @@ export default function TrainingAdmin() {
     setSavingQuizAccessType(quizType);
     try {
       const payload = {
-        ...nextForm,
-        pre_quiz_enabled: toEnabledBoolean(nextForm.pre_quiz_enabled, true),
-        post_quiz_enabled: toEnabledBoolean(nextForm.post_quiz_enabled, true),
-        certificate_enabled: toEnabledBoolean(nextForm.certificate_enabled, true),
+        quiz_type: quizType,
+        enabled,
       };
-      const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}`, {
+      const res = await fetch(`${API_BASE}/api/admin/training/courses/${selectedCourseId}/quiz-access`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'บันทึกสถานะแบบทดสอบไม่สำเร็จ');
-      setForm(nextForm);
+      const savedCourse = data?.course || {};
+      const savedPreEnabled = savedCourse.pre_quiz_enabled ?? nextForm.pre_quiz_enabled;
+      const savedPostEnabled = savedCourse.post_quiz_enabled ?? nextForm.post_quiz_enabled;
+      const savedForm = {
+        ...nextForm,
+        pre_quiz_enabled: toEnabledBoolean(savedPreEnabled, true),
+        post_quiz_enabled: toEnabledBoolean(savedPostEnabled, true),
+      };
+      setForm(savedForm);
       setCourses((current) => current.map((course) => (
-        Number(course.course_id) === Number(selectedCourseId) ? { ...course, [key]: enabled } : course
+        Number(course.course_id) === Number(selectedCourseId)
+          ? { ...course, pre_quiz_enabled: savedForm.pre_quiz_enabled, post_quiz_enabled: savedForm.post_quiz_enabled }
+          : course
       )));
-      toast.success(enabled ? 'เปิดแบบทดสอบเรียบร้อยแล้ว' : 'ปิดแบบทดสอบเรียบร้อยแล้ว');
+      toast.success(data?.message || (enabled ? 'เปิดแบบทดสอบเรียบร้อยแล้ว' : 'ปิดแบบทดสอบเรียบร้อยแล้ว'));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'บันทึกสถานะแบบทดสอบไม่สำเร็จ');
     } finally {
@@ -1993,13 +2001,21 @@ function QuizSettingCard({
           <button
             type="button"
             onClick={() => onToggleEnabled(!enabled)}
+            aria-label={`${enabled ? 'ปิด' : 'เปิด'}${title}`}
+            aria-pressed={enabled}
             disabled={disabled || toggling}
-            className={`inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black transition disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 ${
-              enabled ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+            className={`group relative inline-flex h-12 w-24 shrink-0 items-center rounded-full p-1.5 transition duration-200 focus:outline-none focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60 ${
+              enabled ? 'bg-blue-200 hover:bg-blue-300' : 'bg-slate-200 hover:bg-slate-300'
             }`}
           >
-            {toggling ? <Loader2 size={14} className="animate-spin" /> : enabled ? <X size={14} /> : <CheckCircle2 size={14} />}
-            {enabled ? 'ปิด' : 'เปิด'}
+            <span className={`absolute inset-1.5 rounded-full bg-white shadow-inner ring-2 transition ${
+              enabled ? 'ring-blue-300' : 'ring-slate-300'
+            }`} />
+            <span className={`relative flex h-9 w-9 items-center justify-center rounded-full shadow-sm transition duration-200 ${
+              enabled ? 'translate-x-11 bg-blue-500 text-white' : 'translate-x-0 bg-blue-300 text-white'
+            }`}>
+              {toggling ? <Loader2 size={16} className="animate-spin" /> : enabled ? <CheckCircle2 size={16} /> : <X size={16} />}
+            </span>
           </button>
         </div>
       </div>

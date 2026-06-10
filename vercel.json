@@ -37,6 +37,10 @@
       "destination": "/api/activity-calendar?path=setup"
     },
     {
+      "source": "/api/admin/training/courses/:id/quiz-access",
+      "destination": "/api/training-evaluation?mode=quiz-access&id=:id"
+    },
+    {
       "source": "/api/users/forgot-password/check-email",
       "destination": "/api/forgot-password-check-email"
     },

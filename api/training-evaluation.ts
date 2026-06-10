@@ -58,6 +58,30 @@ function normalizeQuizType(value: unknown): QuizType {
   return value === 'pre' ? 'pre' : 'post';
 }
 
+function toBooleanFlag(value: unknown) {
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'number') return value === 1 ? 1 : 0;
+  const text = String(value ?? '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(text) ? 1 : 0;
+}
+
+async function ensureTrainingCourseColumn(columnName: 'pre_quiz_enabled' | 'post_quiz_enabled') {
+  const [rows]: any = await pool.query(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'training_courses' AND COLUMN_NAME = ?`,
+    [columnName],
+  );
+  if (rows.length === 0) {
+    await pool.query(`ALTER TABLE training_courses ADD COLUMN ${columnName} TINYINT(1) DEFAULT 1`);
+  }
+}
+
+async function ensureQuizAccessColumns() {
+  await ensureTrainingCourseColumn('pre_quiz_enabled');
+  await ensureTrainingCourseColumn('post_quiz_enabled');
+}
+
 async function ensureEvaluationTables() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS training_evaluation_questions (
@@ -209,6 +233,35 @@ async function deleteQuizQuestion(questionId: number) {
   const [result]: any = await pool.query('DELETE FROM training_questions WHERE question_id = ?', [questionId]);
   if (result.affectedRows === 0) return { status: 404, payload: { error: 'ไม่พบข้อสอบที่ต้องการลบ' } };
   return { status: 200, payload: { message: 'ลบข้อสอบเรียบร้อยแล้ว' } };
+}
+
+async function updateCourseQuizAccess(courseId: number, body: any) {
+  if (!courseId) return { status: 400, payload: { error: 'ไม่พบรหัสหลักสูตร' } };
+
+  const quizType = body.quiz_type === 'pre' ? 'pre' : body.quiz_type === 'post' ? 'post' : '';
+  if (!quizType) return { status: 400, payload: { error: 'กรุณาระบุแบบทดสอบก่อนเรียนหรือหลังเรียน' } };
+
+  await ensureQuizAccessColumns();
+  const columnName = quizType === 'pre' ? 'pre_quiz_enabled' : 'post_quiz_enabled';
+  const enabled = toBooleanFlag(body.enabled);
+  const [result]: any = await pool.query(
+    `UPDATE training_courses SET ${columnName} = ? WHERE course_id = ?`,
+    [enabled, courseId],
+  );
+  if (!result.affectedRows) return { status: 404, payload: { error: 'ไม่พบหลักสูตรที่ต้องการแก้ไข' } };
+
+  const [rows]: any = await pool.query(
+    'SELECT course_id, pre_quiz_enabled, post_quiz_enabled FROM training_courses WHERE course_id = ? LIMIT 1',
+    [courseId],
+  );
+
+  return {
+    status: 200,
+    payload: {
+      message: enabled ? 'เปิดแบบทดสอบเรียบร้อยแล้ว' : 'ปิดแบบทดสอบเรียบร้อยแล้ว',
+      course: rows[0] || { course_id: courseId, [columnName]: enabled },
+    },
+  };
 }
 
 async function getQuestions(courseId: number) {
@@ -379,10 +432,17 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const courseId = toInt(req.query.courseId);
+    const courseId = toInt(req.query.courseId || req.query.id);
     const questionId = toInt(req.query.questionId);
     const enrollmentId = toInt(req.query.enrollmentId);
     const mode = String(req.query.mode || '');
+
+    if (mode === 'quiz-access') {
+      if (req.method !== 'PUT') return sendJson(res, 405, { error: 'Method not allowed' });
+      const body = await readBody(req);
+      const result = await updateCourseQuizAccess(courseId, body);
+      return sendJson(res, result.status, result.payload);
+    }
 
     if (mode === 'quiz-question') {
       if (req.method === 'PUT') {
