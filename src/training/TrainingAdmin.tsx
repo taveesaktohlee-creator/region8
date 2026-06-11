@@ -128,6 +128,21 @@ const courseTypeLabels: Record<Course['course_type'], string> = {
   online: 'อบรมผ่านสื่ออิเล็กทรอนิกส์ (Online Training)',
 };
 
+function normalizeCourseTypeForForm(value?: unknown): Course['course_type'] {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === 'zoom' || text.includes('zoom')) return 'zoom';
+  if (
+    text === 'onsite' ||
+    text.includes('on-site') ||
+    text.includes('on site') ||
+    text.includes('onsite') ||
+    text.includes('สถานที่')
+  ) {
+    return 'onsite';
+  }
+  return 'online';
+}
+
 const courseStatusLabels: Record<Course['status'], string> = {
   open: 'ลงทะเบียน',
   closed: 'ปิดลงทะเบียน',
@@ -796,10 +811,12 @@ export default function TrainingAdmin() {
   };
 
   const selectCourse = (course: Course) => {
+    const nextCourseType = normalizeCourseTypeForForm(course.course_type);
     setSelectedCourseId(course.course_id || null);
     setForm({
       ...emptyCourse,
       ...course,
+      course_type: nextCourseType,
       training_start_date: toDateInputValue(course.training_start_date),
       training_end_date: toDateInputValue(course.training_end_date),
       pre_quiz_enabled: toEnabledBoolean(course.pre_quiz_enabled, true),
@@ -839,15 +856,22 @@ export default function TrainingAdmin() {
       : `${API_BASE}/api/admin/training/courses`;
     setIsSavingCourse(true);
     try {
-      const isScheduledCourse = form.course_type === 'zoom' || form.course_type === 'onsite';
+      const normalizedCourseType = normalizeCourseTypeForForm(form.course_type);
+      const isScheduledCourse = normalizedCourseType === 'zoom' || normalizedCourseType === 'onsite';
       const trainingStartDate = isScheduledCourse ? toDatePayloadValue(form.training_start_date) : null;
       const trainingEndDate = isScheduledCourse
         ? toDatePayloadValue(form.training_end_date) || trainingStartDate
         : null;
       const payload = {
         ...form,
+        course_type: normalizedCourseType,
         training_start_date: trainingStartDate,
         training_end_date: trainingEndDate,
+        trainingStartDate,
+        trainingEndDate,
+        start_date: trainingStartDate,
+        end_date: trainingEndDate,
+        training_date: trainingStartDate,
         pre_quiz_enabled: toEnabledBoolean(form.pre_quiz_enabled, true),
         post_quiz_enabled: toEnabledBoolean(form.post_quiz_enabled, true),
         certificate_enabled: toEnabledBoolean(form.certificate_enabled, true),
@@ -2312,6 +2336,8 @@ function CourseForm({
     }
   };
 
+  const normalizedCourseType = normalizeCourseTypeForForm(form.course_type);
+
   return (
     <div className="grid min-w-0 max-w-full gap-3 overflow-hidden">
       <Input value={form.title} onChange={(v) => update('title', v)} placeholder="ชื่อหลักสูตร" />
@@ -2324,9 +2350,9 @@ function CourseForm({
       </div>
       <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <select
-          value={form.course_type}
+          value={normalizedCourseType}
           onChange={(e) => {
-            const nextType = e.target.value as Course['course_type'];
+            const nextType = normalizeCourseTypeForForm(e.target.value);
             setForm((current) => ({
               ...current,
               course_type: nextType,
@@ -2345,7 +2371,7 @@ function CourseForm({
           <option value="draft">ฉบับร่าง</option>
         </select>
       </div>
-      {(form.course_type === 'zoom' || form.course_type === 'onsite') && (
+      {(normalizedCourseType === 'zoom' || normalizedCourseType === 'onsite') && (
         <div className="grid min-w-0 gap-3 sm:grid-cols-2">
           <label htmlFor="training-start-date" className="grid gap-1 text-xs font-black text-slate-500">
             จากวันที่

@@ -532,12 +532,35 @@ function normalizeDateOnly(value: unknown) {
   return normalized;
 }
 
+function firstPresentBodyValue(body: Record<string, any>, keys: string[]) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) {
+      return body[key];
+    }
+  }
+  return undefined;
+}
+
 function normalizeTrainingDateRange(body: Record<string, any>, courseType: string) {
   if (courseType !== 'zoom' && courseType !== 'onsite') {
     return { trainingStartDate: null, trainingEndDate: null };
   }
-  const start = normalizeDateOnly(body.training_start_date);
-  const end = normalizeDateOnly(body.training_end_date) || start;
+  const start = normalizeDateOnly(firstPresentBodyValue(body, [
+    'training_start_date',
+    'trainingStartDate',
+    'start_date',
+    'startDate',
+    'training_date',
+    'trainingDate',
+  ]));
+  const end = normalizeDateOnly(firstPresentBodyValue(body, [
+    'training_end_date',
+    'trainingEndDate',
+    'end_date',
+    'endDate',
+    'training_date_end',
+    'trainingDateEnd',
+  ])) || start;
   if (start && end && end < start) {
     return { trainingStartDate: end, trainingEndDate: start };
   }
@@ -4811,6 +4834,7 @@ app.post('/api/admin/setup-training-tables', async (_req, res) => {
 app.get('/api/training/courses', async (req, res) => {
   try {
     await ensureTrainingTables();
+    await ensureTrainingSchemaColumns();
     const userId = toInt(req.query.user_id, 0);
     const params: any[] = [];
     let enrollmentSelect = 'NULL AS enrollment_id, NULL AS enrollment_status, 0 AS attended_seconds, NULL AS pre_score, NULL AS post_score, 0 AS evaluated';
@@ -4824,6 +4848,8 @@ app.get('/api/training/courses', async (req, res) => {
 
     const [rows]: any = await pool.query(`
       SELECT c.*,
+             DATE_FORMAT(c.training_start_date, '%Y-%m-%d') AS training_start_date,
+             DATE_FORMAT(c.training_end_date, '%Y-%m-%d') AS training_end_date,
              ${enrollmentSelect},
              (SELECT COUNT(*) FROM training_enrollments WHERE course_id = c.course_id) AS enrolled_count,
              (SELECT COUNT(*) FROM training_lessons WHERE course_id = c.course_id) AS lesson_count,
@@ -4844,10 +4870,18 @@ app.get('/api/training/courses', async (req, res) => {
 app.get('/api/training/courses/:id', async (req, res) => {
   try {
     await ensureTrainingTables();
+    await ensureTrainingSchemaColumns();
     const courseId = toInt(req.params.id);
     const userId = toInt(req.query.user_id, 0);
 
-    const [courses]: any = await pool.query('SELECT * FROM training_courses WHERE course_id = ?', [courseId]);
+    const [courses]: any = await pool.query(
+      `SELECT c.*,
+              DATE_FORMAT(c.training_start_date, '%Y-%m-%d') AS training_start_date,
+              DATE_FORMAT(c.training_end_date, '%Y-%m-%d') AS training_end_date
+       FROM training_courses c
+       WHERE c.course_id = ?`,
+      [courseId],
+    );
     if (courses.length === 0) return res.status(404).json({ error: 'ไม่พบหลักสูตร' });
 
     const [lessons]: any = await pool.query(
@@ -5308,10 +5342,13 @@ app.post('/api/training/enrollments/:id/evaluation', async (req, res) => {
 app.get('/api/training/users/:userId/history', async (req, res) => {
   try {
     await ensureTrainingTables();
+    await ensureTrainingSchemaColumns();
     const userId = toInt(req.params.userId);
     const [rows]: any = await pool.query(`
       SELECT e.*, c.title, c.category, c.course_type, c.thumbnail_url, c.instructor, c.pass_score,
-             c.duration_minutes, c.certificate_enabled
+             c.duration_minutes, c.certificate_enabled,
+             DATE_FORMAT(c.training_start_date, '%Y-%m-%d') AS training_start_date,
+             DATE_FORMAT(c.training_end_date, '%Y-%m-%d') AS training_end_date
       FROM training_enrollments e
       INNER JOIN training_courses c ON c.course_id = e.course_id
       WHERE e.user_id = ?
@@ -5327,8 +5364,11 @@ app.get('/api/training/users/:userId/history', async (req, res) => {
 app.get('/api/admin/training/courses', async (_req, res) => {
   try {
     await ensureTrainingTables();
+    await ensureTrainingSchemaColumns();
     const [rows]: any = await pool.query(`
       SELECT c.*,
+             DATE_FORMAT(c.training_start_date, '%Y-%m-%d') AS training_start_date,
+             DATE_FORMAT(c.training_end_date, '%Y-%m-%d') AS training_end_date,
              (SELECT COUNT(*) FROM training_enrollments WHERE course_id = c.course_id) AS enrolled_count,
              (SELECT COUNT(*) FROM training_lessons WHERE course_id = c.course_id) AS lesson_count,
              (SELECT COUNT(*) FROM training_materials WHERE course_id = c.course_id) AS material_count
@@ -5407,15 +5447,21 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
     await ensureTrainingSchemaColumns();
     const courseId = toInt(req.params.id);
     const body = req.body || {};
-    const title = String(body.title || '').trim();
-    const status = normalizeTrainingStatus(body.status);
-    const courseType = normalizeCourseType(body.course_type);
-    const { trainingStartDate, trainingEndDate } = normalizeTrainingDateRange(body, courseType);
     const [existing]: any = await pool.query(
-      'SELECT status FROM training_courses WHERE course_id = ? LIMIT 1',
+      'SELECT * FROM training_courses WHERE course_id = ? LIMIT 1',
       [courseId],
     );
-    const wasOpen = existing[0]?.status === 'open';
+    const existingCourse = existing[0];
+    if (!existingCourse) return res.status(404).json({ error: 'ไม่พบหลักสูตร' });
+
+    const mergedBody = { ...existingCourse, ...body };
+    const title = String(mergedBody.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'กรุณาระบุชื่อหลักสูตร' });
+
+    const status = normalizeTrainingStatus(mergedBody.status);
+    const courseType = normalizeCourseType(mergedBody.course_type);
+    const { trainingStartDate, trainingEndDate } = normalizeTrainingDateRange(mergedBody, courseType);
+    const wasOpen = existingCourse.status === 'open';
     await pool.query(
       `UPDATE training_courses SET
        title=?, category=?, course_type=?, status=?, thumbnail_url=?, instructor=?, target_group=?,
@@ -5425,26 +5471,26 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
        WHERE course_id=?`,
       [
         title,
-        String(body.category || '').trim(),
+        String(mergedBody.category || '').trim(),
         courseType,
         status,
-        String(body.thumbnail_url || '').trim(),
-        String(body.instructor || '').trim(),
-        String(body.target_group || '').trim(),
-        String(body.learning_objectives || '').trim(),
-        String(body.learning_topics || '').trim(),
-        String(body.content_summary || '').trim(),
-        String(body.evaluation_method || '').trim(),
-        String(body.description || '').trim(),
-        toInt(body.duration_minutes),
-        String(body.zoom_url || '').trim(),
-        String(body.location || '').trim(),
+        String(mergedBody.thumbnail_url || '').trim(),
+        String(mergedBody.instructor || '').trim(),
+        String(mergedBody.target_group || '').trim(),
+        String(mergedBody.learning_objectives || '').trim(),
+        String(mergedBody.learning_topics || '').trim(),
+        String(mergedBody.content_summary || '').trim(),
+        String(mergedBody.evaluation_method || '').trim(),
+        String(mergedBody.description || '').trim(),
+        toInt(mergedBody.duration_minutes),
+        String(mergedBody.zoom_url || '').trim(),
+        String(mergedBody.location || '').trim(),
         trainingStartDate,
         trainingEndDate,
-        toInt(body.pass_score, 70),
-        toBooleanFlagWithDefault(body.pre_quiz_enabled, 1),
-        toBooleanFlagWithDefault(body.post_quiz_enabled, 1),
-        toBooleanFlagWithDefault(body.certificate_enabled, 1),
+        toInt(mergedBody.pass_score, 70),
+        toBooleanFlagWithDefault(mergedBody.pre_quiz_enabled, 1),
+        toBooleanFlagWithDefault(mergedBody.post_quiz_enabled, 1),
+        toBooleanFlagWithDefault(mergedBody.certificate_enabled, 1),
         courseId,
       ],
     );
@@ -5454,7 +5500,7 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
         sourceType: 'training_course',
         sourceId: courseId,
         title,
-        description: String(body.description || body.content_summary || '').trim(),
+        description: String(mergedBody.description || mergedBody.content_summary || '').trim(),
         href: `/training-courses/${courseId}`,
       });
     }
