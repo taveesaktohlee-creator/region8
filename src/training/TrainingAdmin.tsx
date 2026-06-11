@@ -377,6 +377,63 @@ function getLocalEvaluationReport(courseId: number): EvaluationReport {
       option_counts: {},
       text_answers: [],
     })),
+    responses: [],
+  };
+}
+
+function enrichEvaluationReport(report: Partial<EvaluationReport> | null | undefined, course?: Course): EvaluationReport {
+  const questions = (Array.isArray(report?.questions) ? report?.questions : []).map((question) => ({
+    ...question,
+    course_id: Number(question.course_id || course?.course_id || 0) || undefined,
+    title: question.title || course?.title || '',
+    course_type: question.course_type || course?.course_type || 'online',
+    category: question.category || course?.category || '',
+    options: Array.isArray(question.options) ? question.options : [],
+  }));
+  const questionById = new Map(questions.map((question) => [Number(question.question_id), question]));
+  const responses = (Array.isArray(report?.responses) ? report?.responses : []).map((response) => ({
+    ...response,
+    course_id: Number(response.course_id || course?.course_id || 0) || 0,
+    title: response.title || course?.title || '',
+    course_type: response.course_type || course?.course_type || 'online',
+    category: response.category || course?.category || '',
+    answers: (Array.isArray(response.answers) ? response.answers : []).map((answer) => {
+      const question = questionById.get(Number(answer.question_id));
+      return {
+        question_id: Number(answer.question_id),
+        question_text: answer.question_text || question?.question_text || `ข้อ ${answer.question_id}`,
+        question_type: answer.question_type || question?.question_type || 'text',
+        answer_value: answer.answer_value || '',
+      };
+    }),
+  }));
+
+  return {
+    response_count: Number(report?.response_count ?? responses.length) || responses.length,
+    questions,
+    responses,
+  };
+}
+
+function combineEvaluationReports(reports: EvaluationReport[]): EvaluationReport {
+  const questionsByKey = new Map<string, EvaluationReport['questions'][number]>();
+  const responsesById = new Map<number, EvaluationReportResponse>();
+
+  reports.forEach((report) => {
+    report.questions.forEach((question) => {
+      const key = `${question.course_id || ''}:${question.question_id}`;
+      questionsByKey.set(key, question);
+    });
+    (report.responses || []).forEach((response) => {
+      responsesById.set(Number(response.response_id), response);
+    });
+  });
+
+  const responses = Array.from(responsesById.values());
+  return {
+    response_count: responses.length,
+    questions: Array.from(questionsByKey.values()),
+    responses,
   };
 }
 
@@ -431,11 +488,6 @@ function scoreToPoints(score?: number | string | null, total?: number | string |
 function formatQuizScore(score?: number | string | null, total?: number | string | null) {
   const points = scoreToPoints(score, total);
   return points === null ? '-' : `${points.toLocaleString('th-TH')} คะแนน`;
-}
-
-function formatAverageQuizScore(value?: number | null) {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-';
-  return `${Number(value).toFixed(2)} คะแนน`;
 }
 
 function toEnabledBoolean(value: unknown, fallback = true) {
@@ -578,25 +630,53 @@ export default function TrainingAdmin() {
   const loadCourses = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/admin/training/courses`);
     if (!res.ok) throw new Error('Cannot load courses');
-    setCourses(await res.json());
+    const data: Course[] = await res.json();
+    setCourses(data);
+    return data;
   }, []);
 
   const loadReport = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/admin/training/report`);
     if (!res.ok) throw new Error('Cannot load report');
-    setReport(await res.json());
+    const data = await res.json();
+    setReport(data);
+    return data;
   }, []);
 
-  const loadAllEvaluationReport = useCallback(async () => {
+  const loadAllEvaluationReport = useCallback(async (courseList?: Course[]) => {
     try {
       const res = await fetch(`${API_BASE}/api/admin/training/evaluation-report`);
-      if (!res.ok) throw new Error('Cannot load evaluation report');
-      setAllEvaluationReport(await res.json());
+      const data = await readJsonResponse(res);
+      if (res.ok) {
+        const nextReport = enrichEvaluationReport(data);
+        setAllEvaluationReport(nextReport);
+        return nextReport;
+      }
+      throw new Error(data?.error || 'Cannot load evaluation report');
     } catch (error) {
       console.warn('Load all training evaluation report failed:', error);
-      setAllEvaluationReport({ response_count: 0, questions: [], responses: [] });
     }
-  }, []);
+
+    const sourceCourses = (courseList && courseList.length > 0 ? courseList : courses).filter((course) => course.course_id);
+    if (sourceCourses.length === 0) {
+      const emptyReport = { response_count: 0, questions: [], responses: [] };
+      setAllEvaluationReport(emptyReport);
+      return emptyReport;
+    }
+
+    const settledReports = await Promise.allSettled(sourceCourses.map(async (course) => {
+      const { response, data } = await fetchJsonWithFallback(
+        `${API_BASE}/api/admin/training/courses/${course.course_id}/evaluation-report`,
+        getEvaluationProxyUrl({ courseId: course.course_id, mode: 'report' }),
+      );
+      if (!response.ok) throw new Error(data?.error || `Cannot load evaluation report for course ${course.course_id}`);
+      return enrichEvaluationReport(data, course);
+    }));
+    const reports = settledReports.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+    const combinedReport = combineEvaluationReports(reports);
+    setAllEvaluationReport(combinedReport);
+    return combinedReport;
+  }, [courses]);
 
   const loadQuizPreview = useCallback(async (courseId: number) => {
     const res = await fetch(`${API_BASE}/api/admin/training/courses/${courseId}/quizzes`);
@@ -660,8 +740,8 @@ export default function TrainingAdmin() {
   }, []);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadCourses(), loadReport()]);
-    await loadAllEvaluationReport();
+    const [loadedCourses] = await Promise.all([loadCourses(), loadReport()]);
+    await loadAllEvaluationReport(loadedCourses);
   }, [loadAllEvaluationReport, loadCourses, loadReport]);
 
   useEffect(() => {
@@ -1407,11 +1487,9 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
     const summary = filteredReport.reduce((acc, row) => {
       const pre = Number(row.pre_score);
       const post = Number(row.post_score);
-      const prePoints = scoreToPoints(row.pre_score, row.pre_total);
-      const postPoints = scoreToPoints(row.post_score, row.post_total);
-      if (prePoints !== null) acc.preScores.push(prePoints);
+      if (Number.isFinite(pre)) acc.preScores.push(pre);
       if (Number.isFinite(post)) {
-        if (postPoints !== null) acc.postScores.push(postPoints);
+        acc.postScores.push(post);
         if (post >= Number(row.pass_score || 70)) acc.passedCount += 1;
       }
       if (Number.isFinite(pre) && Number.isFinite(post)) {
@@ -1548,8 +1626,8 @@ function ReportSection({ courses, report, evaluationReport, onRefresh, onConfirm
 
         <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <ReportStatCard title="ผู้ลงทะเบียน" value={quizSummary.total.toLocaleString('th-TH')} detail={`สำเร็จ ${quizSummary.completedCount.toLocaleString('th-TH')} คน`} tone="blue" />
-          <ReportStatCard title="เฉลี่ยก่อนเรียน" value={formatAverageQuizScore(quizSummary.avgPre)} detail={`เข้าสอบ ${quizSummary.preTaken.toLocaleString('th-TH')} คน`} tone="amber" />
-          <ReportStatCard title="เฉลี่ยหลังเรียน" value={formatAverageQuizScore(quizSummary.avgPost)} detail={`เข้าสอบ ${quizSummary.postTaken.toLocaleString('th-TH')} คน`} tone="orange" />
+          <ReportStatCard title="เฉลี่ยก่อนเรียน" value={formatPercent(quizSummary.avgPre)} detail={`เข้าสอบ ${quizSummary.preTaken.toLocaleString('th-TH')} คน`} tone="amber" />
+          <ReportStatCard title="เฉลี่ยหลังเรียน" value={formatPercent(quizSummary.avgPost)} detail={`เข้าสอบ ${quizSummary.postTaken.toLocaleString('th-TH')} คน`} tone="orange" />
           <ReportStatCard title="อัตราความสำเร็จ" value={formatPercent(quizSummary.passRate)} detail="ผ่านเกณฑ์แบบทดสอบหลังเรียน" tone="emerald" />
           <ReportStatCard title="คะแนนพัฒนาขึ้น" value={formatPercent(quizSummary.improvementRate)} detail={`จบอบรม ${formatPercent(quizSummary.completionRate)}`} tone="purple" />
         </div>

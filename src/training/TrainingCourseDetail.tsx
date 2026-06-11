@@ -258,6 +258,13 @@ function formatScore(score?: number | string | null, total?: number | string | n
   return points === '-' ? '-' : `${points} คะแนน`;
 }
 
+function formatScoreWithPercent(score?: number | string | null, total?: number | string | null) {
+  const points = scoreToPoints(score, total);
+  if (points === '-') return '-';
+  const value = Number(score);
+  return Number.isFinite(value) ? `${points} คะแนน (${value.toFixed(2)}%)` : formatScore(score, total);
+}
+
 function getPassResult(postScore?: number | string | null, passScore?: number) {
   if (!hasScore(postScore)) return null;
   return Number(postScore) >= Number(passScore || 70) ? 'ผ่าน' : 'ไม่ผ่าน';
@@ -589,8 +596,8 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
               <div className="grid gap-3 sm:grid-cols-4">
                 <Stat icon={<Clock size={20} className="text-amber-500" />} label="เวลาเรียน" value={formatMinutes(course.duration_minutes)} />
                 <Stat icon={<CalendarCheck size={20} className="text-blue-500" />} label="เวลาที่เข้าอบรม" value={formatSeconds(displayedAttendedSeconds)} />
-                <Stat icon={<Award size={20} className="text-purple-500" />} label="คะแนนก่อนเรียน" value={formatScore(enrollment?.pre_score, enrollment?.pre_total)} />
-                <Stat icon={<CheckCircle2 size={20} className="text-emerald-500" />} label="คะแนนหลังเรียน" value={hasPostQuizResult ? `${formatScore(enrollment?.post_score, enrollment?.post_total)} ${getPassResult(enrollment?.post_score, course.pass_score)}` : '-'} />
+                <Stat icon={<Award size={20} className="text-purple-500" />} label="คะแนนก่อนเรียน" value={formatScoreWithPercent(enrollment?.pre_score, enrollment?.pre_total)} />
+                <Stat icon={<CheckCircle2 size={20} className="text-emerald-500" />} label="คะแนนหลังเรียน" value={hasPostQuizResult ? `${formatScoreWithPercent(enrollment?.post_score, enrollment?.post_total)} ${getPassResult(enrollment?.post_score, course.pass_score)}` : '-'} />
               </div>
 
               {firstVideo && (
@@ -654,7 +661,7 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
             </div>
 
             <aside className="flex flex-col gap-5">
-              {hasEnteredTraining && (
+              {enrollment && (
                 <section className="rounded-[18px] border border-[#e0e0e0] bg-white p-6 transition-all duration-300 hover:border-[#cccccc]">
                   <h3 className="mb-4 border-l-4 border-blue-600 pl-3 text-lg font-black text-slate-900">
                     เอกสารประกอบ
@@ -1170,7 +1177,7 @@ function QuizPanel({
   const loadQuiz = async () => {
     if (!quiz) return;
     if (hasAttempted) {
-      toast.info(`${title} ทำแล้ว คะแนน ${formatScore(attemptedScore, attemptedTotal)}`);
+      toast.info(`${title} ทำแล้ว คะแนน ${formatScoreWithPercent(attemptedScore, attemptedTotal)}`);
       return;
     }
     setIsOpen(true);
@@ -1209,7 +1216,7 @@ function QuizPanel({
     const score = Number(data.score);
     const total = Number(data.total || data.total_questions || questions.length || 0);
     const correct = Number(data.correct || data.correct_count || 0);
-    toast.success(`${data.message} คะแนน ${formatScore(score, total)}`);
+    toast.success(`${data.message} คะแนน ${formatScoreWithPercent(score, total)}`);
     setIsOpen(false);
     setStartedAt(null);
     await Promise.resolve(onSubmitted({ quizType: quiz.quiz_type, score, total, correct, passed: Boolean(data.passed) }));
@@ -1223,7 +1230,7 @@ function QuizPanel({
           <p className="text-sm font-semibold text-slate-500">
             {quiz
               ? hasAttempted
-                ? `ทำแล้ว · คะแนนที่ได้ ${formatScore(attemptedScore, attemptedTotal)}`
+                ? `ทำแล้ว · คะแนนที่ได้ ${formatScoreWithPercent(attemptedScore, attemptedTotal)}`
                 : `เกณฑ์ผ่าน ${quiz.pass_score}% · เวลา ${formatQuizLimit(quiz.time_limit_minutes)} · ทำได้ 1 ครั้ง`
               : 'ยังไม่มีแบบทดสอบ'}
           </p>
@@ -1234,7 +1241,7 @@ function QuizPanel({
       </div>
       {hasAttempted && (
         <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
-          คะแนนที่สอบได้ {formatScore(attemptedScore, attemptedTotal)}
+          คะแนนที่สอบได้ {formatScoreWithPercent(attemptedScore, attemptedTotal)}
         </div>
       )}
       {isOpen && (
