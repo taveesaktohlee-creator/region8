@@ -41,6 +41,26 @@
       "destination": "/api/training-evaluation?mode=quiz-access&id=:id"
     },
     {
+      "source": "/api/admin/training/courses/:id",
+      "destination": "/api/training-courses?mode=admin-detail&id=:id"
+    },
+    {
+      "source": "/api/admin/training/courses",
+      "destination": "/api/training-courses?mode=admin"
+    },
+    {
+      "source": "/api/training/users/:userId/history",
+      "destination": "/api/training-courses?mode=history&userId=:userId"
+    },
+    {
+      "source": "/api/training/courses/:id",
+      "destination": "/api/training-courses?mode=detail&id=:id"
+    },
+    {
+      "source": "/api/training/courses",
+      "destination": "/api/training-courses?mode=public"
+    },
+    {
       "source": "/api/users/forgot-password/check-email",
       "destination": "/api/forgot-password-check-email"
     },
