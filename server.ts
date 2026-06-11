@@ -324,6 +324,8 @@ async function ensureColumn(tableName: string, columnName: string, definition: s
 async function ensureTrainingSchemaColumns() {
   await ensureColumn('training_courses', 'pre_quiz_enabled', 'TINYINT(1) DEFAULT 1');
   await ensureColumn('training_courses', 'post_quiz_enabled', 'TINYINT(1) DEFAULT 1');
+  await ensureColumn('training_courses', 'training_start_date', 'DATE NULL');
+  await ensureColumn('training_courses', 'training_end_date', 'DATE NULL');
   await ensureColumn('training_quizzes', 'time_limit_minutes', 'INT DEFAULT 0');
 }
 
@@ -501,6 +503,36 @@ function normalizeCourseType(value: unknown) {
   const text = String(value || '').trim();
   if (['online', 'zoom', 'onsite'].includes(text)) return text;
   return 'online';
+}
+
+function normalizeDateOnly(value: unknown) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const normalized = `${match[1]}-${match[2]}-${match[3]}`;
+  const parsed = new Date(`${normalized}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (
+    parsed.getFullYear() !== Number(match[1]) ||
+    parsed.getMonth() + 1 !== Number(match[2]) ||
+    parsed.getDate() !== Number(match[3])
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function normalizeTrainingDateRange(body: Record<string, any>, courseType: string) {
+  if (courseType !== 'zoom' && courseType !== 'onsite') {
+    return { trainingStartDate: null, trainingEndDate: null };
+  }
+  const start = normalizeDateOnly(body.training_start_date);
+  const end = normalizeDateOnly(body.training_end_date) || start;
+  if (start && end && end < start) {
+    return { trainingStartDate: end, trainingEndDate: start };
+  }
+  return { trainingStartDate: start, trainingEndDate: end };
 }
 
 function normalizeTrainingStatus(value: unknown) {
@@ -1096,6 +1128,8 @@ async function ensureTrainingTables() {
           duration_minutes INT DEFAULT 0,
           zoom_url TEXT NULL,
           location VARCHAR(255) DEFAULT '',
+          training_start_date DATE NULL,
+          training_end_date DATE NULL,
           pass_score INT DEFAULT 70,
           pre_quiz_enabled TINYINT(1) DEFAULT 1,
           post_quiz_enabled TINYINT(1) DEFAULT 1,
@@ -5066,6 +5100,16 @@ app.post('/api/training/quizzes/:id/submit', async (req, res) => {
     if (questions.length === 0) return res.status(400).json({ error: 'แบบทดสอบนี้ยังไม่มีคำถาม' });
 
     const questionIds = questions.map((question: any) => question.question_id);
+    const missingQuestionIds = questionIds.filter((questionId: number) => {
+      const answer = answers[String(questionId)];
+      return answer === undefined || answer === null || String(answer).trim() === '';
+    });
+    if (missingQuestionIds.length > 0) {
+      return res.status(400).json({
+        error: `กรุณาตอบแบบทดสอบให้ครบทุกข้อก่อนส่ง ยังเหลือ ${missingQuestionIds.length} ข้อ`,
+      });
+    }
+
     const [correctChoices]: any = await pool.query(
       'SELECT question_id, choice_id FROM training_choices WHERE is_correct = 1 AND question_id IN (?)',
       [questionIds],
@@ -5296,17 +5340,20 @@ app.post('/api/admin/training/courses', async (req, res) => {
     if (!String(body.title || '').trim()) return res.status(400).json({ error: 'กรุณาระบุชื่อหลักสูตร' });
     const title = String(body.title || '').trim();
     const status = normalizeTrainingStatus(body.status);
+    const courseType = normalizeCourseType(body.course_type);
+    const { trainingStartDate, trainingEndDate } = normalizeTrainingDateRange(body, courseType);
 
     const [result]: any = await pool.query(
       `INSERT INTO training_courses
        (title, category, course_type, status, thumbnail_url, instructor, target_group,
         learning_objectives, learning_topics, content_summary, evaluation_method, description,
-        duration_minutes, zoom_url, location, pass_score, pre_quiz_enabled, post_quiz_enabled, certificate_enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        duration_minutes, zoom_url, location, training_start_date, training_end_date,
+        pass_score, pre_quiz_enabled, post_quiz_enabled, certificate_enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
         String(body.category || '').trim(),
-        normalizeCourseType(body.course_type),
+        courseType,
         status,
         String(body.thumbnail_url || '').trim(),
         String(body.instructor || '').trim(),
@@ -5319,6 +5366,8 @@ app.post('/api/admin/training/courses', async (req, res) => {
         toInt(body.duration_minutes),
         String(body.zoom_url || '').trim(),
         String(body.location || '').trim(),
+        trainingStartDate,
+        trainingEndDate,
         toInt(body.pass_score, 70),
         toBooleanFlagWithDefault(body.pre_quiz_enabled, 1),
         toBooleanFlagWithDefault(body.post_quiz_enabled, 1),
@@ -5349,6 +5398,8 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
     const body = req.body || {};
     const title = String(body.title || '').trim();
     const status = normalizeTrainingStatus(body.status);
+    const courseType = normalizeCourseType(body.course_type);
+    const { trainingStartDate, trainingEndDate } = normalizeTrainingDateRange(body, courseType);
     const [existing]: any = await pool.query(
       'SELECT status FROM training_courses WHERE course_id = ? LIMIT 1',
       [courseId],
@@ -5358,12 +5409,13 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
       `UPDATE training_courses SET
        title=?, category=?, course_type=?, status=?, thumbnail_url=?, instructor=?, target_group=?,
        learning_objectives=?, learning_topics=?, content_summary=?, evaluation_method=?, description=?,
-       duration_minutes=?, zoom_url=?, location=?, pass_score=?, pre_quiz_enabled=?, post_quiz_enabled=?, certificate_enabled=?
+       duration_minutes=?, zoom_url=?, location=?, training_start_date=?, training_end_date=?,
+       pass_score=?, pre_quiz_enabled=?, post_quiz_enabled=?, certificate_enabled=?
        WHERE course_id=?`,
       [
         title,
         String(body.category || '').trim(),
-        normalizeCourseType(body.course_type),
+        courseType,
         status,
         String(body.thumbnail_url || '').trim(),
         String(body.instructor || '').trim(),
@@ -5376,6 +5428,8 @@ app.put('/api/admin/training/courses/:id', async (req, res) => {
         toInt(body.duration_minutes),
         String(body.zoom_url || '').trim(),
         String(body.location || '').trim(),
+        trainingStartDate,
+        trainingEndDate,
         toInt(body.pass_score, 70),
         toBooleanFlagWithDefault(body.pre_quiz_enabled, 1),
         toBooleanFlagWithDefault(body.post_quiz_enabled, 1),

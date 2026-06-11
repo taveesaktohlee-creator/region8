@@ -16,6 +16,8 @@ type Course = {
   instructor?: string;
   target_group?: string;
   duration_minutes?: number;
+  training_start_date?: string | null;
+  training_end_date?: string | null;
   enrolled_count?: number;
   lesson_count?: number;
   material_count?: number;
@@ -42,6 +44,39 @@ function formatMinutes(totalMinutes?: number) {
   const hours = Math.floor(value / 60);
   const minutes = value % 60;
   return `${hours} ชม. ${minutes} นาที`;
+}
+
+const thaiDateFormatter = new Intl.DateTimeFormat('th-TH-u-ca-buddhist', {
+  day: 'numeric',
+  month: 'short',
+  year: '2-digit',
+});
+
+function isScheduledTraining(course: Pick<Course, 'course_type'>) {
+  return course.course_type === 'zoom' || course.course_type === 'onsite';
+}
+
+function parseDateOnly(value?: string | null) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatThaiTrainingDate(value?: string | null) {
+  const parsed = parseDateOnly(value);
+  return parsed ? thaiDateFormatter.format(parsed) : '';
+}
+
+function formatTrainingDateRange(course: Pick<Course, 'course_type' | 'training_start_date' | 'training_end_date'>) {
+  if (!isScheduledTraining(course)) return '';
+  const start = formatThaiTrainingDate(course.training_start_date);
+  const end = formatThaiTrainingDate(course.training_end_date);
+  if (!start && !end) return 'ยังไม่ระบุวันที่อบรม';
+  if (start && (!end || start === end)) return start;
+  if (!start) return end;
+  return `${start} - ${end}`;
 }
 
 function enrollmentBadgeLabel(course: Course) {
@@ -217,7 +252,17 @@ export default function TrainingCourses() {
                       </div>
                       <div className="space-y-2 text-sm font-semibold text-slate-500">
                         <div className="flex items-center gap-2"><Users size={15} /> {course.instructor || 'ยังไม่ระบุวิทยากร'}</div>
-                        <div className="flex items-center gap-2"><Clock size={15} /> {formatMinutes(course.duration_minutes)}</div>
+                        <div className="flex items-center gap-2">
+                          {isScheduledTraining(course) ? (
+                            <>
+                              <CalendarCheck size={15} /> {formatTrainingDateRange(course)}
+                            </>
+                          ) : (
+                            <>
+                              <Clock size={15} /> {formatMinutes(course.duration_minutes)}
+                            </>
+                          )}
+                        </div>
                         <div className="flex items-center gap-2"><CalendarCheck size={15} /> ผู้ลงทะเบียน {course.enrolled_count || 0} คน</div>
                       </div>
                       <div className="mt-auto rounded-2xl bg-slate-50 px-4 py-3 text-center text-sm font-black text-blue-700 transition group-hover:bg-blue-600 group-hover:text-white">

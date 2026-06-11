@@ -26,6 +26,8 @@ type Course = {
   duration_minutes: number;
   zoom_url: string;
   location: string;
+  training_start_date?: string | null;
+  training_end_date?: string | null;
   pass_score: number;
   pre_quiz_enabled: boolean | number;
   post_quiz_enabled: boolean | number;
@@ -185,6 +187,8 @@ const emptyCourse: Course = {
   duration_minutes: 60,
   zoom_url: '',
   location: '',
+  training_start_date: '',
+  training_end_date: '',
   pass_score: 70,
   pre_quiz_enabled: true,
   post_quiz_enabled: true,
@@ -452,6 +456,13 @@ async function fetchJsonWithFallback(primaryUrl: string, fallbackUrl: string, in
 function splitMinutes(totalMinutes?: number) {
   const safe = Math.max(0, Number(totalMinutes || 0));
   return { hours: Math.floor(safe / 60), minutes: safe % 60 };
+}
+
+function toDateInputValue(value?: string | null) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : '';
 }
 
 function formatQuizLimit(minutes?: number) {
@@ -779,6 +790,8 @@ export default function TrainingAdmin() {
     setForm({
       ...emptyCourse,
       ...course,
+      training_start_date: toDateInputValue(course.training_start_date),
+      training_end_date: toDateInputValue(course.training_end_date),
       pre_quiz_enabled: toEnabledBoolean(course.pre_quiz_enabled, true),
       post_quiz_enabled: toEnabledBoolean(course.post_quiz_enabled, true),
       certificate_enabled: toEnabledBoolean(course.certificate_enabled, true),
@@ -2293,7 +2306,18 @@ function CourseForm({
         </div>
       </div>
       <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <select value={form.course_type} onChange={(e) => update('course_type', e.target.value)} className="min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none">
+        <select
+          value={form.course_type}
+          onChange={(e) => {
+            const nextType = e.target.value as Course['course_type'];
+            setForm((current) => ({
+              ...current,
+              course_type: nextType,
+              ...(nextType === 'online' ? { training_start_date: '', training_end_date: '' } : {}),
+            }));
+          }}
+          className="min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none"
+        >
           <option value="onsite">{courseTypeLabels.onsite}</option>
           <option value="zoom">{courseTypeLabels.zoom}</option>
           <option value="online">{courseTypeLabels.online}</option>
@@ -2304,6 +2328,18 @@ function CourseForm({
           <option value="draft">ฉบับร่าง</option>
         </select>
       </div>
+      {(form.course_type === 'zoom' || form.course_type === 'onsite') && (
+        <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+          <label htmlFor="training-start-date" className="grid gap-1 text-xs font-black text-slate-500">
+            จากวันที่
+            <Input id="training-start-date" type="date" value={toDateInputValue(form.training_start_date)} onChange={(v) => update('training_start_date', v)} placeholder="จากวันที่อบรม" />
+          </label>
+          <label htmlFor="training-end-date" className="grid gap-1 text-xs font-black text-slate-500">
+            ถึงวันที่
+            <Input id="training-end-date" type="date" value={toDateInputValue(form.training_end_date)} onChange={(v) => update('training_end_date', v)} placeholder="ถึงวันที่อบรม" />
+          </label>
+        </div>
+      )}
       <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
           <div className="h-24 w-full shrink-0 overflow-hidden rounded-xl bg-white ring-1 ring-slate-200 sm:w-36">
@@ -2376,8 +2412,20 @@ function QuickPanel({ title, icon, children, onSubmit, submitLabel = 'เพิ�
   );
 }
 
-function Input({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
-  return <input aria-label={placeholder} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200" />;
+function Input({
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+  id,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  type?: React.HTMLInputTypeAttribute;
+  id?: string;
+}) {
+  return <input id={id} type={type} aria-label={placeholder} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200" />;
 }
 
 function Textarea({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {

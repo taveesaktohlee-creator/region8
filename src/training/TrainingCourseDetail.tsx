@@ -23,6 +23,8 @@ type Course = {
   evaluation_method?: string;
   description?: string;
   duration_minutes?: number;
+  training_start_date?: string | null;
+  training_end_date?: string | null;
   zoom_url?: string;
   location?: string;
   pass_score?: number;
@@ -86,6 +88,43 @@ function formatMinutes(totalMinutes?: number) {
   const hours = Math.floor(value / 60);
   const minutes = value % 60;
   return `${hours} ชม. ${minutes} นาที`;
+}
+
+const thaiDateFormatter = new Intl.DateTimeFormat('th-TH-u-ca-buddhist', {
+  day: 'numeric',
+  month: 'short',
+  year: '2-digit',
+});
+
+function isScheduledTraining(course: Pick<Course, 'course_type'>) {
+  return course.course_type === 'zoom' || course.course_type === 'onsite';
+}
+
+function parseDateOnly(value?: string | null) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatThaiTrainingDate(value?: string | null) {
+  const parsed = parseDateOnly(value);
+  return parsed ? thaiDateFormatter.format(parsed) : '';
+}
+
+function formatTrainingDateRange(course: Pick<Course, 'course_type' | 'training_start_date' | 'training_end_date'>) {
+  if (!isScheduledTraining(course)) return '';
+  const start = formatThaiTrainingDate(course.training_start_date);
+  const end = formatThaiTrainingDate(course.training_end_date);
+  if (!start && !end) return 'ยังไม่ระบุวันที่อบรม';
+  if (start && (!end || start === end)) return start;
+  if (!start) return end;
+  return `${start} - ${end}`;
+}
+
+function hasQuizAnswer(value: unknown) {
+  return value !== undefined && value !== null && String(value).trim() !== '';
 }
 
 function formatCountdown(seconds: number) {
@@ -565,7 +604,12 @@ export default function TrainingCourseDetail({ courseId }: { courseId: number })
                     </span>
                   </div>
                   <h1 className="text-2xl font-black leading-tight text-slate-900 sm:text-3xl">{course.title}</h1>
-                  <p className="mt-3 flex items-center gap-2 text-sm font-bold text-slate-500"><Users size={16} /> วิทยากร: {course.instructor || '-'}</p>
+                  <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-bold text-slate-500">
+                    <span className="flex items-center gap-2"><Users size={16} /> วิทยากร: {course.instructor || '-'}</span>
+                    {isScheduledTraining(course) && (
+                      <span className="flex items-center gap-2"><CalendarCheck size={16} /> วันที่อบรม: {formatTrainingDateRange(course)}</span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-3">
                   {!enrollment ? (
@@ -1153,6 +1197,11 @@ function QuizPanel({
   const isTimed = limitSeconds > 0;
   const isTimeUp = isTimed && isOpen && remainingSeconds <= 0;
   const hasAttempted = hasScore(attemptedScore);
+  const answeredCount = useMemo(
+    () => questions.filter((question) => hasQuizAnswer(answers[String(question.question_id)])).length,
+    [answers, questions],
+  );
+  const missingCount = Math.max(0, questions.length - answeredCount);
 
   useEffect(() => {
     if (hasAttempted) {
@@ -1205,6 +1254,14 @@ function QuizPanel({
       toast.warning(`${title} ทำได้เพียงครั้งเดียว`);
       return;
     }
+    if (questions.length === 0) {
+      toast.warning('แบบทดสอบนี้ยังไม่มีคำถาม');
+      return;
+    }
+    if (missingCount > 0) {
+      toast.warning(`กรุณาตอบแบบทดสอบให้ครบทุกข้อ ยังเหลือ ${missingCount} ข้อ`);
+      return;
+    }
     const elapsedSeconds = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0;
     const res = await fetch(`${API_BASE}/api/training/quizzes/${quiz.quiz_id}/submit`, {
       method: 'POST',
@@ -1255,6 +1312,11 @@ function QuizPanel({
               <div className="text-2xl font-black tabular-nums">{isTimed ? formatCountdown(remainingSeconds) : 'ไม่จำกัดเวลา'}</div>
             </div>
           )}
+          {questions.length > 0 && (
+            <div className={`rounded-2xl border px-4 py-3 text-sm font-black ${missingCount > 0 ? 'border-amber-100 bg-amber-50 text-amber-700' : 'border-emerald-100 bg-emerald-50 text-emerald-700'}`}>
+              ตอบแล้ว {answeredCount}/{questions.length} ข้อ{missingCount > 0 ? ' · กรุณาตอบให้ครบทุกข้อก่อนส่ง' : ' · พร้อมส่งแบบทดสอบ'}
+            </div>
+          )}
           {isLoading ? <p className="text-sm font-bold text-slate-400">กำลังโหลด...</p> : questions.map((question, index) => (
             <div key={question.question_id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
               <p className="mb-3 font-black text-slate-800">{index + 1}. {question.question_text}</p>
@@ -1275,7 +1337,7 @@ function QuizPanel({
             </div>
           ))}
           {questions.length > 0 && (
-            <button type="button" onClick={submitQuiz} className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white">
+            <button type="button" disabled={missingCount > 0} onClick={submitQuiz} className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
               <Send size={16} /> {isTimeUp ? 'ส่งคำตอบที่ทำไว้' : 'ส่งคำตอบ'}
             </button>
           )}
