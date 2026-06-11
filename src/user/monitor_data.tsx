@@ -809,7 +809,7 @@ export default function MonitorData() {
                         ))}
                       </div>
                     </div>
-                    <SingleChoiceInput label="เครื่องสำรองไฟ" value={form.ups_status} onChange={(v) => updateField('ups_status', v)} options={UPS_OPTIONS} />
+                    <SingleChoiceWithOtherInput label="เครื่องสำรองไฟ" value={form.ups_status} onChange={(v) => updateField('ups_status', v)} options={UPS_OPTIONS} />
                     <SingleChoiceInput label="จัดทำทะเบียนคุมการเข้าถึงแฟ้มข้อมูล" value={form.access_register} onChange={(v) => updateField('access_register', v)} options={ACCESS_REGISTER_OPTIONS} />
                     <TextInput label="ผู้รับผิดชอบนำส่งแฟ้มข้อมูลออนไลน์" value={form.upload_responsible} onChange={(v) => updateField('upload_responsible', v)} />
                     <div className="md:col-span-2 rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
@@ -819,7 +819,7 @@ export default function MonitorData() {
                         <SingleChoiceInput label="ส่งข้อมูลไม่เป็นปัจจุบัน" value={form.send_not_current_method} onChange={(v) => updateField('send_not_current_method', v)} options={SEND_METHOD_OPTIONS} />
                       </div>
                     </div>
-                    <SingleChoiceInput label="ส่งแฟ้มข้อมูลสำรองให้ผู้สอบบัญชี" value={form.backup_to_auditor} onChange={(v) => updateField('backup_to_auditor', v)} options={BACKUP_TO_AUDITOR_OPTIONS} />
+                    <SingleChoiceWithOtherInput label="ส่งแฟ้มข้อมูลสำรองให้ผู้สอบบัญชี" value={form.backup_to_auditor} onChange={(v) => updateField('backup_to_auditor', v)} options={BACKUP_TO_AUDITOR_OPTIONS} />
                     <div className="md:col-span-2">
                       <TextareaInput label="เรื่องที่แนะนำให้เจ้าหน้าที่/IT Provider" value={form.advice} onChange={(v) => updateField('advice', v)} rows={7} />
                     </div>
@@ -1024,6 +1024,98 @@ function SingleChoiceInput({ label, value, onChange, options }: { label: string;
               </label>
             );
           })}
+        </div>
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange('')}
+            className="mt-3 cursor-pointer text-xs font-bold text-slate-400 transition hover:text-blue-600"
+          >
+            ล้างค่า
+          </button>
+        )}
+        {!value && (
+          <p className="mt-2 text-xs font-semibold text-slate-400">ไม่ระบุ</p>
+        )}
+      </div>
+    </FieldWrap>
+  );
+}
+
+function SingleChoiceWithOtherInput({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[] }) {
+  const [otherText, setOtherText] = useState('');
+  const normalizedOptions = options.filter(Boolean);
+  const isOther = Boolean(value) && !normalizedOptions.includes(value);
+
+  const applyOther = () => {
+    const trimmed = otherText.trim();
+    if (!trimmed) return;
+    onChange(trimmed);
+    setOtherText('');
+  };
+
+  return (
+    <FieldWrap label={label}>
+      <div className="rounded-2xl border border-slate-200 bg-white p-3">
+        <div className="grid grid-cols-1 gap-2">
+          {normalizedOptions.map(option => {
+            const checked = value === option;
+            return (
+              <label
+                key={option}
+                className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${
+                  checked ? 'border-blue-200 bg-blue-50 text-slate-900' : 'border-slate-100 bg-slate-50 text-slate-600 hover:border-blue-100 hover:bg-blue-50/50'
+                }`}
+              >
+                <input
+                  type="radio"
+                  checked={checked}
+                  onChange={() => onChange(option)}
+                  className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="leading-relaxed">{option}</span>
+              </label>
+            );
+          })}
+          {isOther && (
+            <label
+              className="flex cursor-pointer items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm font-semibold text-slate-900 transition"
+            >
+              <input
+                type="radio"
+                checked
+                readOnly
+                className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="leading-relaxed">{value}</span>
+            </label>
+          )}
+        </div>
+        <div className="mt-3 rounded-xl border border-dashed border-blue-100 bg-blue-50/40 p-3">
+          <p className="mb-2 text-xs font-black text-blue-700">อื่นๆ</p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              type="text"
+              value={otherText}
+              onChange={(event) => setOtherText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  applyOther();
+                }
+              }}
+              placeholder="พิมพ์ระบุเพิ่มเติม.."
+              className="min-w-0 flex-1 rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
+            />
+            <button
+              type="button"
+              onClick={applyOther}
+              className="cursor-pointer rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-blue-500/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!otherText.trim()}
+            >
+              เพิ่ม
+            </button>
+          </div>
         </div>
         {value && (
           <button

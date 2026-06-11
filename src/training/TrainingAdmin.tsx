@@ -458,11 +458,21 @@ function splitMinutes(totalMinutes?: number) {
   return { hours: Math.floor(safe / 60), minutes: safe % 60 };
 }
 
-function toDateInputValue(value?: string | null) {
+function toDateInputValue(value?: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
   const text = String(value || '').trim();
   if (!text) return '';
   const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
   return match ? `${match[1]}-${match[2]}-${match[3]}` : '';
+}
+
+function toDatePayloadValue(value?: unknown) {
+  return toDateInputValue(value) || null;
 }
 
 function formatQuizLimit(minutes?: number) {
@@ -829,8 +839,15 @@ export default function TrainingAdmin() {
       : `${API_BASE}/api/admin/training/courses`;
     setIsSavingCourse(true);
     try {
+      const isScheduledCourse = form.course_type === 'zoom' || form.course_type === 'onsite';
+      const trainingStartDate = isScheduledCourse ? toDatePayloadValue(form.training_start_date) : null;
+      const trainingEndDate = isScheduledCourse
+        ? toDatePayloadValue(form.training_end_date) || trainingStartDate
+        : null;
       const payload = {
         ...form,
+        training_start_date: trainingStartDate,
+        training_end_date: trainingEndDate,
         pre_quiz_enabled: toEnabledBoolean(form.pre_quiz_enabled, true),
         post_quiz_enabled: toEnabledBoolean(form.post_quiz_enabled, true),
         certificate_enabled: toEnabledBoolean(form.certificate_enabled, true),

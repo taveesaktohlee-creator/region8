@@ -500,12 +500,21 @@ function toBooleanFlagWithDefault(value: unknown, fallback = 1) {
 }
 
 function normalizeCourseType(value: unknown) {
-  const text = String(value || '').trim();
+  const text = String(value || '').trim().toLowerCase();
   if (['online', 'zoom', 'onsite'].includes(text)) return text;
+  if (text.includes('zoom')) return 'zoom';
+  if (text.includes('on-site') || text.includes('onsite') || text.includes('สถานที่')) return 'onsite';
+  if (text.includes('ออนไลน์') || text.includes('online')) return 'online';
   return 'online';
 }
 
 function normalizeDateOnly(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
   const text = String(value ?? '').trim();
   if (!text) return null;
   const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -5336,6 +5345,7 @@ app.get('/api/admin/training/courses', async (_req, res) => {
 app.post('/api/admin/training/courses', async (req, res) => {
   try {
     await ensureTrainingTables();
+    await ensureTrainingSchemaColumns();
     const body = req.body || {};
     if (!String(body.title || '').trim()) return res.status(400).json({ error: 'กรุณาระบุชื่อหลักสูตร' });
     const title = String(body.title || '').trim();
@@ -5394,6 +5404,7 @@ app.post('/api/admin/training/courses', async (req, res) => {
 app.put('/api/admin/training/courses/:id', async (req, res) => {
   try {
     await ensureTrainingTables();
+    await ensureTrainingSchemaColumns();
     const courseId = toInt(req.params.id);
     const body = req.body || {};
     const title = String(body.title || '').trim();
