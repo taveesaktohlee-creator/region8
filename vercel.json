@@ -1,4 +1,11 @@
 {
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "https://region8-cad.duckdns.org/isr",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/drive-upload-proxy",
